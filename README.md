@@ -79,12 +79,25 @@ translator.exe
 
 ### Как узнать имена устройств
 
-```bash
-# Через PowerShell — список всех аудиоустройств
-powershell -Command "Get-AudioDevice -List"
+PowerShell-модуль `AudioDeviceCmdlets` — самый удобный способ:
 
-# Или в настройках Windows: Параметры → Звук → Управление звуковыми устройствами
+```powershell
+# Установить модуль (один раз)
+Install-Module -Name AudioDeviceCmdlets -Scope CurrentUser
+
+# Полный список всех аудиоустройств
+Get-AudioDevice -List
+
+# Только устройства воспроизведения
+Get-AudioDevice -Playback
+
+# Только устройства записи (микрофоны)
+Get-AudioDevice -Recording
 ```
+
+Имена из вывода `Get-AudioDevice -List` (колонка `Name`) вставлять в `config.yaml` как `loopback_device` и `mic_device`.
+
+Без модуля — в настройках Windows: Параметры → Звук → Управление звуковыми устройствами.
 
 ## Настройка аудиоканалов
 
