@@ -55,6 +55,14 @@ type Config struct {
 	// CVContext is the CV/resume context for answer generation.
 	// Can be set via CV_CONTEXT environment variable or YAML config.
 	CVContext string `yaml:"cv_context"`
+
+	// LoopbackDeviceName is the name of the WASAPI loopback device (e.g. "CABLE Output").
+	// If empty, the default playback device is used. Read from LOOPBACK_DEVICE env or YAML.
+	LoopbackDeviceName string `yaml:"loopback_device"`
+
+	// MicDeviceName is the name of the microphone device.
+	// If empty, the default capture device is used. Read from MIC_DEVICE env or YAML.
+	MicDeviceName string `yaml:"mic_device"`
 }
 
 // applyDefaults sets reasonable default values for any unconfigured fields.
@@ -130,6 +138,12 @@ func (c *Config) loadFromEnv() {
 	}
 	if v := os.Getenv("CV_CONTEXT"); v != "" {
 		c.CVContext = v
+	}
+	if v := os.Getenv("LOOPBACK_DEVICE"); v != "" {
+		c.LoopbackDeviceName = v
+	}
+	if v := os.Getenv("MIC_DEVICE"); v != "" {
+		c.MicDeviceName = v
 	}
 }
 

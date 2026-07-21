@@ -17,6 +17,13 @@ log_dir: "./logs"
 audio_sample_rate: 16000
 audio_channels: 1
 
+# Audio device names — edit to match your setup
+# Leave empty to use system defaults, or set specific device names:
+#   loopback_device: "CABLE Output (VB-Audio Virtual Cable)"
+#   mic_device:     "Microphone (Realtek High Definition Audio)"
+loopback_device: ""
+mic_device: ""
+
 # Sliding window size for translation context (number of recent sentences)
 window_size: 5
 

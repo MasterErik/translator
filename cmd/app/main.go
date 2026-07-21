@@ -58,7 +58,9 @@ func main() {
 
 	// 8. Создаём захват аудио (malgo WASAPI: loopback + микрофон).
 	audioCapture := capture.NewCapture(capture.CaptureConfig{
-		BufferSizeMs: 20,
+		BufferSizeMs:       20,
+		LoopbackDeviceName: cfg.LoopbackDeviceName,
+		MicDeviceName:      cfg.MicDeviceName,
 	})
 
 	// 9. Настраиваем graceful shutdown через сигналы.
