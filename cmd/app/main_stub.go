@@ -1,8 +1,7 @@
 //go:build !cgo
 
-// Package main provides a non-CGo entry point that uses the stub capture
-// implementation. This is useful for testing the wiring on systems without
-// a C toolchain. The real entry point is in main.go (requires cgo).
+// Package main — точка входа без CGO (заглушка захвата аудио).
+// Использует StubCapture вместо malgo. GioUI оверлей работает.
 package main
 
 import (
@@ -18,37 +17,38 @@ import (
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/stt"
 	"github.com/mastererik/translator/internal/translator"
+	"github.com/mastererik/translator/internal/ui"
 )
 
 func main() {
-	// 1. Load configuration.
+	// 1. Загружаем конфигурацию.
 	cfg := common.LoadConfig()
 
-	// 2. Initialize structured JSON logger.
+	// 2. Инициализируем структурированный JSON-логгер.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	slog.Info("translator starting (stub capture, no CGo)",
+	slog.Info("translator запускается (stub-захват, без CGO)",
 		"deepgram_model", cfg.DeepgramModel,
 		"openai_model", cfg.OpenAIModel,
 	)
 
-	// 3. Create STT provider.
+	// 3. STT-провайдер.
 	deepgram := stt.NewDeepgramProvider(cfg.DeepgramAPIKey, cfg.DeepgramModel)
 
-	// 4. Create LLM provider.
+	// 4. LLM-провайдер.
 	openaiProv := translator.NewOpenAIProvider(cfg.OpenAIAPIKey, cfg.OpenAIModel)
 
-	// 5. Create translation engine.
+	// 5. Движок перевода.
 	engine := translator.NewEngine(openaiProv, cfg.WindowSize)
 
-	// 6. Create session logger.
+	// 6. Логгер сессии.
 	sessLog, err := logger.NewFileSessionLogger(cfg.LogDir)
 	if err != nil {
-		slog.Error("failed to create session logger", "error", err)
+		slog.Error("не удалось создать логгер сессии", "error", err)
 		os.Exit(1)
 	}
 
-	// 7. Create UI overlay.
-	overlay := NewOverlay(OverlayConfig{
+	// 7. НАСТОЯЩИЙ GioUI-оверлей.
+	overlay := ui.NewOverlay(ui.OverlayConfig{
 		Title:        "Translator Overlay",
 		Width:        800,
 		Height:       200,
@@ -56,41 +56,42 @@ func main() {
 		TopZoneRatio: 0.6,
 	})
 
-	// 8. Create stub audio capture (silent PCM @ 16kHz mono).
-	silentFrame := make([]byte, 640) // 320 samples × 2 bytes
+	// 8. Захват-заглушка (тихие PCM-фреймы, 16kHz mono).
+	silentFrame := make([]byte, 640) // 320 сэмплов × 2 байта
 	audioCapture := capture.NewStubCapture(
 		capture.CaptureConfig{BufferSizeMs: 20},
 		silentFrame,
 		silentFrame,
-		0, // Use default frame interval.
+		0, // интервал по умолчанию
 	)
 
-	// 9. Graceful shutdown via signals.
+	// 9. Graceful shutdown.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 10. Start STT provider.
+	// 10. Запуск STT.
 	if err := deepgram.Start(ctx); err != nil {
-		slog.Error("failed to start STT provider", "error", err)
+		slog.Error("не удалось запустить STT-провайдер", "error", err)
 		os.Exit(1)
 	}
 
-	// 11. Launch pipeline goroutines.
+	// 11. Запуск пайплайна.
 	go runCapture(ctx, audioCapture, deepgram, sessLog)
 	go runSTT(ctx, deepgram, engine, overlay, sessLog)
 	go runUI(ctx, overlay)
 
-	// 12. Wait for shutdown signal.
-	slog.Info("translator running, press Ctrl+C to stop")
+	// 12. Ожидание сигнала.
+	fmt.Fprintln(os.Stderr, "translator запущен, Ctrl+C для остановки")
+	slog.Info("translator работает, Ctrl+C для остановки")
 	<-ctx.Done()
-	fmt.Fprintln(os.Stderr, "\nshutting down...")
-	slog.Info("shutting down...")
+	fmt.Fprintln(os.Stderr, "\nзавершаем работу...")
+	slog.Info("завершаем работу...")
 
-	// 13. Graceful shutdown.
+	// 13. Корректное завершение.
 	_ = deepgram.Stop()
-	overlay.WaitShutdown()
+	// runUI уже завершилась по ctx.Done().
 	if err := sessLog.Close(); err != nil {
-		slog.Error("failed to close session logger", "error", err)
+		slog.Error("ошибка при закрытии логгера", "error", err)
 	}
-	slog.Info("shutdown complete")
+	slog.Info("работа завершена")
 }

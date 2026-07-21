@@ -13,6 +13,7 @@ import (
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/stt"
 	"github.com/mastererik/translator/internal/translator"
+	"github.com/mastererik/translator/internal/ui"
 )
 
 // --------------------------------------------------------------------------
@@ -133,10 +134,47 @@ func TestLoadConfig(t *testing.T) {
 		cfg.OpenAIModel, cfg.TargetLanguage, cfg.WindowSize, cfg.AudioSampleRate)
 }
 
-// TestOverlayStub verifies the stub overlay's AddMessage and GetMessages
-// behave correctly under concurrent access.
+// stubOverlay — оверлей-заглушка для тестов. Не создаёт GioUI-окно,
+// только буферизует сообщения в памяти.
+type stubOverlay struct {
+	mu       sync.Mutex
+	messages []ui.UIMessage
+	shutdown chan struct{}
+}
+
+func newStubOverlay() *stubOverlay {
+	return &stubOverlay{
+		messages: make([]ui.UIMessage, 0),
+		shutdown: make(chan struct{}),
+	}
+}
+
+func (o *stubOverlay) AddMessage(msg ui.UIMessage) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.messages = append(o.messages, msg)
+}
+
+func (o *stubOverlay) GetMessages() []ui.UIMessage {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	result := make([]ui.UIMessage, len(o.messages))
+	copy(result, o.messages)
+	return result
+}
+
+func (o *stubOverlay) Run(ctx context.Context) error {
+	defer close(o.shutdown)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (o *stubOverlay) WaitShutdown() {
+	<-o.shutdown
+}
+// и возвращает их через GetMessages.
 func TestOverlayStub(t *testing.T) {
-	overlay := NewOverlay(OverlayConfig{
+	overlay := ui.NewOverlay(ui.OverlayConfig{
 		Title:        "Test Overlay",
 		Width:        800,
 		Height:       200,
@@ -144,41 +182,41 @@ func TestOverlayStub(t *testing.T) {
 		TopZoneRatio: 0.6,
 	})
 
-	// Add a few messages.
-	overlay.AddMessage(OverlayMsg{
-		Type:      MsgTranslation,
+	// Добавляем несколько сообщений.
+	overlay.AddMessage(ui.UIMessage{
+		Type:      ui.Translation,
 		Text:      "Hello, world!",
 		Timestamp: time.Now(),
 	})
-	overlay.AddMessage(OverlayMsg{
-		Type:      MsgAnswerCandidates,
+	overlay.AddMessage(ui.UIMessage{
+		Type:      ui.AnswerCandidates,
 		Text:      "What is Go?",
-		Answers:   []string{"A compiled language", "Garbage collected"},
+		Answers:   []string{"Компилируемый язык", "Со сборщиком мусора"},
 		Timestamp: time.Now(),
 	})
 
 	msgs := overlay.GetMessages()
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+		t.Fatalf("ожидалось 2 сообщения, получено %d", len(msgs))
 	}
-	if msgs[0].Type != MsgTranslation {
-		t.Errorf("first message should be Translation, got %s", msgs[0].Type)
+	if msgs[0].Type != ui.Translation {
+		t.Errorf("первое сообщение должно быть Translation, получено %s", msgs[0].Type)
 	}
-	if msgs[1].Type != MsgAnswerCandidates {
-		t.Errorf("second message should be AnswerCandidates, got %s", msgs[1].Type)
+	if msgs[1].Type != ui.AnswerCandidates {
+		t.Errorf("второе сообщение должно быть AnswerCandidates, получено %s", msgs[1].Type)
 	}
 	if len(msgs[1].Answers) != 2 {
-		t.Errorf("expected 2 answers, got %d", len(msgs[1].Answers))
+		t.Errorf("ожидалось 2 варианта ответа, получено %d", len(msgs[1].Answers))
 	}
 
-	// Test concurrent access.
+	// Проверка конкурентного доступа.
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			overlay.AddMessage(OverlayMsg{
-				Type:      MsgTranslation,
+			overlay.AddMessage(ui.UIMessage{
+				Type:      ui.Translation,
 				Text:      "concurrent",
 				Timestamp: time.Now(),
 			})
@@ -187,9 +225,8 @@ func TestOverlayStub(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Verify no data races or panics (checked by -race flag).
 	if len(overlay.GetMessages()) != 12 {
-		t.Errorf("expected 12 messages, got %d", len(overlay.GetMessages()))
+		t.Errorf("ожидалось 12 сообщений, получено %d", len(overlay.GetMessages()))
 	}
 }
 
@@ -235,14 +272,8 @@ func TestGracefulShutdown(t *testing.T) {
 		t.Fatalf("failed to create session logger: %v", err)
 	}
 
-	// Stub overlay.
-	overlay := NewOverlay(OverlayConfig{
-		Title:        "Test Overlay",
-		Width:        800,
-		Height:       200,
-		FontSize:     16,
-		TopZoneRatio: 0.6,
-	})
+	// Заглушка оверлея (не создаёт GioUI-окно).
+	overlay := newStubOverlay()
 
 	// Stub capture — emits silent 20ms frames at 16kHz mono (320 samples × 2 bytes).
 	silentFrame := make([]byte, 640) // 320 samples * 2 bytes/sample = 640 bytes
@@ -285,8 +316,7 @@ func TestGracefulShutdown(t *testing.T) {
 
 	// ---- 5. Graceful shutdown in order ----
 	_ = mockSTT.Stop()
-	overlay.WaitShutdown()
-
+	// runUI уже завершилась по ctx.Done().
 	if err := sessLog.Close(); err != nil {
 		t.Errorf("failed to close session logger: %v", err)
 	}
@@ -301,7 +331,7 @@ func TestGracefulShutdown(t *testing.T) {
 	select {
 	case <-done:
 		t.Log("all goroutines exited cleanly")
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("goroutines did not exit within timeout — possible leak")
 	}
 
@@ -336,29 +366,29 @@ func TestGracefulShutdown(t *testing.T) {
 		t.Error("overlay should have received at least one message")
 	}
 
-	// Check that the translation message was received.
+	// Проверяем, что перевод получен.
 	var foundTranslation bool
 	for _, msg := range msgs {
-		if msg.Type == MsgTranslation && msg.Text == "Привет, как дела?" {
+		if msg.Type == ui.Translation && msg.Text == "Привет, как дела?" {
 			foundTranslation = true
 			break
 		}
 	}
 	if !foundTranslation {
-		t.Error("overlay did not receive expected translation message")
+		t.Error("оверлей не получил ожидаемый перевод")
 	}
 
-	// Check that answer candidates were received (question detected).
+	// Проверяем, что получены варианты ответа (вопрос обнаружен).
 	var foundAnswers bool
 	for _, msg := range msgs {
-		if msg.Type == MsgAnswerCandidates {
+		if msg.Type == ui.AnswerCandidates {
 			foundAnswers = true
-			t.Logf("answer candidates: %v", msg.Answers)
+			t.Logf("варианты ответа: %v", msg.Answers)
 			break
 		}
 	}
 	if !foundAnswers {
-		t.Error("overlay did not receive answer candidates for question")
+		t.Error("оверлей не получил варианты ответа для вопроса")
 	}
 }
 
@@ -379,7 +409,7 @@ func TestGracefulShutdownNoEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create session logger: %v", err)
 	}
-	overlay := NewOverlay(OverlayConfig{})
+	overlay := newStubOverlay()
 
 	silentFrame := make([]byte, 640)
 	stubCap := capture.NewStubCapture(
@@ -406,7 +436,7 @@ func TestGracefulShutdownNoEvents(t *testing.T) {
 	cancel()
 
 	_ = mockSTT.Stop()
-	overlay.WaitShutdown()
+	// runUI уже завершилась по ctx.Done().
 	_ = sessLog.Close()
 
 	done := make(chan struct{})

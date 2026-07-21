@@ -122,6 +122,12 @@ func (o *Overlay) Run(ctx context.Context) error {
 	}
 }
 
+// WaitShutdown blocks until Run() has finished and the shutdown channel
+// is closed. Safe to call from any goroutine.
+func (o *Overlay) WaitShutdown() {
+	<-o.shutdown
+}
+
 // applyWindowStyles finds the window HWND by title and applies Windows
 // extended styles for transparency and click-through. It retries with
 // backoff since the HWND may not be immediately available.

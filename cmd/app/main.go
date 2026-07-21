@@ -1,7 +1,8 @@
 //go:build cgo
 
-// Package main is the entry point for the Translator application.
-// It wires all modules together with graceful shutdown.
+// Package main — точка входа приложения Translator.
+// Связывает все модули: захват аудио, STT, перевод, GioUI-оверлей, логгер.
+// Требует CGO для malgo (захват аудио) и GioUI (графический оверлей).
 package main
 
 import (
@@ -16,37 +17,38 @@ import (
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/stt"
 	"github.com/mastererik/translator/internal/translator"
+	"github.com/mastererik/translator/internal/ui"
 )
 
 func main() {
-	// 1. Load configuration (defaults + environment variables).
+	// 1. Загружаем конфигурацию (переменные окружения + .env).
 	cfg := common.LoadConfig()
 
-	// 2. Initialize structured JSON logger.
+	// 2. Инициализируем структурированный JSON-логгер.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	slog.Info("translator starting",
+	slog.Info("translator запускается",
 		"deepgram_model", cfg.DeepgramModel,
 		"openai_model", cfg.OpenAIModel,
 	)
 
-	// 3. Create STT provider (Deepgram WebSocket).
+	// 3. Создаём STT-провайдер (Deepgram WebSocket).
 	deepgram := stt.NewDeepgramProvider(cfg.DeepgramAPIKey, cfg.DeepgramModel)
 
-	// 4. Create LLM provider (OpenAI GPT-4o-mini).
+	// 4. Создаём LLM-провайдер (OpenAI GPT-4o-mini).
 	openaiProv := translator.NewOpenAIProvider(cfg.OpenAIAPIKey, cfg.OpenAIModel)
 
-	// 5. Create translation engine with sliding window.
+	// 5. Создаём движок перевода со скользящим окном.
 	engine := translator.NewEngine(openaiProv, cfg.WindowSize)
 
-	// 6. Create session logger (JSON lines + PCM dumps).
+	// 6. Создаём логгер сессии (JSON + PCM-дампы).
 	sessLog, err := logger.NewFileSessionLogger(cfg.LogDir)
 	if err != nil {
-		slog.Error("failed to create session logger", "error", err)
+		slog.Error("не удалось создать логгер сессии", "error", err)
 		os.Exit(1)
 	}
 
-	// 7. Create UI overlay (stub; replace with internal/ui when GioUI is available).
-	overlay := NewOverlay(OverlayConfig{
+	// 7. Создаём НАСТОЯЩИЙ GioUI-оверлей (прозрачное окно поверх всех окон).
+	overlay := ui.NewOverlay(ui.OverlayConfig{
 		Title:        "Translator Overlay",
 		Width:        800,
 		Height:       200,
@@ -54,45 +56,44 @@ func main() {
 		TopZoneRatio: 0.6,
 	})
 
-	// 8. Create audio capture (malgo WASAPI loopback + microphone).
+	// 8. Создаём захват аудио (malgo WASAPI: loopback + микрофон).
 	audioCapture := capture.NewCapture(capture.CaptureConfig{
 		BufferSizeMs: 20,
 	})
 
-	// 9. Set up graceful shutdown via signal handling.
+	// 9. Настраиваем graceful shutdown через сигналы.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 10. Start all services in background goroutines.
-	// Start STT provider first (establishes WebSocket connection).
+	// 10. Запускаем STT-провайдер (устанавливает WebSocket-соединение).
 	if err := deepgram.Start(ctx); err != nil {
-		slog.Error("failed to start STT provider", "error", err)
+		slog.Error("не удалось запустить STT-провайдер", "error", err)
 		os.Exit(1)
 	}
 
+	// 11. Запускаем все сервисы в фоновых горутинах.
 	go runCapture(ctx, audioCapture, deepgram, sessLog)
 	go runSTT(ctx, deepgram, engine, overlay, sessLog)
 	go runUI(ctx, overlay)
 
-	// 11. Wait for shutdown signal.
+	// 12. Ждём сигнала завершения.
+	slog.Info("translator работает, Ctrl+C для остановки")
 	<-ctx.Done()
-	slog.Info("shutting down...")
+	slog.Info("завершаем работу...")
 
-	// 12. Graceful shutdown in order:
-	//     a) Capture stops via context cancellation (capture goroutines)
-	//     b) STT provider stops (closes WebSocket, drains pumps)
+	// 13. Корректное завершение в порядке:
+	//     a) Захват аудио останавливается через отмену контекста.
+	//     b) STT-провайдер закрывает WebSocket.
 	if err := deepgram.Stop(); err != nil {
-		slog.Warn("error stopping STT provider", "error", err)
+		slog.Warn("ошибка при остановке STT", "error", err)
 	}
 
-	//     c) UI overlay stops (window closed, event loop drained)
-	overlay.WaitShutdown()
-	slog.Info("ui overlay stopped")
+	//     c) GioUI-оверлей уже остановлен (runUI завершилась по ctx.Done()).
 
-	//     d) Session logger flushes all buffers to disk.
+	//     d) Логгер сбрасывает все буферы на диск.
 	if err := sessLog.Close(); err != nil {
-		slog.Error("failed to close session logger", "error", err)
+		slog.Error("ошибка при закрытии логгера", "error", err)
 	}
 
-	slog.Info("shutdown complete")
+	slog.Info("работа завершена")
 }

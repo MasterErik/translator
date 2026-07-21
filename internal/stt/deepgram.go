@@ -89,8 +89,8 @@ func (d *DeepgramProvider) TextStream() <-chan common.STTEvent {
 	return d.textCh
 }
 
-// Stop closes the WebSocket connection, cancels the context, and drains resources.
-// Subsequent calls to Stop are no-ops.
+// Stop cancels context (goroutines exit), then closes the WebSocket.
+// Subsequent calls are no-ops. Safe for concurrent use.
 func (d *DeepgramProvider) Stop() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -99,15 +99,10 @@ func (d *DeepgramProvider) Stop() error {
 		return nil
 	}
 
-	// Cancel context first so goroutines exit.
+	// Cancel context first — writePump/readPump will close wsConn in their defers.
 	d.cancel()
 
 	if d.wsConn != nil {
-		// Send close frame (best-effort).
-		_ = d.wsConn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		)
 		_ = d.wsConn.Close()
 		d.wsConn = nil
 	}
