@@ -56,7 +56,18 @@ func main() {
 		TopZoneRatio: 0.6,
 	})
 
-	// 8. Захват-заглушка (тихие PCM-фреймы, 16kHz mono).
+	// 8. Проверяем аудиоустройства (без CGO — только предупреждение).
+	devices, err := capture.ListAllDevices()
+	if err != nil {
+		slog.Warn("список устройств недоступен (без CGO)", "error", err)
+	} else {
+		slog.Info("доступные аудиоустройства",
+			"loopback", devices["loopback"],
+			"capture", devices["capture"],
+		)
+	}
+
+	// Захват-заглушка (тихие PCM-фреймы, 16kHz mono).
 	silentFrame := make([]byte, 640) // 320 сэмплов × 2 байта
 	audioCapture := capture.NewStubCapture(
 		capture.CaptureConfig{BufferSizeMs: 20},
