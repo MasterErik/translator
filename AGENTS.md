@@ -2,10 +2,10 @@
 
 ## Язык и стиль
 
-- Весь код, комментарии и документация — на английском
-- Имена переменных, функций, типов — idiomatic Go (camelCase/PascalCase)
-- Комментарии к публичным API — в формате godoc (`// FunctionName does X.`)
-- Сообщения коммитов — на английском, conventional commits (`feat:`, `fix:`, `refactor:`)
+- Код (имена переменных, функций, типов) — на английском (idiomatic Go: camelCase/PascalCase)
+- Комментарии к публичным API — на русском, в формате godoc
+- Сообщения коммитов — на русском, conventional commits (`feat:`, `fix:`, `refactor:`)
+- Документация (README, ARCHITECTURE, план) — на русском
 
 ## Go-специфичные требования
 
