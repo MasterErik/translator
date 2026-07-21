@@ -1,0 +1,28 @@
+# Translator — non-secret configuration
+# API keys are in .env file (not here — never commit API keys!)
+
+# OpenAI model for translation and answer generation
+openai_model: "gpt-4o-mini"
+
+# Deepgram model for speech-to-text
+deepgram_model: "nova-2"
+
+# Target language for translation (ISO 639-1)
+target_language: "ru"
+
+# Session log directory
+log_dir: "./logs"
+
+# Audio capture settings
+audio_sample_rate: 16000
+audio_channels: 1
+
+# Sliding window size for translation context (number of recent sentences)
+window_size: 5
+
+# CV / resume context for answer generation — edit this with your own details
+cv_context: |
+  Senior Go developer with 5+ years experience.
+  Expert in distributed systems, microservices, Kubernetes.
+  Built high-load real-time processing pipelines.
+  Experience with audio processing and WebSocket APIs.
