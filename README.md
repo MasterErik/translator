@@ -61,20 +61,22 @@ DEEPGRAM_API_KEY=ваш_deepgram_ключ
 OPENAI_API_KEY=ваш_openai_ключ
 ```
 
-### Настройки аудио (`config.yaml`)
+### Настройки аудио (`config.yaml` или `.env`)
 
-```yaml
-# Имена устройств — указать свои или оставить пустыми (системные по умолчанию)
-loopback_device: "CABLE Output (VB-Audio Virtual Cable)"
-mic_device:     "Microphone (Realtek High Definition Audio)"
+Имена устройств захвата. Можно задать в `config.yaml`, `.env` или переменных окружения (приоритет: env > .env > yaml).
+
+**Через `.env` (рекомендуется для скомпилированного .exe):**
+
+```env
+LOOPBACK_DEVICE=CABLE Output (VB-Audio Virtual Cable)
+MIC_DEVICE=Microphone (Realtek High Definition Audio)
 ```
 
-Или через переменные окружения:
+**Через `config.yaml`:**
 
-```bash
-set LOOPBACK_DEVICE=CABLE Output (VB-Audio Virtual Cable)
-set MIC_DEVICE=Microphone (Realtek High Definition Audio)
-translator.exe
+```yaml
+loopback_device: "CABLE Output (VB-Audio Virtual Cable)"
+mic_device:     "Microphone (Realtek High Definition Audio)"
 ```
 
 ### Как узнать имена устройств
