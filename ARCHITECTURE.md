@@ -1,272 +1,279 @@
-# Архитектура Translator — AI Interview / Meeting Assistant
+# Архитектура Translator v2 — AI Interview / Meeting Assistant
+
+**Версия:** 2.0 · **Дата:** 2026-07-22
+**Статус:** live-тест пройден, 119 тестов, 0 data race
 
 ## Обзор системы
 
-Приложение реального времени, работающее как прозрачный overlay поверх рабочего стола Windows. Предназначено для помощи на технических собеседованиях/встречах: переводит речь собеседника (EN→RU), сохраняет IT-термины, генерирует подсказки к ответам при детекции вопроса.
+Приложение реального времени — прозрачный overlay поверх рабочего стола Windows. Переводит речь собеседника (EN→RU), сохраняет IT-термины, генерирует подсказки при детекции вопроса.
 
-## Аудио-архитектура: виртуальный аудиоканал (VB-Cable)
+**Ключевые изменения v2:**
+- Deepgram Flux `/v2/listen` — встроенный turn detection, EndOfTurn ~260ms
+- Worker pool (N=3) — перевод не блокирует STT-поток
+- MP3/WAV сохранение аудио (go-lame/beep), сжатие ~10x
+- `SAVE_AUDIO` опционально (`.env`), по умолчанию false
 
-Translator использует **двухканальный захват через виртуальный аудиоканал VB-Cable**, а не простой системный Loopback. Это принципиально важно для разделения звука собеседника и вашего голоса.
+---
 
-### Почему VB-Cable, а не простой Loopback?
+## Аудио-архитектура: VB-Cable
 
-WASAPI Loopback по умолчанию захватывает **весь системный звук** — всё, что идёт в динамики (Chrome, системные звуки, уведомления, ваш микрофонный мониторинг). Это создаёт эхо и смешивает ваш голос с голосом собеседника, делая двухканальное разделение невозможным.
-
-**Решение:** VB-Cable создаёт изолированный виртуальный аудиоканал:
-
-```
-┌──────────────────────────────────────────────────────┐
-│                  Аудио-поток (схема)                  │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│  Chrome/Teams ──► CABLE Input (Playback)             │
-│       │                   │                          │
-│       │                   │  VB-Cable внутренний     │
-│       │                   │  виртуальный мост        │
-│       │                   │                          │
-│       │                   ▼                          │
-│       │         WASAPI Loopback захват ──────────┐   │
-│       │         (с CABLE Input как Playback)      │   │
-│       │                                          │   │
-│  Микрофон ──► WASAPI Capture ────────────────┐   │   │
-│                                              │   │   │
-│                      ┌───────────────────────┘   │   │
-│                      │                           │   │
-│                      ▼                           ▼   │
-│              chan "speaker" (PCM)    chan "mic" (PCM) │
-│                      │                           │   │
-│                      └──────────┬────────────────┘   │
-│                                 ▼                     │
-│                      STTProvider.AudioStream()        │
-│                          (Deepgram)                   │
-└──────────────────────────────────────────────────────┘
-```
-
-**VB-Cable создаёт два устройства:**
-
-| Устройство | Тип WASAPI | Роль в Translator |
-|-----------|-----------|-------------------|
-| `CABLE Input (VB-Audio Virtual Cable)` | **Playback** | **LOOPBACK_DEVICE** — WASAPI loopback захватывает аудио, идущее в это устройство |
-| `CABLE Output (VB-Audio Virtual Cable)` | **Recording** | **MIC_DEVICE** (опционально) — можно захватывать как виртуальный микрофон |
-
-**Поток аудио:** Chrome (звонок) → CABLE Input (Playback) → WASAPI Loopback захват → Translator
-
-Без VB-Cable `LOOPBACK_DEVICE` оставляется пустым — захватывается системный звук по умолчанию. Это работает для тестов, но не для двухканального разделения.
-
-### Конфигурация
-
-Приоритет: **env-переменные > `.env` > `config.yaml` > системные по умолчанию**.
-
-```yaml
-# config.yaml — production setup с VB-Cable
-loopback_device: "CABLE Output (VB-Audio Virtual Cable)"
-mic_device: "Microphone (Realtek High Definition Audio)"
-```
-
-При старте программа проверяет существование указанных устройств через `capture.ValidateDevice()` и выводит список всех доступных. Если устройство не найдено — падает с ошибкой и перечнем доступных.
-
-## Диаграмма потоков данных
+Двухканальный захват через виртуальный аудиоканал VB-Cable для разделения звука собеседника и вашего голоса.
 
 ```
-                          ┌──────────────────────────────────┐
-                          │  VB-Cable (виртуальный канал)    │───► chan []byte "speaker"
-                          │  CABLE Input → WASAPI Loopback   │
-                          └──────────────────────────────────┘         │
-Аудио-захват (malgo) ────┤                                             ▼
-                          ┌──────────────────────────┐         [STTProvider Interface]
-                          │  Microphone (Микрофон)   │         ├── Deepgram (Сейчас)
-                          └──────────────────────────┘         └── Sherpa-onnx (Будущее)
-                                                                       │
-                                                               chan STTEvent
-                                                                       │
-                                                                       ▼
-[Session Logger] ◄────────────────────────────── [Translation Engine]
-(Сохранение json/pcm)                             (GPT-4o-mini + IT Context)
-                                                                       │
-                                                               chan UIEvent
-                                                                       │
-                                                                       ▼
-                                                                [GioUI Overlay]
-                                                              (Субтитры + Ответы A)
+Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──► chan speaker (PCM)
+Микрофон     ──► WASAPI Capture           ──► chan mic (PCM)
+                         │                           │
+                         └──────────┬────────────────┘
+                                    ▼
+                            route/merge → AudioStream → Deepgram Flux v2
 ```
 
-## Детальная архитектура модулей
+| Устройство | Тип WASAPI | Роль |
+|---|---|---|
+| `CABLE Input (VB-Audio Virtual Cable)` | Playback | LOOPBACK_DEVICE |
+| `CABLE Output (VB-Audio Virtual Cable)` | Recording | MIC_DEVICE (опционально) |
+
+---
+
+## Многопоточная архитектура (12 горутин)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           cmd/app/main.go                           │
-│  • Чтение config.yaml / env vars                                    │
-│  • Wire-up: создание экземпляров, внедрение зависимостей            │
-│  • Запуск всех горутин (capture, stt, translator, ui, logger)       │
-│  • Graceful shutdown (signal handling)                              │
-└─────────────────────────────────────────────────────────────────────┘
-        │            │            │              │          │
-        ▼            ▼            ▼              ▼          ▼
-┌───────────┐ ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────┐
-│  capture  │ │   stt    │ │translator │ │    ui    │ │  logger  │
-│           │ │          │ │           │ │          │ │          │
-│ • malgo   │ │• STTProv │ │• LLMProv  │ │• GioUI   │ │• Session │
-│   devices │ │  iface   │ │  iface    │ │  overlay │ │  Logger  │
-│ • 2 chans │ │• Deepgr. │ │• Sliding  │ │• Win32   │ │• JSON    │
-│ • VB-Cable│ │  WS impl │ │  window   │ │  flags   │ │  writer  │
-│ • 48→16   │ │• Sherpa  │ │• QA class │ │• 2 zones │ │• PCM dump│
-│   kHz     │ │  stub    │ │  ifier    │ │          │ │          │
-│ • Stereo→ │ │          │ │• Prompts  │ │          │ │          │
-│   Mono    │ │          │ │           │ │          │ │          │
-└───────────┘ └──────────┘ └───────────┘ └──────────┘ └──────────┘
-        │            │            │              │          │
-        └────────────┴────────────┴──────────────┴──────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │  common/        │
-                    │  • config.go    │ — Config struct, load from YAML + env
-                    │  • events.go    │ — STTEvent, UIEvent, TranslateEvent
-                    └─────────────────┘
-```
-
-## Поток данных (подробно)
-
-### 1. Аудио-захват → STT
-```
-VB-Cable CABLE Input ──► WASAPI Loopback ──► chan []byte "speaker" ──► STTProvider.AudioStream()
-Microphone            ──► WASAPI Capture ──► chan []byte "mic"      ──► STTProvider.AudioStream()
-                                                                           │
-                                                                 (WebSocket / Local ONNX)
-                                                                           │
-                                                                           ▼
-                                                                 chan STTEvent ──► Translator
-                                                                 chan STTEvent ──► Logger
-```
-
-### 2. STT → Translator → UI
-```
-chan STTEvent
-    │
-    ├── IsFinal == false (interim) ──► UI (preview, low-latency)
-    │
-    └── IsFinal == true ──► Translation Engine
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-                    ▼                       ▼
-            Translate (EN→RU)      Classification
-                    │               (Is it a question?)
-                    │                       │
-                    │                  YES  │  NO
-                    │               ┌───────┘  └── done
-                    │               ▼
-                    │       GenerateAnswers()
-                    │               │
-                    └───────┬───────┘
-                            ▼
-                      chan UIEvent
-                            │
-                            ▼
-                      GioUI Overlay
+┌──────────────────────────────────────────────────────────────────────┐
+│                        MAIN GOROUTINE                                │
+│  signal.NotifyContext → ctx → запуск всех горутин → ожидание Ctrl+C │
+└──────────────────────────────────────────────────────────────────────┘
+        │          │           │            │
+        ▼          ▼           ▼            ▼
+┌───────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐
+│ CAPTURE   │ │ CAPTURE  │ │ STT      │ │ UI       │
+│ Loopback  │ │ Mic      │ │ Deepgram │ │ GioUI    │
+│ 80ms      │ │ 80ms     │ │ Flux v2  │ │ overlay  │
+│ malgo →   │ │ malgo →  │ │ WS send  │ │ event    │
+│ chan      │ │ chan     │ │ WS recv  │ │ loop     │
+│ speaker   │ │ mic      │ │          │ │          │
+└─────┬─────┘ └────┬─────┘ └────┬─────┘ └──────────┘
+      │            │            │
+      └─────┬──────┘            │ chan STTEvent
+            │                   │ (buf 16)
+            ▼                   │
+    ┌───────────────┐           │
+    │ ROUTE/MERGE   │           │
+    │ 2:1 speaker+  │           │
+    │ mic → Audio-  │           │
+    │ Stream (buf64)│           │
+    └───────────────┘           │
+            │                   ▼
+            ▼           ┌───────────────────┐
+    ┌───────────────┐   │ STT DISPATCH      │  ← ЦЕНТРАЛЬНЫЙ УЗЕЛ
+    │ AUDIO SAVER   │   │                   │
+    │ (опционально) │   │ select {          │
+    │               │   │  textStream:      │
+    │ PCM → MP3/WAV │   │   interim → UI    │
+    │ (go-lame/beep)│   │   final → worker  │
+    └───────────────┘   │  transResults:    │
+                        │   translation → UI│
+                        │ }                 │
+                        └────────┬──────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+            ┌──────────┐ ┌──────────┐ ┌──────────┐
+            │WORKER 1  │ │WORKER 2  │ │WORKER 3  │
+            │Translate │ │Translate │ │Translate │
+            │GPT-4o-mini│ │GPT-4o-mini│ │GPT-4o-mini│
+            │+Answers  │ │+Answers  │ │+Answers  │
+            └────┬─────┘ └────┬─────┘ └────┬─────┘
+                 └────────────┼────────────┘
+                              ▼ chan transResults (buf 16)
                     ┌──────────────────┐
-                    │ Top: Translation │
-                    │ Bot: Hints 1..3  │
+                    │ STT DISPATCH     │
+                    │ → UI.AddMsg()    │
+                    │ → Logger.LogText │
                     └──────────────────┘
 ```
 
-### 3. Логирование (параллельно)
+### Список горутин
+
+| # | Горутина | Назначение | Запуск | Завершение |
+|---|----------|-----------|--------|------------|
+| 1 | `main` | graceful shutdown, сигналы | `main()` | `os.Exit(0)` |
+| 2 | `capture·loopback` | malgo WASAPI loopback → chan speaker | `runCapture` | ctx.Done() |
+| 3 | `capture·mic` | malgo WASAPI mic → chan mic | `runCapture` | ctx.Done() |
+| 4 | `route/merge` | speaker+mic → AudioStream | `runCapture` | chan close |
+| 5 | `stt·deepgram` | Flux v2 WebSocket send/recv | `deepgram.Start()` | `deepgram.Stop()` |
+| 6 | `stt·dispatch` | центральный select: textStream + transResults | `runDispatch()` | textStream close |
+| 7 | `ui·gioui` | GioUI event loop + рендеринг | `runUI()` | DestroyEvent |
+| 8 | `audio·saver` | PCM → MP3/WAV на диск (опционально) | `runCapture` | flush + close |
+| 9–11 | `worker·1..3` | параллельный перевод GPT-4o-mini | dispatch | ctx.Done() |
+| 12 | `logger` | async JSON-логгирование (через канал) | `NewFileSessionLogger()` | `Close()` |
+
+### Каналы
+
+| Канал | Тип | Буфер | Путь |
+|---|---|---|---|
+| `speakerPCM` | `chan []byte` | 32 | loopback → route |
+| `micPCM` | `chan []byte` | 32 | mic → route |
+| `audioStream` | `chan []byte` | 64 | route → deepgram |
+| `textStream` | `chan STTEvent` | 16 | deepgram → dispatch |
+| `transResults` | `chan transResult` | 16 | workers → dispatch |
+| `logJobs` | `chan logJob` | 256 | dispatch → logger |
+
+---
+
+## Поток данных
+
+### Interim (промежуточный)
 ```
-chan STTEvent ──► SessionLogger.LogText()      ──► session_*.json
-chan []byte   ──► SessionLogger.SaveAudioChunk()──► channel_*.pcm
+PCM → Flux v2 → TurnInfo.Update → textStream → dispatch → UI.AddMsg(interim)
 ```
+
+### Final (окончательный)
+```
+PCM → Flux v2 → TurnInfo.EndOfTurn (~260ms) → textStream → dispatch → go worker
+                                                                          │
+                                                              GPT-4o-mini (1-3s)
+                                                                          │
+                                                              transResults → dispatch → UI
+```
+
+### Сохранение аудио (SAVE_AUDIO=true)
+```
+PCM → AudioEncoder → MP3 (go-lame) / WAV (beep) → audio/speaker.mp3
+```
+
+---
+
+## Deepgram Flux v2
+
+| Параметр | Значение |
+|---|---|
+| Endpoint | `wss://api.deepgram.com/v2/listen` |
+| Модель | `flux-general-en` |
+| Кодирование | `linear16`, 16000 Hz, mono |
+| Чанк | 80ms (2560 байт) |
+| EndOfTurn | `eot_threshold=0.8`, ~260ms p50 |
+| KeepAlive | НЕ используется (v1-специфичный) |
+
+**События Flux:**
+- `Update` → interim-транскрипт
+- `EndOfTurn` → финальный транскрипт, запуск перевода
+- `StartOfTurn` / `TurnResumed` → игнорируются (без транскрипта)
+
+---
+
+## Translation Engine (worker pool)
+
+```go
+type TranslationEngine struct {
+    llm       LLMProvider       // GPT-4o-mini
+    window    []string          // sliding window (max 5)
+    maxWindow int
+    mu        sync.RWMutex
+}
+```
+
+**Pipeline per EndOfTurn:**
+1. Append to sliding window → FIFO, trim to maxWindow
+2. Get history (window except most recent)
+3. Translate(text, history) → Russian (temperature 0.1)
+4. Classify: `isQuestion()` — ? suffix or question words
+5. If question → async GenerateAnswers() (temperature 0.3)
+
+**Worker pool:** N=3 горутины (настраивается через `TRANSLATION_WORKERS` env). Каждая вызывает `ProcessFinalTranscript()` → результат в `transResults` → dispatch → UI.
+
+---
 
 ## Ключевые интерфейсы
 
-### STTProvider
 ```go
 type STTProvider interface {
     Start(ctx context.Context) error
     Stop() error
-    AudioStream() chan<- []byte       // 16kHz mono PCM input
-    TextStream() <-chan STTEvent      // transcription output
+    AudioStream() chan<- []byte       // 16kHz mono PCM
+    TextStream() <-chan STTEvent
 }
-```
 
-**Реализации:**
-- `DeepgramProvider` — текущая: WebSocket к Deepgram /v2/listen API, модель flux-general-en (Flux)
-- `SherpaOnnxProvider` — будущая: локальный ONNX-движок, swap в main.go
-
-### LLMProvider
-```go
 type LLMProvider interface {
-    Translate(ctx context.Context, text string, history []string) (string, error)
-    GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error)
+    Translate(ctx, text, history) (string, error)
+    GenerateAnswers(ctx, question, cvContext) ([]string, error)
 }
-```
 
-**Реализации:**
-- `OpenAIProvider` — текущая: GPT-4o-mini через `go-openai`
-- Будущие: локальные модели (Ollama, llama.cpp)
-
-### SessionLogger
-```go
 type SessionLogger interface {
     LogText(event STTEvent) error
     SaveAudioChunk(channelID string, pcm []byte) error
     Close() error
 }
-```
 
-## События (common/events.go)
-
-```go
-type STTEvent struct {
-    Text      string
-    IsFinal   bool
-    ChannelID string    // "speaker" | "mic"
-    Timestamp time.Time
-    Error     error
-}
-
-type UIEvent struct {
-    Type       UIEventType // Translation | Answer | AnswerCandidates
-    Text       string
-    Answers    []string    // only for AnswerCandidates
-    Timestamp  time.Time
+type AudioEncoder interface {
+    Write(pcm []int16) error
+    Close() error
 }
 ```
 
-## Конфигурация (common/config.go)
+---
 
-```go
-type Config struct {
-    DeepgramAPIKey   string        // env: DEEPGRAM_API_KEY
-    OpenAIAPIKey     string        // env: OPENAI_API_KEY
-    OpenAIModel      string        // default: "gpt-4o-mini"
-    DeepgramModel    string        // default: "flux-general-en"
-    TargetLanguage   string        // default: "ru"
-    LogDir           string        // default: "./logs"
-    AudioSampleRate  int           // default: 16000
-    AudioChannels    int           // default: 1 (mono)
-    WindowSize       int           // default: 5 (sliding window)
-    CVContext        string        // CV/resume context for answer generation
-    LoopbackDeviceName string     // из config.yaml или .env (LOOPBACK_DEVICE)
-    MicDeviceName    string        // из config.yaml или .env (MIC_DEVICE)
-}
+## Конфигурация
+
+Приоритет: **env > .env > config.yaml**
+
+```yaml
+# config.yaml
+deepgram_model: "flux-general-en"
+openai_model: "gpt-4o-mini"
+target_language: "ru"
+log_dir: "./logs"
+audio_sample_rate: 16000
+window_size: 5
+save_audio: false
+loopback_device: "CABLE Input (VB-Audio Virtual Cable)"
 ```
 
-## Потокобезопасность
+```env
+# .env
+DEEPGRAM_API_KEY=...
+OPENAI_API_KEY=...
+SAVE_AUDIO=true           # опциональное сохранение аудио
+TRANSLATION_WORKERS=3     # количество параллельных переводчиков
+LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
+```
 
-| Компонент      | Механизм синхронизации                     |
-|---------------|--------------------------------------------|
-| capture       | Каналы (неблокирующая отправка аудио)       |
-| stt           | Mutex на WebSocket connection + каналы      |
-| translator    | Mutex на sliding window + каналы            |
-| ui            | Mutex на буфер отрисовки + GioUI event loop |
-| logger        | Mutex на файловый writer + канал заданий     |
+---
 
-## Graceful Shutdown (порядок)
+## Graceful Shutdown
 
-1. `signal.NotifyContext` ловит SIGINT/SIGTERM
-2. ctx cancel → capture.Stop() (закрытие malgo устройств)
-3. stt.Stop() (закрытие WebSocket)
-4. translator — естественное завершение горутин по ctx
-5. ui — закрытие GioUI окна
-6. logger.Close() — flush всех буферов на диск
-7. os.Exit(0)
+1. SIGINT/SIGTERM → ctx cancel
+2. capture.Close() → malgo устройства остановлены
+3. speakerPCM/micPCM закрыты → route завершается
+4. deepgram.Stop() → WebSocket close → textStream закрыт
+5. workers завершаются по ctx.Done()
+6. transResults закрыт → dispatch завершается
+7. ui получает DestroyEvent
+8. audio·saver flush + close (MP3 финальный фрейм)
+9. logger.Close() → drain logJobs → flush JSON
+10. os.Exit(0)
+
+---
+
+## Стек технологий
+
+| Слой | Библиотека | Назначение |
+|---|---|---|
+| Audio Capture | `malgo` (CGo) | WASAPI Loopback + Mic |
+| STT | Deepgram Flux `/v2/listen` | Turn-aware streaming |
+| LLM | `go-openai` → GPT-4o-mini | Перевод + подсказки |
+| MP3 | `go-lame` (CGo) | PCM → MP3 кодирование |
+| WAV | `beep/v2` | WAV fallback |
+| UI | `gioui.org` v0.10.1 | Прозрачный overlay |
+| Win32 | `golang.org/x/sys/windows` | WS_EX_TOPMOST/LAYERED |
+| Logger | `encoding/json` | JSON Lines |
+
+---
+
+## Задержка (было → стало)
+
+```
+v1 (Nova-2):  речь → тишина ~1-2с → is_final → перевод 1-3с  =  2-5 сек
+v2 (Flux):    речь → EndOfTurn ~260ms → worker pool → перевод  =  ~1.2-3.2 сек
+```
+
+Выигрыш: ~1-2 секунды за счёт Flux turn detection + параллелизм worker pool.
