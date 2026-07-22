@@ -6,7 +6,7 @@
 ## Возможности
 
 - **Двухканальный захват аудио** — VB-Cable (собеседник) + микрофон
-- **Распознавание речи** — Deepgram WebSocket (nova-2), задел под локальный Sherpa-onnx
+- **Распознавание речи** — Deepgram WebSocket /v2/listen (Flux), задел под локальный Sherpa-onnx
 - **Перевод** — GPT-4o-mini с сохранением IT-терминов (Deadlock, Kubernetes, CQRS…)
 - **Подсказки** — 2–3 тезиса ответа при детекции вопроса
 - **Прозрачный оверлей** — GioUI, всегда поверх окон, не перехватывает фокус
@@ -69,7 +69,7 @@ go run ./cmd/app
 Логи выводятся в stderr в JSON-формате (slog). Пример нормального запуска:
 
 ```json
-{"msg":"translator запускается","deepgram_model":"nova-2","openai_model":"gpt-4o-mini"}
+{"msg":"translator запускается","deepgram_model":"flux-general-en","openai_model":"gpt-4o-mini"}
 {"msg":"доступные аудиоустройства","loopback":["CABLE Input ...",...],"capture":[...]}
 {"msg":"создание захвата аудио","loopback_device":"CABLE Input (VB-Audio Virtual Cable)","mic_device":"<системный по умолчанию>"}
 {"msg":"translator работает, Ctrl+C для остановки"}

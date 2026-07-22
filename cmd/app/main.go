@@ -91,7 +91,7 @@ func main() {
 		"mic_device", micName,
 	)
 	audioCapture := capture.NewCapture(capture.CaptureConfig{
-		BufferSizeMs:       20,
+		BufferSizeMs:       80,
 		LoopbackDeviceName: cfg.LoopbackDeviceName,
 		MicDeviceName:      cfg.MicDeviceName,
 	})
@@ -107,8 +107,13 @@ func main() {
 	}
 
 	// 11. Запускаем все сервисы в фоновых горутинах.
-	go runCapture(ctx, audioCapture, deepgram, sessLog)
-	go runSTT(ctx, deepgram, engine, overlay, sessLog)
+	//     Создаём канал для передачи STT-событий от runSTT к runDispatch.
+	textStream := make(chan common.STTEvent, 16)
+	numWorkers := getNumWorkers()
+
+	go runCapture(ctx, audioCapture, deepgram, sessLog, cfg.SaveAudio)
+	go runSTT(ctx, deepgram, sessLog, textStream)
+	go runDispatch(ctx, textStream, overlay, engine, numWorkers)
 	go runUI(ctx, overlay)
 
 	// 12. Ждём сигнала завершения.

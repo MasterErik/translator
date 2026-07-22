@@ -29,10 +29,10 @@ const (
 )
 
 var (
-	user32                       = syscall.NewLazyDLL("user32.dll")
-	procFindWindowW              = user32.NewProc("FindWindowW")
-	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	procSetWindowLongPtrW        = user32.NewProc("SetWindowLongPtrW")
+	user32                         = syscall.NewLazyDLL("user32.dll")
+	procFindWindowW                = user32.NewProc("FindWindowW")
+	procGetWindowLongPtrW          = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW          = user32.NewProc("SetWindowLongPtrW")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 )
 

@@ -9,12 +9,12 @@ import (
 
 // mockLLMProvider is a test stub implementing LLMProvider.
 type mockLLMProvider struct {
-	mu              sync.Mutex
-	translateCalls  []translateCall
-	translateFn     func(ctx context.Context, text string, history []string) (string, error)
-	generateCalls   []generateCall
-	generateFn      func(ctx context.Context, question string, cvContext string) ([]string, error)
-	translateDelay  chan struct{} // if set, Translate blocks until this channel is closed
+	mu             sync.Mutex
+	translateCalls []translateCall
+	translateFn    func(ctx context.Context, text string, history []string) (string, error)
+	generateCalls  []generateCall
+	generateFn     func(ctx context.Context, question string, cvContext string) ([]string, error)
+	translateDelay chan struct{} // if set, Translate blocks until this channel is closed
 }
 
 type translateCall struct {

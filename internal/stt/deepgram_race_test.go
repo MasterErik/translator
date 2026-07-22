@@ -2,7 +2,6 @@ package stt
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,7 +37,7 @@ func TestDeepgramProvider_RaceConcurrentSends(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 128),
 		textCh:  make(chan common.STTEvent, 128),
 	}
@@ -52,8 +51,7 @@ func TestDeepgramProvider_RaceConcurrentSends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	ka, _ := json.Marshal(map[string]string{"type": "KeepAlive"})
-	conn.WriteMessage(websocket.TextMessage, ka)
+	// No KeepAlive in Flux v2 — skip it.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -73,7 +71,7 @@ func TestDeepgramProvider_RaceConcurrentSends(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < chunksPerGoroutine; j++ {
-				chunk := make([]byte, 320) // 20ms at 16kHz
+				chunk := make([]byte, 1280) // 80ms at 16kHz mono
 				for k := range chunk {
 					chunk[k] = byte((id*j + k) % 256)
 				}
@@ -98,7 +96,7 @@ func TestDeepgramProvider_RaceConcurrentReads(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 128),
 	}
@@ -158,9 +156,7 @@ func TestDeepgramProvider_RaceSendAndReceive(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// Read keepalive.
-		conn.ReadMessage()
-
+		// No KeepAlive in Flux v2 — start reading audio directly.
 		count := 0
 		for {
 			_, _, err := conn.ReadMessage()
@@ -182,7 +178,7 @@ func TestDeepgramProvider_RaceSendAndReceive(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 128),
 		textCh:  make(chan common.STTEvent, 128),
 	}
@@ -195,8 +191,7 @@ func TestDeepgramProvider_RaceSendAndReceive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	ka, _ := json.Marshal(map[string]string{"type": "KeepAlive"})
-	conn.WriteMessage(websocket.TextMessage, ka)
+	// No KeepAlive in Flux v2 — skip it.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -217,7 +212,7 @@ func TestDeepgramProvider_RaceSendAndReceive(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < chunksPerSender; j++ {
-				chunk := make([]byte, 160) // 10ms at 16kHz
+				chunk := make([]byte, 1280) // 80ms at 16kHz mono
 				for k := range chunk {
 					chunk[k] = byte((id + j + k) % 256)
 				}

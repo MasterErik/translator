@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestEngine_ConcurrentProcessFinalTranscript validates that multiple
@@ -136,12 +137,22 @@ func TestEngine_ConcurrentQuestionAndAnswers(t *testing.T) {
 
 	wg.Wait()
 
-	// Wait a bit for async goroutines to finish answer generation.
-	// In a real scenario, we'd use a sync mechanism.
+	// Асинхронная генерация подсказок запускается в горутинах внутри
+	// ProcessFinalTranscript. Ждём до 1 секунды пока хотя бы один вызов
+	// GenerateAnswers зарегистрируется.
+	for i := 0; i < 20; i++ {
+		genMu.Lock()
+		calls := genCallCount
+		genMu.Unlock()
+		if calls > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
 	genMu.Lock()
 	calls := genCallCount
 	genMu.Unlock()
-
 	if calls == 0 {
 		t.Error("Expected at least some GenerateAnswers calls")
 	}

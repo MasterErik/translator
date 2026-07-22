@@ -29,7 +29,7 @@ type Config struct {
 	OpenAIModel string `yaml:"openai_model"`
 
 	// DeepgramModel specifies the Deepgram model for speech-to-text.
-	// Default: "nova-2".
+	// Default: "flux-general-en".
 	DeepgramModel string `yaml:"deepgram_model"`
 
 	// TargetLanguage is the language to translate into (ISO 639-1 code).
@@ -63,6 +63,11 @@ type Config struct {
 	// MicDeviceName is the name of the microphone device.
 	// If empty, the default capture device is used. Read from MIC_DEVICE env or YAML.
 	MicDeviceName string `yaml:"mic_device"`
+
+	// SaveAudio enables saving raw PCM audio chunks to disk (audio/ directory).
+	// Default: false. Read from SAVE_AUDIO env or YAML (true/1/yes → enabled).
+	// Приоритет: env > .env > yaml.
+	SaveAudio bool `yaml:"save_audio"`
 }
 
 // applyDefaults sets reasonable default values for any unconfigured fields.
@@ -71,7 +76,7 @@ func (c *Config) applyDefaults() {
 		c.OpenAIModel = "gpt-4o-mini"
 	}
 	if c.DeepgramModel == "" {
-		c.DeepgramModel = "nova-2"
+		c.DeepgramModel = "flux-general-en"
 	}
 	if c.TargetLanguage == "" {
 		c.TargetLanguage = "ru"
@@ -94,7 +99,7 @@ func (c *Config) applyDefaults() {
 // Also loads .env file from project root if it exists.
 func (c *Config) loadFromEnv() {
 	// Try to load .env file from common locations.
-	_ = godotenv.Load()                        // current dir
+	_ = godotenv.Load()                           // current dir
 	_ = godotenv.Load(filepath.Join(".", ".env")) // explicit
 
 	if v := os.Getenv("DEEPGRAM_API_KEY"); v != "" {
@@ -144,6 +149,19 @@ func (c *Config) loadFromEnv() {
 	}
 	if v := os.Getenv("MIC_DEVICE"); v != "" {
 		c.MicDeviceName = v
+	}
+	if v := os.Getenv("SAVE_AUDIO"); v != "" {
+		c.SaveAudio = isTruthy(v)
+	}
+}
+
+// isTruthy returns true for typical boolean-like true values.
+func isTruthy(v string) bool {
+	switch v {
+	case "true", "1", "yes", "TRUE", "YES", "True", "Yes":
+		return true
+	default:
+		return false
 	}
 }
 

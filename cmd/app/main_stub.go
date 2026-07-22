@@ -68,9 +68,9 @@ func main() {
 	}
 
 	// Захват-заглушка (тихие PCM-фреймы, 16kHz mono).
-	silentFrame := make([]byte, 640) // 320 сэмплов × 2 байта
+	silentFrame := make([]byte, 2560) // 1280 сэмплов × 2 байта (80ms при 16kHz)
 	audioCapture := capture.NewStubCapture(
-		capture.CaptureConfig{BufferSizeMs: 20},
+		capture.CaptureConfig{BufferSizeMs: 80},
 		silentFrame,
 		silentFrame,
 		0, // интервал по умолчанию
@@ -87,8 +87,12 @@ func main() {
 	}
 
 	// 11. Запуск пайплайна.
-	go runCapture(ctx, audioCapture, deepgram, sessLog)
-	go runSTT(ctx, deepgram, engine, overlay, sessLog)
+	textStream := make(chan common.STTEvent, 16)
+	numWorkers := getNumWorkers()
+
+	go runCapture(ctx, audioCapture, deepgram, sessLog, cfg.SaveAudio)
+	go runSTT(ctx, deepgram, sessLog, textStream)
+	go runDispatch(ctx, textStream, overlay, engine, numWorkers)
 	go runUI(ctx, overlay)
 
 	// 12. Ожидание сигнала.

@@ -41,7 +41,8 @@ type DeepgramProvider struct {
 }
 
 // NewDeepgramProvider creates a new DeepgramProvider with the given API key and model.
-// The model parameter selects the Deepgram model (e.g., "nova-2", "nova-3").
+// The model parameter selects the Deepgram model (e.g., "flux-general-en").
+// Note: /v2/listen (Flux) only supports flux-general-en for streaming.
 // Start must be called to begin the transcription session.
 func NewDeepgramProvider(apiKey, model string) *DeepgramProvider {
 	return &DeepgramProvider{
@@ -113,10 +114,7 @@ func (d *DeepgramProvider) Stop() error {
 // connect establishes a WebSocket connection to the Deepgram API with the configured
 // model and parameters. It uses the API key in the Authorization header.
 func (d *DeepgramProvider) connect() (*websocket.Conn, error) {
-	url := fmt.Sprintf(
-		"wss://api.deepgram.com/v1/listen?model=%s&encoding=linear16&sample_rate=16000&channels=1&interim_results=true",
-		d.model,
-	)
+	url := "wss://api.deepgram.com/v2/listen?model=flux-general-en&encoding=linear16&sample_rate=16000&eot_threshold=0.8"
 
 	header := http.Header{}
 	header.Set("Authorization", "Token "+d.apiKey)
@@ -130,14 +128,9 @@ func (d *DeepgramProvider) connect() (*websocket.Conn, error) {
 		return nil, fmt.Errorf("websocket dial: %w", err)
 	}
 
-	// Send keepalive configuration via Deepgram's protocol.
-	// The KeepAlive message instructs the server to send periodic ping-like messages.
-	ka := map[string]string{"type": "KeepAlive"}
-	kaData, _ := json.Marshal(ka)
-	if err := conn.WriteMessage(websocket.TextMessage, kaData); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("keepalive config: %w", err)
-	}
+	// Flux v2 does not support KeepAlive (that's a v1/Nova protocol feature).
+	// Sending a KeepAlive to /v2/listen causes the server to close the connection
+	// with code 1006. Just return the established connection as-is.
 
 	return conn, nil
 }
@@ -295,57 +288,53 @@ func (d *DeepgramProvider) readPump() {
 	}
 }
 
-// deepgramResponse represents the JSON structure returned by the Deepgram WebSocket API.
-type deepgramResponse struct {
-	Type       string `json:"type"`
-	IsFinal    bool   `json:"is_final"`
-	SpeechFinal bool  `json:"speech_final"`
-	Channel    struct {
-		Alternatives []struct {
-			Transcript string  `json:"transcript"`
-			Confidence float64 `json:"confidence"`
-		} `json:"alternatives"`
-	} `json:"channel"`
-	Duration    float64 `json:"duration"`
-	Start       float64 `json:"start"`
-	Metadata    struct {
-		RequestID string `json:"request_id"`
-		ModelInfo struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		} `json:"model_info"`
-	} `json:"metadata"`
+// fluxResponse represents the JSON structure returned by the Deepgram /v2/listen (Flux) WebSocket API.
+// Flux uses TurnInfo events with Update for interim and EndOfTurn for final transcription.
+type fluxResponse struct {
+	Type                string  `json:"type"`  // "TurnInfo"
+	Event               string  `json:"event"` // "Update", "StartOfTurn", "EndOfTurn", "EagerEndOfTurn", "TurnResumed"
+	TurnIndex           int     `json:"turn_index"`
+	Transcript          string  `json:"transcript"`
+	EndOfTurnConfidence float64 `json:"end_of_turn_confidence"`
+	AudioWindowStart    float64 `json:"audio_window_start"`
+	AudioWindowEnd      float64 `json:"audio_window_end"`
+	SequenceID          int     `json:"sequence_id"`
 }
 
-// parseAndEmit parses a Deepgram JSON message and emits the appropriate STTEvent.
+// parseAndEmit parses a Deepgram Flux TurnInfo JSON message and emits the appropriate STTEvent.
+// Update events → interim (IsFinal=false), EndOfTurn → final (IsFinal=true).
+// StartOfTurn and TurnResumed are skipped (no transcript).
 func (d *DeepgramProvider) parseAndEmit(message []byte) {
-	var resp deepgramResponse
+	var resp fluxResponse
 	if err := json.Unmarshal(message, &resp); err != nil {
 		slog.Warn("deepgram: failed to parse response", "error", err, "raw", string(message))
 		return
 	}
 
-	// Only process Results type messages; ignore KeepAlive, etc.
-	if resp.Type != "Results" {
+	// Only process TurnInfo type messages; ignore KeepAlive, etc.
+	if resp.Type != "TurnInfo" {
 		return
 	}
 
-	transcript := ""
-	if len(resp.Channel.Alternatives) > 0 {
-		transcript = resp.Channel.Alternatives[0].Transcript
+	// Skip StartOfTurn and TurnResumed — they carry no transcript.
+	if resp.Event == "StartOfTurn" || resp.Event == "TurnResumed" {
+		return
 	}
+
+	transcript := resp.Transcript
 
 	// Empty transcript — nothing to emit.
 	if transcript == "" {
 		return
 	}
 
-	isFinal := resp.IsFinal || resp.SpeechFinal
+	// EndOfTurn → final, everything else (Update, EagerEndOfTurn) → interim.
+	isFinal := (resp.Event == "EndOfTurn")
 
 	event := common.STTEvent{
 		Text:      transcript,
 		IsFinal:   isFinal,
-		ChannelID: "speaker", // default channel; caller can override downstream
+		ChannelID: "speaker", // Flux is single-channel; caller can override downstream
 		Timestamp: time.Now(),
 	}
 

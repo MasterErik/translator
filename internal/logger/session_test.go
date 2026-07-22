@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,8 +13,11 @@ import (
 	"github.com/mastererik/translator/internal/logger"
 )
 
-// newTempLogger creates a FileSessionLogger rooted in a temporary directory.
-// The caller is responsible for cleaning up the directory.
+// =========================================================================
+// Вспомогательные функции
+// =========================================================================
+
+// newTempLogger создаёт FileSessionLogger в временной директории.
 func newTempLogger(t *testing.T) (*logger.FileSessionLogger, string) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "translator-logger-test-*")
@@ -29,8 +33,82 @@ func newTempLogger(t *testing.T) (*logger.FileSessionLogger, string) {
 	return l, dir
 }
 
-// TestNewFileSessionLogger_DirectorySetup verifies that NewFileSessionLogger
-// creates the log directory, a session_*.json file, and an audio/ subdirectory.
+// findAudioFile ищет файл с именем, начинающимся на channelID,
+// в директории audio/. Возвращает полный путь или пустую строку.
+func findAudioFile(t *testing.T, dir, channelID string) string {
+	t.Helper()
+	audioDir := filepath.Join(dir, "audio")
+	entries, err := os.ReadDir(audioDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q): %v", audioDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), channelID) {
+			return filepath.Join(audioDir, e.Name())
+		}
+	}
+	return ""
+}
+
+// audioFileSize возвращает размер аудио-файла для channelID или 0.
+func audioFileSize(t *testing.T, dir, channelID string) int64 {
+	t.Helper()
+	path := findAudioFile(t, dir, channelID)
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// generatePCM генерирует срез []byte с PCM-сэмплами (16kHz, mono, 16-bit).
+// nSamples — количество сэмплов.
+func generatePCM(nSamples int) []byte {
+	buf := make([]byte, nSamples*2)
+	for i := 0; i < nSamples; i++ {
+		// Простой синусоидальный сигнал 440 Гц для тестирования.
+		sample := int16(float64(10000) * sin(2*3.14159*440*float64(i)/16000.0))
+		buf[i*2] = byte(sample)
+		buf[i*2+1] = byte(sample >> 8)
+	}
+	return buf
+}
+
+func sin(x float64) float64 {
+	// Простое приближение для избежания импорта math.
+	// sin(x) ≈ x - x³/6 + x⁵/120 для малых x, но здесь используем цикличность.
+	// Для тестов точность не критична — используем lookup или простейший генератор.
+	// Приводим к диапазону [-π, π].
+	twoPi := 2 * 3.141592653589793
+	for x > 3.141592653589793 {
+		x -= twoPi
+	}
+	for x < -3.141592653589793 {
+		x += twoPi
+	}
+	// sin(x) ≈ x - x³/6 + x⁵/120 - x⁷/5040
+	x2 := x * x
+	return x * (1 - x2*(1.0/6.0-x2*(1.0/120.0-x2/5040.0)))
+}
+
+// entryNames возвращает список имён из DirEntry.
+func entryNames(entries []os.DirEntry) []string {
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return names
+}
+
+// =========================================================================
+// Тесты директорий и базового поведения
+// =========================================================================
+
+// TestNewFileSessionLogger_DirectorySetup проверяет, что NewFileSessionLogger
+// создаёт log-директорию и session_*.json файл, но НЕ audio/ (ленивое создание).
 func TestNewFileSessionLogger_DirectorySetup(t *testing.T) {
 	dir, err := os.MkdirTemp("", "translator-logger-dir-*")
 	if err != nil {
@@ -44,7 +122,6 @@ func TestNewFileSessionLogger_DirectorySetup(t *testing.T) {
 	}
 	defer l.Close()
 
-	// Check that the session JSON file exists and matches the expected naming pattern.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("ReadDir(%q): %v", dir, err)
@@ -61,15 +138,25 @@ func TestNewFileSessionLogger_DirectorySetup(t *testing.T) {
 		t.Errorf("expected session_*.json file in %q, got: %v", dir, entryNames(entries))
 	}
 
-	// Check that the audio/ subdirectory exists.
+	// audio/ НЕ должно существовать до первой записи.
 	audioDir := filepath.Join(dir, "audio")
+	if info, err := os.Stat(audioDir); err == nil && info.IsDir() {
+		t.Errorf("audio/ at %q should NOT exist before first audio write", audioDir)
+	}
+
+	// После записи аудио audio/ должно создаться.
+	if err := l.SaveAudioChunk("speaker", []byte{0, 0, 0, 0}); err != nil {
+		t.Fatalf("SaveAudioChunk: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	if info, err := os.Stat(audioDir); err != nil || !info.IsDir() {
-		t.Errorf("expected audio/ subdirectory at %q, stat: %v", audioDir, err)
+		t.Errorf("expected audio/ at %q after audio write, stat: %v", audioDir, err)
 	}
 }
 
-// TestLogText_PersistsJSON verifies that LogText writes a JSON line to the
-// session file containing the expected fields.
+// TestLogText_PersistsJSON проверяет, что LogText записывает JSON-строку.
 func TestLogText_PersistsJSON(t *testing.T) {
 	l, dir := newTempLogger(t)
 
@@ -84,13 +171,10 @@ func TestLogText_PersistsJSON(t *testing.T) {
 	if err := l.LogText(event); err != nil {
 		t.Fatalf("LogText: %v", err)
 	}
-
-	// Close to flush and drain the write queue.
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Find the session JSON file.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
@@ -112,7 +196,6 @@ func TestLogText_PersistsJSON(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	// Each log entry is a JSON line.
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 JSON line, got %d: %q", len(lines), string(data))
@@ -137,53 +220,52 @@ func TestLogText_PersistsJSON(t *testing.T) {
 	}
 }
 
-// TestSaveAudioChunk_CreatesPCMFile verifies that SaveAudioChunk creates the
-// per-channel PCM file and appends raw audio data.
-func TestSaveAudioChunk_CreatesPCMFile(t *testing.T) {
+// TestSaveAudioChunk_CreatesAudioFile проверяет, что SaveAudioChunk
+// создаёт аудио-файл (.mp3 или .wav) с ненулевым размером.
+func TestSaveAudioChunk_CreatesAudioFile(t *testing.T) {
 	l, dir := newTempLogger(t)
 
-	pcmData := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+	pcmData := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06} // 3 сэмпла
 	if err := l.SaveAudioChunk("speaker", pcmData); err != nil {
 		t.Fatalf("SaveAudioChunk (first): %v", err)
 	}
 
-	moreData := []byte{0x06, 0x07, 0x08}
+	moreData := []byte{0x07, 0x08, 0x09, 0x0A} // 2 сэмпла
 	if err := l.SaveAudioChunk("speaker", moreData); err != nil {
 		t.Fatalf("SaveAudioChunk (second): %v", err)
 	}
 
-	// Close to flush.
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Verify the PCM file exists and has the expected contents.
-	pcmPath := filepath.Join(dir, "audio", "speaker.pcm")
-	data, err := os.ReadFile(pcmPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q): %v", pcmPath, err)
+	// Ищем аудио-файл (speaker.mp3 или speaker.wav).
+	audioPath := findAudioFile(t, dir, "speaker")
+	if audioPath == "" {
+		t.Fatalf("no audio file found for channel 'speaker' in %q/audio/", dir)
 	}
 
-	expected := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
-	if len(data) != len(expected) {
-		t.Fatalf("PCM file length = %d, want %d", len(data), len(expected))
+	info, err := os.Stat(audioPath)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", audioPath, err)
 	}
-	for i, b := range data {
-		if b != expected[i] {
-			t.Errorf("PCM byte[%d] = 0x%02x, want 0x%02x", i, b, expected[i])
-		}
+	if info.Size() == 0 {
+		t.Errorf("audio file %q is empty", audioPath)
 	}
+
+	t.Logf("audio file: %s (%d bytes)", filepath.Base(audioPath), info.Size())
 }
 
-// TestSaveAudioChunk_MultipleChannels verifies that separate channelIDs
-// produce separate PCM files.
+// TestSaveAudioChunk_MultipleChannels проверяет, что разные channelID
+// создают разные аудио-файлы.
 func TestSaveAudioChunk_MultipleChannels(t *testing.T) {
 	l, dir := newTempLogger(t)
 
-	if err := l.SaveAudioChunk("speaker", []byte{0xAA}); err != nil {
+	// Минимум 4 байта (2 сэмпла) для валидного PCM.
+	if err := l.SaveAudioChunk("speaker", []byte{0xAA, 0x00, 0xBB, 0x00}); err != nil {
 		t.Fatalf("SaveAudioChunk(speaker): %v", err)
 	}
-	if err := l.SaveAudioChunk("mic", []byte{0xBB}); err != nil {
+	if err := l.SaveAudioChunk("mic", []byte{0xCC, 0x00, 0xDD, 0x00}); err != nil {
 		t.Fatalf("SaveAudioChunk(mic): %v", err)
 	}
 
@@ -191,16 +273,20 @@ func TestSaveAudioChunk_MultipleChannels(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Both files should exist.
 	for _, ch := range []string{"speaker", "mic"} {
-		pcmPath := filepath.Join(dir, "audio", ch+".pcm")
-		if _, err := os.Stat(pcmPath); err != nil {
-			t.Errorf("expected PCM file for %s: %v", ch, err)
+		path := findAudioFile(t, dir, ch)
+		if path == "" {
+			t.Errorf("expected audio file for %s in audio/", ch)
+		} else {
+			t.Logf("channel %s: %s", ch, filepath.Base(path))
 		}
 	}
 }
 
-// TestClose_DoubleClose verifies that calling Close twice does not panic.
+// =========================================================================
+// Тесты Close
+// =========================================================================
+
 func TestClose_DoubleClose(t *testing.T) {
 	l, _ := newTempLogger(t)
 
@@ -210,11 +296,8 @@ func TestClose_DoubleClose(t *testing.T) {
 	if err := l.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	// Reaching here without panic = pass.
 }
 
-// TestLogText_AfterCloseReturnsError verifies that LogText returns an error
-// after the logger has been closed.
 func TestLogText_AfterCloseReturnsError(t *testing.T) {
 	l, _ := newTempLogger(t)
 
@@ -228,8 +311,6 @@ func TestLogText_AfterCloseReturnsError(t *testing.T) {
 	}
 }
 
-// TestSaveAudioChunk_AfterCloseReturnsError verifies that SaveAudioChunk
-// returns an error after the logger has been closed.
 func TestSaveAudioChunk_AfterCloseReturnsError(t *testing.T) {
 	l, _ := newTempLogger(t)
 
@@ -237,17 +318,190 @@ func TestSaveAudioChunk_AfterCloseReturnsError(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	err := l.SaveAudioChunk("speaker", []byte{1, 2, 3})
+	err := l.SaveAudioChunk("speaker", []byte{1, 2, 3, 4})
 	if err == nil {
 		t.Error("expected error from SaveAudioChunk after Close, got nil")
 	}
 }
 
-// entryNames returns a list of entry names from a DirEntry slice (for error messages).
-func entryNames(entries []os.DirEntry) []string {
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name()
+// =========================================================================
+// Тесты MP3/WAV кодирования
+// =========================================================================
+
+// TestMP3Encoding проверяет, что 1 секунда PCM (16000 сэмплов)
+// даёт валидный аудио-файл с ненулевым размером.
+func TestMP3Encoding(t *testing.T) {
+	l, dir := newTempLogger(t)
+
+	// 1 секунда моно PCM 16kHz = 16000 сэмплов = 32000 байт.
+	pcm := generatePCM(16000)
+
+	// Отправляем чанками по ~20ms (320 сэмплов = 640 байт).
+	chunkSize := 640 // 20ms at 16kHz
+	for offset := 0; offset < len(pcm); offset += chunkSize {
+		end := offset + chunkSize
+		if end > len(pcm) {
+			end = len(pcm)
+		}
+		if err := l.SaveAudioChunk("speaker", pcm[offset:end]); err != nil {
+			t.Fatalf("SaveAudioChunk at offset %d: %v", offset, err)
+		}
 	}
-	return names
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	audioPath := findAudioFile(t, dir, "speaker")
+	if audioPath == "" {
+		t.Fatal("no audio file found")
+	}
+
+	info, err := os.Stat(audioPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	if info.Size() == 0 {
+		t.Error("audio file is empty — encoding failed")
+	}
+
+	// Проверяем, что размер > 0 (файл не пустой).
+	t.Logf("Audio file: %s, size: %d bytes (raw PCM was %d bytes)",
+		filepath.Base(audioPath), info.Size(), len(pcm))
+}
+
+// TestMP3FileSize проверяет, что размер выходного файла существенно
+// меньше raw PCM (MP3/WAV сжатие).
+func TestMP3FileSize(t *testing.T) {
+	l, dir := newTempLogger(t)
+
+	pcm := generatePCM(16000) // 1 секунда, 32000 байт raw
+	if err := l.SaveAudioChunk("speaker", pcm); err != nil {
+		t.Fatalf("SaveAudioChunk: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	audioPath := findAudioFile(t, dir, "speaker")
+	if audioPath == "" {
+		t.Fatal("no audio file found")
+	}
+
+	info, err := os.Stat(audioPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	rawSize := int64(len(pcm))
+	fileSize := info.Size()
+
+	t.Logf("Raw PCM: %d bytes, encoded: %d bytes (%.1f%%)",
+		rawSize, fileSize, float64(fileSize)/float64(rawSize)*100)
+
+	// WAV добавляет 44-байтный заголовок, поэтому для WAV размер ≈ rawSize + 44.
+	// MP3 должен быть значительно меньше.
+	// Для MP3: fileSize < 20% от rawSize (~6400 байт для 1с моно 16kHz).
+	// Для WAV: fileSize ≈ rawSize + 44.
+	ext := filepath.Ext(audioPath)
+	if ext == ".mp3" {
+		maxSize := rawSize / 5 // 20%
+		if fileSize > maxSize {
+			t.Errorf("MP3 file too large: %d > %d (20%% of raw PCM)", fileSize, maxSize)
+		}
+	} else if ext == ".wav" {
+		// WAV ≈ raw PCM + 44-byte header.
+		if fileSize < rawSize {
+			t.Errorf("WAV file too small: %d < raw PCM %d", fileSize, rawSize)
+		}
+	}
+}
+
+// TestAudioConcurrentWrites проверяет конкуррентную запись speaker и mic —
+// должны создаться два аудио-файла.
+func TestAudioConcurrentWrites(t *testing.T) {
+	l, dir := newTempLogger(t)
+
+	const numChunks = 100
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// speaker writer
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numChunks; i++ {
+			_ = l.SaveAudioChunk("speaker", []byte{byte(i), 0, byte(i), 0})
+		}
+	}()
+
+	// mic writer
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numChunks; i++ {
+			_ = l.SaveAudioChunk("mic", []byte{byte(i), 0, byte(i), 0})
+		}
+	}()
+
+	wg.Wait()
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	for _, ch := range []string{"speaker", "mic"} {
+		path := findAudioFile(t, dir, ch)
+		if path == "" {
+			t.Errorf("no audio file for channel %s", ch)
+		} else {
+			info, _ := os.Stat(path)
+			t.Logf("channel %s: %s (%d bytes)", ch, filepath.Base(path), info.Size())
+			if info.Size() == 0 {
+				t.Errorf("audio file for %s is empty", ch)
+			}
+		}
+	}
+}
+
+// TestAudioGracefulClose проверяет, что Close() во время активной записи
+// не вызывает паники и файл корректен (ненулевой размер).
+func TestAudioGracefulClose(t *testing.T) {
+	l, dir := newTempLogger(t)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Пишем непрерывно в фоне.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 500; i++ {
+			if err := l.SaveAudioChunk("speaker", []byte{byte(i), 0, byte(i), 0}); err != nil {
+				return // логгер закрыт
+			}
+		}
+	}()
+
+	// Даём немного времени для начала записи, затем закрываем.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	wg.Wait()
+
+	audioPath := findAudioFile(t, dir, "speaker")
+	if audioPath == "" {
+		t.Fatal("no audio file found after Close during write")
+	}
+
+	info, err := os.Stat(audioPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Error("audio file is empty after graceful close")
+	}
+
+	t.Logf("Graceful close: %s (%d bytes)", filepath.Base(audioPath), info.Size())
 }

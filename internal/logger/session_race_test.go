@@ -14,7 +14,7 @@ func TestConcurrentLogTextAndSaveAudioChunk(t *testing.T) {
 	l, _ := newTempLogger(t)
 
 	const (
-		numWriters   = 8
+		numWriters     = 8
 		callsPerWriter = 100
 	)
 

@@ -21,8 +21,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.OpenAIModel != "gpt-4o-mini" {
 		t.Errorf("OpenAIModel default: got %q, want %q", cfg.OpenAIModel, "gpt-4o-mini")
 	}
-	if cfg.DeepgramModel != "nova-2" {
-		t.Errorf("DeepgramModel default: got %q, want %q", cfg.DeepgramModel, "nova-2")
+	if cfg.DeepgramModel != "flux-general-en" {
+		t.Errorf("DeepgramModel default: got %q, want %q", cfg.DeepgramModel, "flux-general-en")
 	}
 	if cfg.TargetLanguage != "ru" {
 		t.Errorf("TargetLanguage default: got %q, want %q", cfg.TargetLanguage, "ru")
@@ -71,7 +71,7 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 		t.Errorf("CVContext env override: got %q, want %q", cfg.CVContext, "Senior Go Developer")
 	}
 	// Defaults should still apply for unset fields.
-	if cfg.DeepgramModel != "nova-2" {
+	if cfg.DeepgramModel != "flux-general-en" {
 		t.Errorf("DeepgramModel should be default: got %q", cfg.DeepgramModel)
 	}
 }
@@ -116,7 +116,7 @@ cv_context: "Backend Engineer"
 		t.Errorf("CVContext from YAML: got %q, want %q", cfg.CVContext, "Backend Engineer")
 	}
 	// Defaults should still apply for unspecified fields.
-	if cfg.DeepgramModel != "nova-2" {
+	if cfg.DeepgramModel != "flux-general-en" {
 		t.Errorf("DeepgramModel should be default: got %q", cfg.DeepgramModel)
 	}
 }
@@ -161,5 +161,88 @@ func TestLoadConfigFromYAMLMissingFile(t *testing.T) {
 	_, err := LoadConfigFromYAML("/nonexistent/path/config.yaml")
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+// TestSaveAudioDefault проверяет, что по умолчанию SaveAudio == false.
+func TestSaveAudioDefault(t *testing.T) {
+	os.Unsetenv("SAVE_AUDIO")
+
+	cfg := LoadConfig()
+
+	if cfg.SaveAudio != false {
+		t.Errorf("SaveAudio default: got %v, want false", cfg.SaveAudio)
+	}
+}
+
+// TestSaveAudioEnvTrue проверяет, что SAVE_AUDIO=true включает сохранение.
+func TestSaveAudioEnvTrue(t *testing.T) {
+	tests := []string{"true", "1", "yes", "TRUE", "YES"}
+
+	for _, v := range tests {
+		t.Run(v, func(t *testing.T) {
+			os.Setenv("SAVE_AUDIO", v)
+			t.Cleanup(func() { os.Unsetenv("SAVE_AUDIO") })
+
+			cfg := LoadConfig()
+
+			if cfg.SaveAudio != true {
+				t.Errorf("SAVE_AUDIO=%q: got %v, want true", v, cfg.SaveAudio)
+			}
+		})
+	}
+}
+
+// TestSaveAudioEnvFalse проверяет, что не-true значения → false.
+func TestSaveAudioEnvFalse(t *testing.T) {
+	tests := []string{"false", "0", "no", "", "anything"}
+
+	for _, v := range tests {
+		t.Run(v, func(t *testing.T) {
+			os.Setenv("SAVE_AUDIO", v)
+			t.Cleanup(func() { os.Unsetenv("SAVE_AUDIO") })
+
+			cfg := LoadConfig()
+
+			if cfg.SaveAudio != false {
+				t.Errorf("SAVE_AUDIO=%q: got %v, want false", v, cfg.SaveAudio)
+			}
+		})
+	}
+}
+
+// TestSaveAudioYAML проверяет чтение save_audio из YAML-конфига.
+func TestSaveAudioYAML(t *testing.T) {
+	os.Unsetenv("SAVE_AUDIO")
+
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+
+	// save_audio: true в YAML.
+	content := `
+save_audio: true
+openai_model: "gpt-4"
+`
+	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfigFromYAML(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.SaveAudio != true {
+		t.Errorf("SaveAudio from YAML: got %v, want true", cfg.SaveAudio)
+	}
+
+	// Env должен переопределять YAML.
+	os.Setenv("SAVE_AUDIO", "false")
+	cfg, err = LoadConfigFromYAML(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SaveAudio != false {
+		t.Errorf("SAVE_AUDIO env should override YAML true: got %v, want false", cfg.SaveAudio)
 	}
 }

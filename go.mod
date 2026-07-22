@@ -14,6 +14,9 @@ require (
 require (
 	gioui.org/shader v1.0.8 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
+	github.com/gopxl/beep/v2 v2.1.1 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
+	github.com/sunicy/go-lame v0.0.0-20200422031049-1c192eaafa39 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/image v0.26.0 // indirect
 	golang.org/x/net v0.48.0 // indirect

@@ -189,7 +189,7 @@ type STTProvider interface {
 ```
 
 **Реализации:**
-- `DeepgramProvider` — текущая: WebSocket к Deepgram API, модель nova-2/nova-3
+- `DeepgramProvider` — текущая: WebSocket к Deepgram /v2/listen API, модель flux-general-en (Flux)
 - `SherpaOnnxProvider` — будущая: локальный ONNX-движок, swap в main.go
 
 ### LLMProvider
@@ -239,7 +239,7 @@ type Config struct {
     DeepgramAPIKey   string        // env: DEEPGRAM_API_KEY
     OpenAIAPIKey     string        // env: OPENAI_API_KEY
     OpenAIModel      string        // default: "gpt-4o-mini"
-    DeepgramModel    string        // default: "nova-2"
+    DeepgramModel    string        // default: "flux-general-en"
     TargetLanguage   string        // default: "ru"
     LogDir           string        // default: "./logs"
     AudioSampleRate  int           // default: 16000

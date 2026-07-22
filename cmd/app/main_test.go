@@ -177,6 +177,7 @@ func (o *stubOverlay) Run(ctx context.Context) error {
 func (o *stubOverlay) WaitShutdown() {
 	<-o.shutdown
 }
+
 // и возвращает их через GetMessages.
 func TestOverlayStub(t *testing.T) {
 	overlay := ui.NewOverlay(ui.OverlayConfig{
@@ -297,17 +298,25 @@ func TestGracefulShutdown(t *testing.T) {
 	}
 
 	// ---- 3. Launch pipeline goroutines ----
+	textStream := make(chan common.STTEvent, 16)
+	numWorkers := 1 // один worker для теста
+
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 
 	go func() {
 		defer wg.Done()
-		runCapture(ctx, stubCap, mockSTT, sessLog)
+		runCapture(ctx, stubCap, mockSTT, sessLog, true)
 	}()
 
 	go func() {
 		defer wg.Done()
-		runSTT(ctx, mockSTT, engine, overlay, sessLog)
+		runSTT(ctx, mockSTT, sessLog, textStream)
+	}()
+
+	go func() {
+		defer wg.Done()
+		runDispatch(ctx, textStream, overlay, engine, numWorkers)
 	}()
 
 	go func() {
@@ -430,10 +439,14 @@ func TestGracefulShutdownNoEvents(t *testing.T) {
 		t.Fatalf("failed to start mock STT: %v", err)
 	}
 
+	textStream := make(chan common.STTEvent, 16)
+	numWorkers := 1
+
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() { defer wg.Done(); runCapture(ctx, stubCap, mockSTT, sessLog) }()
-	go func() { defer wg.Done(); runSTT(ctx, mockSTT, engine, overlay, sessLog) }()
+	wg.Add(4)
+	go func() { defer wg.Done(); runCapture(ctx, stubCap, mockSTT, sessLog, true) }()
+	go func() { defer wg.Done(); runSTT(ctx, mockSTT, sessLog, textStream) }()
+	go func() { defer wg.Done(); runDispatch(ctx, textStream, overlay, engine, numWorkers) }()
 	go func() { defer wg.Done(); runUI(ctx, overlay) }()
 
 	// Cancel almost immediately.
@@ -452,5 +465,137 @@ func TestGracefulShutdownNoEvents(t *testing.T) {
 		t.Log("all goroutines exited cleanly with no events")
 	case <-time.After(5 * time.Second):
 		t.Fatal("goroutines did not exit within timeout")
+	}
+}
+
+// TestSaveAudioDisabled проверяет, что при saveAudio=false аудио НЕ сохраняется.
+func TestSaveAudioDisabled(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "translator-test-nosave-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	mockSTT := newMockSTTProvider([]common.STTEvent{
+		{Text: "test", IsFinal: true, ChannelID: "speaker", Timestamp: time.Now()},
+	})
+	mockLLM := newMockLLMProvider()
+	engine := translator.NewEngine(mockLLM, 3)
+	sessLog, err := logger.NewFileSessionLogger(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create session logger: %v", err)
+	}
+	overlay := newStubOverlay()
+
+	silentFrame := make([]byte, 640)
+	stubCap := capture.NewStubCapture(
+		capture.CaptureConfig{BufferSizeMs: 20},
+		silentFrame,
+		silentFrame,
+		20*time.Millisecond,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mockSTT.Start(ctx); err != nil {
+		t.Fatalf("failed to start mock STT: %v", err)
+	}
+
+	textStream := make(chan common.STTEvent, 16)
+	numWorkers := 1
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() { defer wg.Done(); runCapture(ctx, stubCap, mockSTT, sessLog, false) }()
+	go func() { defer wg.Done(); runSTT(ctx, mockSTT, sessLog, textStream) }()
+	go func() { defer wg.Done(); runDispatch(ctx, textStream, overlay, engine, numWorkers) }()
+	go func() { defer wg.Done(); runUI(ctx, overlay) }()
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+
+	_ = mockSTT.Stop()
+	_ = sessLog.Close()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("goroutines did not exit within timeout")
+	}
+
+	// Проверяем: audio/ директория не должна существовать.
+	audioDir := filepath.Join(tmpDir, "audio")
+	if _, err := os.Stat(audioDir); !os.IsNotExist(err) {
+		t.Error("audio/ directory should NOT exist when saveAudio=false")
+	}
+}
+
+// TestNoAudioDirWhenDisabled проверяет, что audio/ не создаётся при saveAudio=false,
+// даже если pipeline работал некоторое время.
+func TestNoAudioDirWhenDisabled(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "translator-test-noaudiodir-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	mockSTT := newMockSTTProvider(nil) // no events
+	mockLLM := newMockLLMProvider()
+	engine := translator.NewEngine(mockLLM, 5)
+	sessLog, err := logger.NewFileSessionLogger(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create session logger: %v", err)
+	}
+	overlay := newStubOverlay()
+
+	silentFrame := make([]byte, 640)
+	stubCap := capture.NewStubCapture(
+		capture.CaptureConfig{BufferSizeMs: 20},
+		silentFrame, silentFrame, 20*time.Millisecond,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mockSTT.Start(ctx); err != nil {
+		t.Fatalf("failed to start mock STT: %v", err)
+	}
+
+	textStream := make(chan common.STTEvent, 16)
+	numWorkers := 1
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() { defer wg.Done(); runCapture(ctx, stubCap, mockSTT, sessLog, false) }()
+	go func() { defer wg.Done(); runSTT(ctx, mockSTT, sessLog, textStream) }()
+	go func() { defer wg.Done(); runDispatch(ctx, textStream, overlay, engine, numWorkers) }()
+	go func() { defer wg.Done(); runUI(ctx, overlay) }()
+
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	_ = mockSTT.Stop()
+	_ = sessLog.Close()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("goroutines did not exit within timeout")
+	}
+
+	// Проверяем: audio/ директория не создана.
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to read log dir: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() && e.Name() == "audio" {
+			t.Error("audio/ directory should NOT be created when saveAudio=false")
+		}
 	}
 }

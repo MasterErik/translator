@@ -5,7 +5,7 @@
 openai_model: "gpt-4o-mini"
 
 # Deepgram model for speech-to-text
-deepgram_model: "nova-2"
+deepgram_model: "flux-general-en"
 
 # Target language for translation (ISO 639-1)
 target_language: "ru"
@@ -23,6 +23,10 @@ audio_channels: 1
 #   mic_device:     "Microphone (Realtek High Definition Audio)"
 loopback_device: ""
 mic_device: ""
+
+# Save raw PCM audio chunks to disk (audio/ directory under log_dir).
+# Default false — set true to enable for debugging or post-session review.
+save_audio: false
 
 # Sliding window size for translation context (number of recent sentences)
 window_size: 5

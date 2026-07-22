@@ -79,47 +79,23 @@ func wsURL(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http")
 }
 
-// makeInterimResponse creates a Deepgram interim JSON response.
+// makeInterimResponse creates a Deepgram Flux TurnInfo Update (interim) JSON response.
 func makeInterimResponse(transcript string) []byte {
-	r := deepgramResponse{
-		Type:    "Results",
-		IsFinal: false,
-		Channel: struct {
-			Alternatives []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
-			} `json:"alternatives"`
-		}{
-			Alternatives: []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
-			}{
-				{Transcript: transcript, Confidence: 0.85},
-			},
-		},
+	r := fluxResponse{
+		Type:       "TurnInfo",
+		Event:      "Update",
+		Transcript: transcript,
 	}
 	data, _ := json.Marshal(r)
 	return data
 }
 
-// makeFinalResponse creates a Deepgram final JSON response.
+// makeFinalResponse creates a Deepgram Flux TurnInfo EndOfTurn (final) JSON response.
 func makeFinalResponse(transcript string) []byte {
-	r := deepgramResponse{
-		Type:    "Results",
-		IsFinal: true,
-		Channel: struct {
-			Alternatives []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
-			} `json:"alternatives"`
-		}{
-			Alternatives: []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
-			}{
-				{Transcript: transcript, Confidence: 0.95},
-			},
-		},
+	r := fluxResponse{
+		Type:       "TurnInfo",
+		Event:      "EndOfTurn",
+		Transcript: transcript,
 	}
 	data, _ := json.Marshal(r)
 	return data
@@ -135,7 +111,7 @@ func TestDeepgramProvider_InterimEvents(t *testing.T) {
 	// Instead, we directly test the parseAndEmit logic.
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 	}
@@ -169,7 +145,7 @@ func TestDeepgramProvider_FinalEvents(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 	}
@@ -191,35 +167,23 @@ func TestDeepgramProvider_FinalEvents(t *testing.T) {
 	}
 }
 
-// TestDeepgramProvider_SpeechFinal verifies that speech_final is also treated as final.
-func TestDeepgramProvider_SpeechFinal(t *testing.T) {
+// TestDeepgramProvider_EndOfTurn verifies that EndOfTurn events are treated as final.
+func TestDeepgramProvider_EndOfTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
-	r := deepgramResponse{
-		Type:        "Results",
-		SpeechFinal: true,
-		Channel: struct {
-			Alternatives []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
-			} `json:"alternatives"`
-		}{
-			Alternatives: []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
-			}{
-				{Transcript: "speech final text", Confidence: 0.99},
-			},
-		},
+	r := fluxResponse{
+		Type:       "TurnInfo",
+		Event:      "EndOfTurn",
+		Transcript: "speech final text",
 	}
 	data, _ := json.Marshal(r)
 	provider.parseAndEmit(data)
@@ -227,13 +191,13 @@ func TestDeepgramProvider_SpeechFinal(t *testing.T) {
 	select {
 	case event := <-provider.textCh:
 		if !event.IsFinal {
-			t.Errorf("expected final event for speech_final=true, got IsFinal=false")
+			t.Errorf("expected final event for EndOfTurn, got IsFinal=false")
 		}
 		if event.Text != "speech final text" {
 			t.Errorf("expected 'speech final text', got '%s'", event.Text)
 		}
 	case <-ctx.Done():
-		t.Fatal("timeout waiting for speech_final event")
+		t.Fatal("timeout waiting for EndOfTurn event")
 	}
 }
 
@@ -244,7 +208,7 @@ func TestDeepgramProvider_EmptyTranscript(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 	}
@@ -262,14 +226,14 @@ func TestDeepgramProvider_EmptyTranscript(t *testing.T) {
 	}
 }
 
-// TestDeepgramProvider_NonResultsIgnored verifies that non-Results type messages are ignored.
-func TestDeepgramProvider_NonResultsIgnored(t *testing.T) {
+// TestDeepgramProvider_NonTurnInfoIgnored verifies that non-TurnInfo messages (e.g., KeepAlive) are ignored.
+func TestDeepgramProvider_NonTurnInfoIgnored(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 	}
@@ -299,18 +263,7 @@ func TestDeepgramProvider_WebSocketIntegration(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// Read initial keepalive message.
-		_, kaMsg, err := conn.ReadMessage()
-		if err != nil {
-			t.Logf("mock read keepalive: %v", err)
-			return
-		}
-		var ka map[string]string
-		if err := json.Unmarshal(kaMsg, &ka); err != nil || ka["type"] != "KeepAlive" {
-			t.Errorf("expected KeepAlive, got %s", kaMsg)
-		}
-
-		// Read one audio chunk.
+		// Read first audio chunk (no KeepAlive in Flux v2).
 		_, audioData, err := conn.ReadMessage()
 		if err != nil {
 			t.Logf("mock read audio: %v", err)
@@ -333,7 +286,7 @@ func TestDeepgramProvider_WebSocketIntegration(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 16),
 	}
@@ -348,10 +301,7 @@ func TestDeepgramProvider_WebSocketIntegration(t *testing.T) {
 		t.Fatalf("dial mock server: %v", err)
 	}
 
-	// Send keepalive.
-	ka, _ := json.Marshal(map[string]string{"type": "KeepAlive"})
-	conn.WriteMessage(websocket.TextMessage, ka)
-
+	// No KeepAlive in Flux v2 — skip it.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -401,7 +351,7 @@ func TestDeepgramProvider_WebSocketIntegration(t *testing.T) {
 
 // TestDeepgramProvider_StartStop verifies the Start/Stop lifecycle.
 func TestDeepgramProvider_StartStop(t *testing.T) {
-	provider := NewDeepgramProvider("test-key", "nova-2")
+	provider := NewDeepgramProvider("test-key", "flux-general-en")
 
 	// Start without a real server should fail.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -431,9 +381,7 @@ func TestDeepgramProvider_DoubleStart(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, _ := upgrader.Upgrade(w, r, nil)
 		if conn != nil {
-			// Read keepalive, then just hang.
-			conn.ReadMessage()
-			// Block until closed.
+			// No KeepAlive in Flux v2 — block until closed.
 			conn.ReadMessage()
 		}
 	}))
@@ -441,7 +389,7 @@ func TestDeepgramProvider_DoubleStart(t *testing.T) {
 
 	provider := &DeepgramProvider{
 		apiKey:  "test-key",
-		model:   "nova-2",
+		model:   "flux-general-en",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 	}
@@ -455,8 +403,7 @@ func TestDeepgramProvider_DoubleStart(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 
-	ka, _ := json.Marshal(map[string]string{"type": "KeepAlive"})
-	conn.WriteMessage(websocket.TextMessage, ka)
+	// No KeepAlive in Flux v2 — skip it.
 
 	ctx := context.Background()
 	provider.ctx, provider.cancel = context.WithCancel(ctx)

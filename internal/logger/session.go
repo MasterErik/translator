@@ -4,6 +4,7 @@
 package logger
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,10 +19,10 @@ import (
 // It carries either a text event (for JSON logging) or raw PCM data
 // (for audio dumps).
 type logJob struct {
-	eventType string        // "text" or "audio"
+	eventType string          // "text" or "audio"
 	event     common.STTEvent // set for text jobs
-	channelID string        // set for audio jobs
-	pcmData   []byte        // set for audio jobs
+	channelID string          // set for audio jobs
+	pcmData   []byte          // set for audio jobs
 }
 
 // LogEntry is the JSON-serialisable record written to the session log file.
@@ -40,14 +41,14 @@ type LogEntry struct {
 // inside an audio/ subdirectory.  All file I/O is serialised through a
 // background worker goroutine so that callers never block on disk writes.
 type FileSessionLogger struct {
-	mu        sync.Mutex
-	file      *os.File
-	encoder   *json.Encoder
-	audioDir  string
-	audioFiles map[string]*os.File // keyed by channelID ("speaker", "mic")
-	writeCh   chan logJob          // buffered async write queue (size 256)
-	done      chan struct{}        // closed when worker goroutine exits
-	closed    bool
+	mu         sync.Mutex
+	file       *os.File
+	encoder    *json.Encoder
+	audioDir   string
+	audioFiles map[string]AudioEncoder // keyed by channelID ("speaker", "mic")
+	writeCh    chan logJob             // buffered async write queue (size 256)
+	done       chan struct{}           // closed when worker goroutine exits
+	closed     bool
 }
 
 // NewFileSessionLogger creates a new session logger rooted at logDir.
@@ -71,16 +72,14 @@ func NewFileSessionLogger(logDir string) (*FileSessionLogger, error) {
 	}
 
 	audioDir := filepath.Join(logDir, "audio")
-	if err := os.MkdirAll(audioDir, 0755); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("logger: create audio dir: %w", err)
-	}
+	// Директория audio/ создаётся лениво при первой записи аудио.
+	// Не создаём её здесь — если save_audio=false, директория не нужна.
 
 	fsl := &FileSessionLogger{
 		file:       f,
 		encoder:    json.NewEncoder(f),
 		audioDir:   audioDir,
-		audioFiles: make(map[string]*os.File),
+		audioFiles: make(map[string]AudioEncoder),
 		writeCh:    make(chan logJob, 256),
 		done:       make(chan struct{}),
 	}
@@ -156,9 +155,9 @@ func (fsl *FileSessionLogger) Close() error {
 		fsl.file.Close()
 	}
 
-	// Close all lazily-opened audio files.
-	for _, af := range fsl.audioFiles {
-		af.Close()
+	// Close all lazily-opened audio encoders.
+	for _, enc := range fsl.audioFiles {
+		enc.Close()
 	}
 
 	return nil
@@ -189,23 +188,35 @@ func (fsl *FileSessionLogger) backgroundWorker() {
 					"logger: failed to encode log entry: %v\n", err)
 			}
 		case "audio":
-			af, ok := fsl.audioFiles[job.channelID]
+			enc, ok := fsl.audioFiles[job.channelID]
 			if !ok {
-				var err error
-				af, err = os.Create(filepath.Join(fsl.audioDir, job.channelID+".pcm"))
-				if err != nil {
+				// Создаём audio/ директорию лениво при первой записи.
+				if err := os.MkdirAll(fsl.audioDir, 0755); err != nil {
 					_, _ = fmt.Fprintf(os.Stderr,
-						"logger: failed to create audio file for %s: %v\n",
-						job.channelID, err)
+						"logger: failed to create audio dir: %v\n", err)
 					continue
 				}
-				fsl.audioFiles[job.channelID] = af
+				enc = newAudioEncoder(fsl.audioDir, job.channelID)
+				fsl.audioFiles[job.channelID] = enc
 			}
-			if _, err := af.Write(job.pcmData); err != nil {
+			// Конвертируем []byte → []int16 (little-endian, 2 байта на сэмпл).
+			samples := bytesToInt16(job.pcmData)
+			if err := enc.Write(samples); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr,
 					"logger: failed to write audio chunk for %s: %v\n",
 					job.channelID, err)
 			}
 		}
 	}
+}
+
+// bytesToInt16 конвертирует срез PCM-байт (little-endian, 2 байта на сэмпл)
+// в срез int16-сэмплов. Неполный последний байт игнорируется.
+func bytesToInt16(pcm []byte) []int16 {
+	n := len(pcm) / 2
+	samples := make([]int16, n)
+	for i := 0; i < n; i++ {
+		samples[i] = int16(binary.LittleEndian.Uint16(pcm[i*2:]))
+	}
+	return samples
 }

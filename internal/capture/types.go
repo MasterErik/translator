@@ -1,10 +1,11 @@
 package capture
 
 // defaultBufferSizeMs is the default audio buffer period in milliseconds.
-const defaultBufferSizeMs = 20
+// Flux recommends 80ms chunks for optimal turn detection.
+const defaultBufferSizeMs = 80
 
 // channelBufferSize is the capacity of the output audio channels.
-// At 20ms buffers, 100 items = 2 seconds of buffered audio.
+// At 80ms buffers, 100 items = 8 seconds of buffered audio.
 const channelBufferSize = 100
 
 // CaptureConfig holds the configuration for dual-channel audio capture.
