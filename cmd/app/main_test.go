@@ -76,6 +76,7 @@ var _ stt.STTProvider = (*mockSTTProvider)(nil)
 // --------------------------------------------------------------------------
 
 type mockLLMProvider struct {
+	mu           sync.Mutex
 	translations map[string]string
 	answers      map[string][]string
 }
@@ -88,6 +89,8 @@ func newMockLLMProvider() *mockLLMProvider {
 }
 
 func (m *mockLLMProvider) Translate(ctx context.Context, text string, history []string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if t, ok := m.translations[text]; ok {
 		return t, nil
 	}
@@ -95,6 +98,8 @@ func (m *mockLLMProvider) Translate(ctx context.Context, text string, history []
 }
 
 func (m *mockLLMProvider) GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if a, ok := m.answers[question]; ok {
 		return a, nil
 	}

@@ -71,7 +71,7 @@ func (c *Capture) Start(ctx context.Context) (<-chan []byte, <-chan []byte, erro
 }
 
 // startLoopback initializes and starts the WASAPI loopback capture device.
-func (c *Capture) startLoopback(ctx context.Context, ch chan<- []byte) error {
+func (c *Capture) startLoopback(ctx context.Context, ch chan []byte) error {
 	deviceID, err := c.findDevice(malgo.Loopback, c.config.LoopbackDeviceName)
 	if err != nil {
 		return fmt.Errorf("find loopback device: %w", err)
@@ -110,7 +110,7 @@ func (c *Capture) startLoopback(ctx context.Context, ch chan<- []byte) error {
 }
 
 // startMic initializes and starts the microphone capture device.
-func (c *Capture) startMic(ctx context.Context, ch chan<- []byte) error {
+func (c *Capture) startMic(ctx context.Context, ch chan []byte) error {
 	deviceID, err := c.findDevice(malgo.Capture, c.config.MicDeviceName)
 	if err != nil {
 		return fmt.Errorf("find microphone device: %w", err)

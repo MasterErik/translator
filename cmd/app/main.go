@@ -68,16 +68,28 @@ func main() {
 	}
 
 	// Проверяем, что указанные устройства существуют.
-	if err := capture.ValidateDevice(2 /* malgo.Loopback */, cfg.LoopbackDeviceName); err != nil {
+	if err := capture.ValidateDevice(4 /* malgo.Loopback */, cfg.LoopbackDeviceName); err != nil {
 		slog.Error("ошибка конфигурации loopback-устройства", "error", err, "задано", cfg.LoopbackDeviceName)
 		os.Exit(1)
 	}
-	if err := capture.ValidateDevice(1 /* malgo.Capture */, cfg.MicDeviceName); err != nil {
+	if err := capture.ValidateDevice(2 /* malgo.Capture */, cfg.MicDeviceName); err != nil {
 		slog.Error("ошибка конфигурации микрофона", "error", err, "задано", cfg.MicDeviceName)
 		os.Exit(1)
 	}
 
 	// 9. Создаём захват аудио (malgo WASAPI: loopback + микрофон).
+	loopbackName := cfg.LoopbackDeviceName
+	if loopbackName == "" {
+		loopbackName = "<системный по умолчанию>"
+	}
+	micName := cfg.MicDeviceName
+	if micName == "" {
+		micName = "<системный по умолчанию>"
+	}
+	slog.Info("создание захвата аудио",
+		"loopback_device", loopbackName,
+		"mic_device", micName,
+	)
 	audioCapture := capture.NewCapture(capture.CaptureConfig{
 		BufferSizeMs:       20,
 		LoopbackDeviceName: cfg.LoopbackDeviceName,

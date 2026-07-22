@@ -95,11 +95,11 @@ func NewFileSessionLogger(logDir string) (*FileSessionLogger, error) {
 // the logger has already been closed.
 func (fsl *FileSessionLogger) LogText(event common.STTEvent) error {
 	fsl.mu.Lock()
+	defer fsl.mu.Unlock()
+
 	if fsl.closed {
-		fsl.mu.Unlock()
 		return fmt.Errorf("logger: LogText on closed session logger")
 	}
-	fsl.mu.Unlock()
 
 	select {
 	case fsl.writeCh <- logJob{
@@ -118,11 +118,11 @@ func (fsl *FileSessionLogger) LogText(event common.STTEvent) error {
 // Returns an error if the logger has already been closed.
 func (fsl *FileSessionLogger) SaveAudioChunk(channelID string, pcm []byte) error {
 	fsl.mu.Lock()
+	defer fsl.mu.Unlock()
+
 	if fsl.closed {
-		fsl.mu.Unlock()
 		return fmt.Errorf("logger: SaveAudioChunk on closed session logger")
 	}
-	fsl.mu.Unlock()
 
 	select {
 	case fsl.writeCh <- logJob{

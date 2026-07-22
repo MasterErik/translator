@@ -3,6 +3,7 @@ package translator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 )
@@ -11,6 +12,9 @@ import (
 // through the translation engine. It includes the translated text,
 // any generated answer hints (if the text was detected as a question),
 // and a flag indicating whether the text was classified as a question.
+//
+// Answers are generated asynchronously — use GetAnswers() and
+// SetAnswers() for safe concurrent access.
 type TranslationResult struct {
 	// Translation is the Russian translation of the original text.
 	Translation string
@@ -18,11 +22,28 @@ type TranslationResult struct {
 	// Answers contains generated answer hints. Only populated when
 	// IsQuestion is true. May be empty if answer generation is
 	// still in progress (answers are generated asynchronously).
-	Answers []string
+	answers   []string
+	answersMu sync.Mutex
 
 	// IsQuestion indicates whether the original text was classified
 	// as a question.
 	IsQuestion bool
+}
+
+// GetAnswers returns a copy of the answer hints. Safe for concurrent use.
+func (r *TranslationResult) GetAnswers() []string {
+	r.answersMu.Lock()
+	defer r.answersMu.Unlock()
+	out := make([]string, len(r.answers))
+	copy(out, r.answers)
+	return out
+}
+
+// SetAnswers replaces the answer hints. Safe for concurrent use.
+func (r *TranslationResult) SetAnswers(a []string) {
+	r.answersMu.Lock()
+	defer r.answersMu.Unlock()
+	r.answers = a
 }
 
 // questionWords is a set of English question-starting words and phrases
@@ -80,11 +101,19 @@ func (e *TranslationEngine) ProcessFinalTranscript(ctx context.Context, text str
 	// 3. Translate.
 	translation, err := e.llm.Translate(ctx, text, history)
 	if err != nil {
+		slog.Error("перевод не удался", "text", text, "error", err)
 		return nil, fmt.Errorf("process final transcript: %w", err)
 	}
 
 	// 4. Classify.
 	isQuestion := isQuestion(text)
+
+	slog.Info("транскрипт обработан",
+		"text", text,
+		"translation", translation,
+		"is_question", isQuestion,
+		"window_size", len(history)+1,
+	)
 
 	result := &TranslationResult{
 		Translation: translation,
@@ -96,20 +125,18 @@ func (e *TranslationEngine) ProcessFinalTranscript(ctx context.Context, text str
 		// Copy values for the goroutine to avoid data races.
 		question := text
 		go func() {
+			slog.Info("генерация подсказок запущена", "question", question)
+
 			// Use a background context so answer generation is not
 			// tied to the request's lifecycle.
 			bgCtx := context.Background()
 			answers, genErr := e.llm.GenerateAnswers(bgCtx, question, "")
 			if genErr != nil {
-				// Logging will be added when the slog logger is wired in.
+				slog.Error("генерация подсказок не удалась", "question", question, "error", genErr)
 				return
 			}
-			// In a full integration, the answers would be sent to the UI
-			// via a channel. For now, they are stored in the result for
-			// synchronous access in tests.
-			e.mu.Lock()
-			result.Answers = answers
-			e.mu.Unlock()
+			slog.Info("подсказки сгенерированы", "question", question, "count", len(answers))
+			result.SetAnswers(answers)
 		}()
 	}
 

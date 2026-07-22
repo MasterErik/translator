@@ -4,28 +4,90 @@
 
 Приложение реального времени, работающее как прозрачный overlay поверх рабочего стола Windows. Предназначено для помощи на технических собеседованиях/встречах: переводит речь собеседника (EN→RU), сохраняет IT-термины, генерирует подсказки к ответам при детекции вопроса.
 
+## Аудио-архитектура: виртуальный аудиоканал (VB-Cable)
+
+Translator использует **двухканальный захват через виртуальный аудиоканал VB-Cable**, а не простой системный Loopback. Это принципиально важно для разделения звука собеседника и вашего голоса.
+
+### Почему VB-Cable, а не простой Loopback?
+
+WASAPI Loopback по умолчанию захватывает **весь системный звук** — всё, что идёт в динамики (Chrome, системные звуки, уведомления, ваш микрофонный мониторинг). Это создаёт эхо и смешивает ваш голос с голосом собеседника, делая двухканальное разделение невозможным.
+
+**Решение:** VB-Cable создаёт изолированный виртуальный аудиоканал:
+
+```
+┌──────────────────────────────────────────────────────┐
+│                  Аудио-поток (схема)                  │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│  Chrome/Teams ──► CABLE Input (Playback)             │
+│       │                   │                          │
+│       │                   │  VB-Cable внутренний     │
+│       │                   │  виртуальный мост        │
+│       │                   │                          │
+│       │                   ▼                          │
+│       │         WASAPI Loopback захват ──────────┐   │
+│       │         (с CABLE Input как Playback)      │   │
+│       │                                          │   │
+│  Микрофон ──► WASAPI Capture ────────────────┐   │   │
+│                                              │   │   │
+│                      ┌───────────────────────┘   │   │
+│                      │                           │   │
+│                      ▼                           ▼   │
+│              chan "speaker" (PCM)    chan "mic" (PCM) │
+│                      │                           │   │
+│                      └──────────┬────────────────┘   │
+│                                 ▼                     │
+│                      STTProvider.AudioStream()        │
+│                          (Deepgram)                   │
+└──────────────────────────────────────────────────────┘
+```
+
+**VB-Cable создаёт два устройства:**
+
+| Устройство | Тип WASAPI | Роль в Translator |
+|-----------|-----------|-------------------|
+| `CABLE Input (VB-Audio Virtual Cable)` | **Playback** | **LOOPBACK_DEVICE** — WASAPI loopback захватывает аудио, идущее в это устройство |
+| `CABLE Output (VB-Audio Virtual Cable)` | **Recording** | **MIC_DEVICE** (опционально) — можно захватывать как виртуальный микрофон |
+
+**Поток аудио:** Chrome (звонок) → CABLE Input (Playback) → WASAPI Loopback захват → Translator
+
+Без VB-Cable `LOOPBACK_DEVICE` оставляется пустым — захватывается системный звук по умолчанию. Это работает для тестов, но не для двухканального разделения.
+
+### Конфигурация
+
+Приоритет: **env-переменные > `.env` > `config.yaml` > системные по умолчанию**.
+
+```yaml
+# config.yaml — production setup с VB-Cable
+loopback_device: "CABLE Output (VB-Audio Virtual Cable)"
+mic_device: "Microphone (Realtek High Definition Audio)"
+```
+
+При старте программа проверяет существование указанных устройств через `capture.ValidateDevice()` и выводит список всех доступных. Если устройство не найдено — падает с ошибкой и перечнем доступных.
+
 ## Диаграмма потоков данных
 
 ```
-                          ┌──────────────────────────┐
-                          │  Loopback (Динамики)     │───► chan []byte (In)
-                          └──────────────────────────┘         │
-Аудио-захват (malgo) ────┤                                     ▼
-                          ┌──────────────────────────┐   [STTProvider Interface]
-                          │  Microphone (Микрофон)   │   ├── Deepgram (Сейчас)
-                          └──────────────────────────┘   └── Sherpa-onnx (Будущее)
-                                                               │
-                                                       chan STTEvent
-                                                               │
-                                                               ▼
+                          ┌──────────────────────────────────┐
+                          │  VB-Cable (виртуальный канал)    │───► chan []byte "speaker"
+                          │  CABLE Input → WASAPI Loopback   │
+                          └──────────────────────────────────┘         │
+Аудио-захват (malgo) ────┤                                             ▼
+                          ┌──────────────────────────┐         [STTProvider Interface]
+                          │  Microphone (Микрофон)   │         ├── Deepgram (Сейчас)
+                          └──────────────────────────┘         └── Sherpa-onnx (Будущее)
+                                                                       │
+                                                               chan STTEvent
+                                                                       │
+                                                                       ▼
 [Session Logger] ◄────────────────────────────── [Translation Engine]
 (Сохранение json/pcm)                             (GPT-4o-mini + IT Context)
-                                                               │
-                                                       chan UIEvent
-                                                               │
-                                                               ▼
-                                                        [GioUI Overlay]
-                                                      (Субтитры + Ответы A)
+                                                                       │
+                                                               chan UIEvent
+                                                                       │
+                                                                       ▼
+                                                                [GioUI Overlay]
+                                                              (Субтитры + Ответы A)
 ```
 
 ## Детальная архитектура модулей
@@ -46,10 +108,11 @@
 │ • malgo   │ │• STTProv │ │• LLMProv  │ │• GioUI   │ │• Session │
 │   devices │ │  iface   │ │  iface    │ │  overlay │ │  Logger  │
 │ • 2 chans │ │• Deepgr. │ │• Sliding  │ │• Win32   │ │• JSON    │
-│ • 48→16   │ │  WS impl │ │  window   │ │  flags   │ │  writer  │
-│   kHz     │ │• Sherpa  │ │• QA class │ │• 2 zones │ │• PCM dump│
-│ • Stereo→ │ │  stub    │ │  ifier    │ │          │ │          │
-│   Mono    │ │          │ │• Prompts  │ │          │ │          │
+│ • VB-Cable│ │  WS impl │ │  window   │ │  flags   │ │  writer  │
+│ • 48→16   │ │• Sherpa  │ │• QA class │ │• 2 zones │ │• PCM dump│
+│   kHz     │ │  stub    │ │  ifier    │ │          │ │          │
+│ • Stereo→ │ │          │ │• Prompts  │ │          │ │          │
+│   Mono    │ │          │ │           │ │          │ │          │
 └───────────┘ └──────────┘ └───────────┘ └──────────┘ └──────────┘
         │            │            │              │          │
         └────────────┴────────────┴──────────────┴──────────┘
@@ -66,14 +129,14 @@
 
 ### 1. Аудио-захват → STT
 ```
-malgo Device 1 (Loopback) ──► chan []byte ──► STTProvider.AudioStream()
-malgo Device 2 (Mic)      ──► chan []byte ──► STTProvider.AudioStream()
-                                                    │
-                                          (WebSocket / Local ONNX)
-                                                    │
-                                                    ▼
-                                          chan STTEvent ──► Translator
-                                          chan STTEvent ──► Logger
+VB-Cable CABLE Input ──► WASAPI Loopback ──► chan []byte "speaker" ──► STTProvider.AudioStream()
+Microphone            ──► WASAPI Capture ──► chan []byte "mic"      ──► STTProvider.AudioStream()
+                                                                           │
+                                                                 (WebSocket / Local ONNX)
+                                                                           │
+                                                                           ▼
+                                                                 chan STTEvent ──► Translator
+                                                                 chan STTEvent ──► Logger
 ```
 
 ### 2. STT → Translator → UI
@@ -173,16 +236,18 @@ type UIEvent struct {
 
 ```go
 type Config struct {
-    DeepgramAPIKey  string        // env: DEEPGRAM_API_KEY
-    OpenAIAPIKey    string        // env: OPENAI_API_KEY
-    OpenAIModel     string        // default: "gpt-4o-mini"
-    DeepgramModel   string        // default: "nova-2"
-    TargetLanguage  string        // default: "ru"
-    LogDir          string        // default: "./logs"
-    AudioSampleRate int           // default: 16000
-    AudioChannels   int           // default: 1 (mono)
-    WindowSize      int           // default: 5 (sliding window)
-    CVContext       string        // CV/resume context for answer generation
+    DeepgramAPIKey   string        // env: DEEPGRAM_API_KEY
+    OpenAIAPIKey     string        // env: OPENAI_API_KEY
+    OpenAIModel      string        // default: "gpt-4o-mini"
+    DeepgramModel    string        // default: "nova-2"
+    TargetLanguage   string        // default: "ru"
+    LogDir           string        // default: "./logs"
+    AudioSampleRate  int           // default: 16000
+    AudioChannels    int           // default: 1 (mono)
+    WindowSize       int           // default: 5 (sliding window)
+    CVContext        string        // CV/resume context for answer generation
+    LoopbackDeviceName string     // из config.yaml или .env (LOOPBACK_DEVICE)
+    MicDeviceName    string        // из config.yaml или .env (MIC_DEVICE)
 }
 ```
 

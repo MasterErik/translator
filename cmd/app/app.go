@@ -110,6 +110,7 @@ func runSTT(ctx context.Context, sttProv stt.STTProvider, engine *translator.Tra
 			}
 
 			if !event.IsFinal {
+				slog.Debug("промежуточный транскрипт", "text", event.Text, "channel", event.ChannelID)
 				// Промежуточный результат: показываем предпросмотр.
 				ov.AddMessage(ui.UIMessage{
 					Type:      ui.Translation,
@@ -139,11 +140,11 @@ func runSTT(ctx context.Context, sttProv stt.STTProvider, engine *translator.Tra
 				eventCopy := event
 				go func() {
 					for i := 0; i < 10; i++ {
-						if len(resultCopy.Answers) > 0 {
+						if len(resultCopy.GetAnswers()) > 0 {
 							ov.AddMessage(ui.UIMessage{
 								Type:      ui.AnswerCandidates,
 								Text:      eventCopy.Text,
-								Answers:   resultCopy.Answers,
+								Answers:   resultCopy.GetAnswers(),
 								Timestamp: eventCopy.Timestamp,
 							})
 							return

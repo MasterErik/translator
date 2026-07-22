@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockLLMProvider is a test stub implementing LLMProvider.
@@ -246,12 +247,8 @@ func TestSlidingWindow_MaxSize(t *testing.T) {
 }
 
 func TestProcessFinalTranscript_AnswerGenerationTriggered(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-
 	mock := &mockLLMProvider{
 		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
-			defer wg.Done()
 			return []string{"hint about " + question}, nil
 		},
 	}
@@ -266,11 +263,16 @@ func TestProcessFinalTranscript_AnswerGenerationTriggered(t *testing.T) {
 		t.Error("Should classify as question")
 	}
 
-	// Wait for the async answer generation goroutine to finish.
-	wg.Wait()
+	// Ждём асинхронной генерации подсказок с таймаутом.
+	for i := 0; i < 50; i++ {
+		if len(result.GetAnswers()) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
-	if len(result.Answers) != 1 {
-		t.Errorf("Answers length = %d, want 1", len(result.Answers))
+	if len(result.GetAnswers()) != 1 {
+		t.Errorf("Answers length = %d, want 1", len(result.GetAnswers()))
 	}
 }
 

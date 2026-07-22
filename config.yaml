@@ -19,7 +19,7 @@ audio_channels: 1
 
 # Audio device names — edit to match your setup
 # Leave empty to use system defaults, or set specific device names:
-#   loopback_device: "CABLE Output (VB-Audio Virtual Cable)"
+#   loopback_device: "CABLE Input (VB-Audio Virtual Cable)"
 #   mic_device:     "Microphone (Realtek High Definition Audio)"
 loopback_device: ""
 mic_device: ""
