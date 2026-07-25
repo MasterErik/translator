@@ -14,7 +14,7 @@ func TestLLMProviderInterface(t *testing.T) {
 	var _ translator.LLMProvider = nil //nolint:staticcheck // intentional compile-time check
 }
 
-// Compile-time check: StreamingTranslator interface exists and embeds LLMProvider.
-func TestStreamingTranslatorInterface(t *testing.T) {
-	var _ translator.StreamingTranslator = nil //nolint:staticcheck // intentional compile-time check
+// Compile-time check: StreamingAnswersProvider interface exists and embeds LLMProvider.
+func TestStreamingAnswersProviderInterface(t *testing.T) {
+	var _ translator.StreamingAnswersProvider = nil //nolint:staticcheck // intentional compile-time check
 }

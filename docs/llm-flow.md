@@ -1,48 +1,44 @@
-# Потоковая схема LLM-переводчика и генерации подсказок
+# Потоковая схема LLM — генерация подсказок
 
-**Провайдер:** GLM-4.7-Flash (Z.AI) / GPT-4o-mini (OpenAI)  
-**Протокол:** OpenAI-compatible Chat Completions API  
-**Библиотека:** `github.com/sashabaranov/go-openai`  
-**Стриминг:** SSE (Server-Sent Events), `stream: true`  
+**Провайдер:** GLM-4.7-Flash (Z.AI) / GPT-4o-mini (OpenAI)
+**Протокол:** OpenAI-compatible Chat Completions API
+**Библиотека:** `github.com/sashabaranov/go-openai`
+**Стриминг:** SSE (Server-Sent Events), `stream: true`
 **Документация Z.AI:** https://docs.z.ai/guides/capabilities/streaming
+
+**Важно (v4):** LLM используется **ТОЛЬКО** для генерации подсказок (`GenerateAnswersStream`). Перевод выполняется Gladia (встроенный, модель `enhanced`). `TranslateStream` удалён.
 
 ## Поток данных
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        LLM TRANSLATION PIPELINE                        │
+│                    LLM ANSWER GENERATION PIPELINE                       │
 │                                                                         │
-│  textStream                                                             │
-│  (final ───▶ runDispatch ───▶ go handleStreamingTranslation(event)     │
-│   event)                           │                                    │
-│                                    ▼                                    │
-│                          ┌─────────────────────┐                       │
-│                          │ UI: [переводится...] │  ← pending (янтарный) │
-│                          └─────────┬───────────┘                       │
-│                                    │                                    │
-│                                    ▼                                    │
-│                          ┌─────────────────────┐                       │
-│                          │ ProcessFinal-       │                       │
-│                          │ TranscriptStream()  │                       │
-│                          │                     │                       │
-│                          │ 1. Добавить в окно  │                       │
-│                          │ 2. Взять историю    │                       │
-│                          │ 3. Вызвать          │                       │
-│                          │   TranslateStream() │                       │
-│                          └─────────┬───────────┘                       │
-│                                    │                                    │
-│                                    ▼                                    │
+│  dispatch                                                               │
+│  (final ───▶ runDispatch ───▶ if IsQuestion(text):                     │
+│   event)                      go p.generateAnswersAsync(text)           │
+│                                          │                               │
+│                                          ▼                               │
+│                              ┌──────────────────────┐                   │
+│                              │ generateAnswersAsync │                   │
+│                              │                      │                   │
+│                              │ ansCtx (10s timeout) │                   │
+│                              │ engine.Generate-     │                   │
+│                              │   AnswersStream()    │                   │
+│                              └─────────┬────────────┘                   │
+│                                        │                                 │
+│                                        ▼                                 │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                     TranslateStream() — ПОТОКОВЫЙ                │   │
+│  │               GenerateAnswersStream() — ПОТОКОВЫЙ               │   │
 │  │                                                                   │   │
 │  │  ┌──────────────────┐    ┌──────────────────┐                    │   │
 │  │  │ ChatCompletion   │    │ SSE Stream       │                    │   │
 │  │  │ Request          │───▶│ (CreateChat-     │                    │   │
 │  │  │                  │    │  CompletionStream)│                   │   │
 │  │  │ Stream: true     │    │                  │                    │   │
-│  │  │ Temp: 0.1        │    │ goroutine:       │                    │   │
-│  │  │ System: перевод  │    │  for {           │                    │   │
-│  │  │ User: текст+ист. │    │   recv() →       │                    │   │
+│  │  │ Temp: 0.3        │    │ goroutine:       │                    │   │
+│  │  │ System: подсказки│    │  for {           │                    │   │
+│  │  │ User: вопрос     │    │   recv() →       │                    │   │
 │  │  └──────────────────┘    │   tokenCh <- tok │                    │   │
 │  │                          │  }               │                    │   │
 │  │                          │  close(tokenCh)  │                    │   │
@@ -53,65 +49,44 @@
 │                                      │                                  │
 │                                      ▼                                  │
 │                          ┌─────────────────────┐                       │
-│                          │ ИНКРЕМЕНТАЛЬНЫЙ UI  │                       │
+│                          │ Сборка полного текста│                       │
 │                          │                     │                       │
 │                          │ for token := range  │                       │
 │                          │   tokenCh {         │                       │
 │                          │   fullText += token │                       │
-│                          │   UI.AddMessage(    │                       │
-│                          │     streaming,      │  ← зелёный фон        │
-│                          │     fullText.String │                       │
-│                          │   )                 │                       │
 │                          │ }                   │                       │
 │                          └─────────┬───────────┘                       │
 │                                    │                                    │
 │                                    ▼                                    │
 │                          ┌─────────────────────┐                       │
-│                          │ UI: done (тёмный)   │                       │
+│                          │ parseAnswerHints()  │                       │
+│                          │                     │                       │
+│                          │ Разбор сырого текста│                       │
+│                          │ на 2-3 подсказки    │                       │
+│                          │ Формат: "- EN: ...  │                       │
+│                          │   RU: ..."          │                       │
 │                          └─────────┬───────────┘                       │
 │                                    │                                    │
 │                                    ▼                                    │
 │                          ┌─────────────────────┐                       │
-│                          │ IsQuestion(text) ?  │                       │
-│                          └─────────┬───────────┘                       │
-│                                    │                                    │
-│                         ┌──────────┴──────────┐                        │
-│                         │ YES                 │ NO                     │
-│                         ▼                     ▼                        │
-│              ┌──────────────────┐    ┌──────────────┐                 │
-│              │ GenerateAnswers  │    │ Конец        │                 │
-│              │ (БЛОКИРУЮЩИЙ ⚠)  │    └──────────────┘                 │
-│              │                  │                                      │
-│              │ System: подсказки│                                      │
-│              │ User: вопрос + CV│                                      │
-│              │ Temp: 0.3        │                                      │
-│              │ Stream: false    │  ← НЕ потоковый!                     │
-│              │                  │                                      │
-│              │ → ждём полный    │                                      │
-│              │   ответ          │                                      │
-│              │ → парсим 2-3     │                                      │
-│              │   подсказки      │                                      │
-│              └────────┬─────────┘                                      │
-│                       ▼                                                │
-│              ┌──────────────────┐                                      │
-│              │ UI: Answer-      │                                      │
-│              │ Candidates       │                                      │
-│              │ (нижняя зона)    │                                      │
-│              └──────────────────┘                                      │
+│                          │ UI: Answer-         │                       │
+│                          │ Candidates          │                       │
+│                          │ (нижняя зона)       │                       │
+│                          └─────────────────────┘                       │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Статус потоковости
 
 | Компонент | Потоковый? | Метод |
-|-----------|-----------|-------|
-| **STT Deepgram** | ✅ Да | WebSocket, события real-time |
-| **Перевод LLM** | ✅ Да | `TranslateStream()` → SSE → `<-chan string` |
-| **Подсказки LLM** | ✅ Да | `GenerateAnswersStream()` → SSE → `<-chan string` (асинхронно в `go func()`) |
+|---|---|---|
+| **STT Gladia** | ✅ Да | WebSocket, события real-time |
+| **Перевод** | ✅ Да | Gladia (встроенный, модель `enhanced`) |
+| **Подсказки LLM** | ✅ Да | `GenerateAnswersStream()` → SSE → `<-chan string` |
 
 ## Как определяется вопрос
 
-**Функция:** `translator.IsQuestion(text string) bool` (`engine.go:210`)
+**Функция:** `translator.IsQuestion(text string) bool` (`engine.go:119`)
 
 Два эвристических правила:
 
@@ -125,7 +100,7 @@
    share, walk me, talk about, give me
    ```
 
-Срабатывает **после** завершения стриминг-перевода (pipeline.go:496).
+Срабатывает в `runDispatch` при получении финального транскрипта (pipeline.go:507).
 
 ## Что происходит при вопросе
 
@@ -133,11 +108,11 @@
 IsQuestion == true
        │
        ▼
-go p.generateAnswersAsync(event, translation)   // АСИНХРОННО, не блокирует перевод
+go p.generateAnswersAsync(question)         // АСИНХРОННО, не блокирует dispatch
        │
        ▼
-ansCtx, _ := context.WithTimeout(context.Background(), AnswerTimeout)  // 10s
-tokenCh, err := engine.GenerateAnswersStream(ansCtx, event.Text)       // SSE поток
+ansCtx, ansCancel := context.WithTimeout(context.Background(), AnswerTimeout)  // 10s
+tokenCh, err := engine.GenerateAnswersStream(ansCtx, question)                   // SSE поток
        │
        ▼
 for token := range tokenCh { fullText += token }   // собираем токены
@@ -148,53 +123,28 @@ answers := parseAnswerHints(fullText.String())    // парсим 2-3 подск
        ├─ len(answers) == 0  → выход
        │
        └─ len(answers) > 0 → UI.AddMessage(AnswerCandidates)
-                              sessLog.LogTranslation(..., answers)
+                              slog.Info("подсказки сгенерированы", ...)
 ```
 
 ## Таймауты
 
 | Операция | Таймаут | Контекст |
-|----------|---------|----------|
-| Стриминг-перевод | `StreamTimeout` (15s) | `context.WithTimeout(context.Background(), ...)` |
+|---|---|---|
 | Генерация подсказок | `AnswerTimeout` (10s) | `context.WithTimeout(context.Background(), ...)` |
 
-Оба используют `context.Background()` — не привязаны к lifecycle основного контекста (не обрываются при Ctrl+C до истечения таймаута).
-
-## Скользящее окно истории
-
-`TranslationEngine` держит `maxWindow` (default 5) последних фраз.  
-История = все фразы кроме последней (текущей).  
-При переводе история передаётся в промпт для контекста:
-
-```
-[History]
-- предыдущая фраза 1
-- предыдущая фраза 2
-...
-
-[Translate]
-текущая фраза
-```
+Используется `context.Background()` — не привязан к lifecycle основного контекста (не обрывается при Ctrl+C до истечения таймаута).
 
 ## Соответствие спецификации Z.AI SSE
 
-Модель GLM-4.7-Flash (и все GLM 4.5+) нативно поддерживает инкрементальную
-генерацию через `stream: true`. Модель сама отдаёт правильный перевод токен
-за токеном — никакой пост-обработки не требуется.
+Модель GLM-4.7-Flash (и все GLM 4.5+) нативно поддерживает инкрементальную генерацию через `stream: true`.
 
 | Поле SSE | Наш код | Назначение |
-|----------|---------|------------|
-| `choices[0].delta.content` | `stream.Recv()` → `delta.Content` | Инкрементальный токен перевода/подсказки |
+|---|---|---|
+| `choices[0].delta.content` | `stream.Recv()` → `delta.Content` | Инкрементальный токен подсказки |
 | `choices[0].finish_reason` | `recvErr.Error() == "EOF"` | Конец стрима |
 | `usage` | не используется | Статистика токенов (только в последнем чанке) |
 
 **Реализация в `openai.go`:**
 
-- `TranslateStream` (строка 223) — `CreateChatCompletionStream` + SSE-цикл → `<-chan string`
-- `GenerateAnswersStream` (строка 293) — аналогично для подсказок
-
-Обе функции используют `go-openai` который автоматически парсит SSE-фреймы.
-Мы не работаем с raw SSE — библиотека скрывает транспортный уровень.
-`thinkingTransport` (строка 34) инжектит `"thinking":{"type":"disabled"}`
-только для Z.AI — это единственная Z.AI-специфичная настройка.
-
+- `GenerateAnswersStream` (строка 293) — `CreateChatCompletionStream` + SSE-цикл → `<-chan string`
+- `thinkingTransport` (строка 34) инжектит `"thinking":{"type":"disabled"}` только для Z.AI — это единственная Z.AI-специфичная настройка.

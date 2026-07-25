@@ -9,8 +9,8 @@ import (
 func TestLoadConfigDefaults(t *testing.T) {
 	// Clear relevant env vars to isolate defaults.
 	for _, v := range []string{
-		"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
-		"DEEPGRAM_MODEL", "TARGET_LANGUAGE", "LOG_DIR",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
 	} {
 		os.Unsetenv(v)
@@ -21,8 +21,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.OpenAIModel != "gpt-4o-mini" {
 		t.Errorf("OpenAIModel default: got %q, want %q", cfg.OpenAIModel, "gpt-4o-mini")
 	}
-	if cfg.DeepgramModel != "flux-general-en" {
-		t.Errorf("DeepgramModel default: got %q, want %q", cfg.DeepgramModel, "flux-general-en")
+	if cfg.TargetLang != "ru" {
+		t.Errorf("TargetLang default: got %q, want %q", cfg.TargetLang, "ru")
 	}
 	if cfg.TargetLanguage != "ru" {
 		t.Errorf("TargetLanguage default: got %q, want %q", cfg.TargetLanguage, "ru")
@@ -44,8 +44,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestLoadConfigEnvOverride(t *testing.T) {
 	// Clear relevant env vars first.
 	for _, v := range []string{
-		"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
-		"DEEPGRAM_MODEL", "TARGET_LANGUAGE", "LOG_DIR",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
 	} {
 		os.Unsetenv(v)
@@ -71,16 +71,16 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 		t.Errorf("CVContext env override: got %q, want %q", cfg.CVContext, "Senior Go Developer")
 	}
 	// Defaults should still apply for unset fields.
-	if cfg.DeepgramModel != "flux-general-en" {
-		t.Errorf("DeepgramModel should be default: got %q", cfg.DeepgramModel)
+	if cfg.TargetLang != "ru" {
+		t.Errorf("TargetLang should be default: got %q", cfg.TargetLang)
 	}
 }
 
 func TestLoadConfigFromYAML(t *testing.T) {
 	// Clear relevant env vars.
 	for _, v := range []string{
-		"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
-		"DEEPGRAM_MODEL", "TARGET_LANGUAGE", "LOG_DIR",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
 	} {
 		os.Unsetenv(v)
@@ -116,15 +116,15 @@ cv_context: "Backend Engineer"
 		t.Errorf("CVContext from YAML: got %q, want %q", cfg.CVContext, "Backend Engineer")
 	}
 	// Defaults should still apply for unspecified fields.
-	if cfg.DeepgramModel != "flux-general-en" {
-		t.Errorf("DeepgramModel should be default: got %q", cfg.DeepgramModel)
+	if cfg.TargetLang != "ru" {
+		t.Errorf("TargetLang should be default: got %q", cfg.TargetLang)
 	}
 }
 
 func TestLoadConfigFromYAMLEnvOverride(t *testing.T) {
 	for _, v := range []string{
-		"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
-		"DEEPGRAM_MODEL", "TARGET_LANGUAGE", "LOG_DIR",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
 	} {
 		os.Unsetenv(v)
@@ -272,7 +272,7 @@ func TestLLMBaseURLEnv(t *testing.T) {
 
 // TestLLMAPIKeyFallback проверяет fallback LLM_API_KEY → OPENAI_API_KEY.
 func TestLLMAPIKeyFallback(t *testing.T) {
-	os.Setenv("OPENAI_API_KEY", "sk-openai-key")
+	os.Setenv("OPENAI_API_KEY", "«redacted:sk-…»")
 	os.Unsetenv("LLM_API_KEY")
 	t.Cleanup(func() {
 		os.Unsetenv("OPENAI_API_KEY")
@@ -280,14 +280,14 @@ func TestLLMAPIKeyFallback(t *testing.T) {
 
 	cfg := LoadConfig()
 
-	if cfg.LLMAPIKey != "sk-openai-key" {
-		t.Errorf("LLMAPIKey fallback: got %q, want %q", cfg.LLMAPIKey, "sk-openai-key")
+	if cfg.LLMAPIKey != "«redacted:sk-…»" {
+		t.Errorf("LLMAPIKey fallback: got %q, want %q", cfg.LLMAPIKey, "«redacted:sk-…»")
 	}
 }
 
 // TestLLMAPIKeyOverride проверяет, что LLM_API_KEY имеет приоритет над OPENAI_API_KEY.
 func TestLLMAPIKeyOverride(t *testing.T) {
-	os.Setenv("OPENAI_API_KEY", "sk-openai-key")
+	os.Setenv("OPENAI_API_KEY", "«redacted:sk-…»")
 	os.Setenv("LLM_API_KEY", "sk-glm-key")
 	t.Cleanup(func() {
 		os.Unsetenv("OPENAI_API_KEY")
@@ -299,8 +299,8 @@ func TestLLMAPIKeyOverride(t *testing.T) {
 	if cfg.LLMAPIKey != "sk-glm-key" {
 		t.Errorf("LLMAPIKey override: got %q, want %q", cfg.LLMAPIKey, "sk-glm-key")
 	}
-	// OpenAIAPIKey всё ещё должно быть sk-openai-key.
-	if cfg.OpenAIAPIKey != "sk-openai-key" {
+	// OpenAIAPIKey всё ещё должно быть «redacted:sk-…».
+	if cfg.OpenAIAPIKey != "«redacted:sk-…»" {
 		t.Errorf("OpenAIAPIKey should be unchanged: got %q", cfg.OpenAIAPIKey)
 	}
 }
@@ -330,5 +330,63 @@ openai_model: "glm-4-flash"
 	}
 	if cfg.OpenAIModel != "glm-4-flash" {
 		t.Errorf("OpenAIModel from YAML: got %q, want %q", cfg.OpenAIModel, "glm-4-flash")
+	}
+}
+
+// TestTargetLangDefault проверяет значение по умолчанию для TargetLang.
+func TestTargetLangDefault(t *testing.T) {
+	os.Unsetenv("TARGET_LANG")
+
+	cfg := LoadConfig()
+
+	if cfg.TargetLang != "ru" {
+		t.Errorf("TargetLang default: got %q, want %q", cfg.TargetLang, "ru")
+	}
+}
+
+// TestTargetLangEnv проверяет переопределение TargetLang через env.
+func TestTargetLangEnv(t *testing.T) {
+	os.Setenv("TARGET_LANG", "en")
+	t.Cleanup(func() { os.Unsetenv("TARGET_LANG") })
+
+	cfg := LoadConfig()
+
+	if cfg.TargetLang != "en" {
+		t.Errorf("TargetLang env override: got %q, want %q", cfg.TargetLang, "en")
+	}
+}
+
+// TestTargetLangFromYAML проверяет чтение target_lang из YAML.
+func TestTargetLangFromYAML(t *testing.T) {
+	os.Unsetenv("TARGET_LANG")
+
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	content := `
+target_lang: "fr"
+`
+	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfigFromYAML(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.TargetLang != "fr" {
+		t.Errorf("TargetLang from YAML: got %q, want %q", cfg.TargetLang, "fr")
+	}
+}
+
+// TestGladiaAPIKeyEnv проверяет чтение GLADIA_API_KEY из env.
+func TestGladiaAPIKeyEnv(t *testing.T) {
+	os.Setenv("GLADIA_API_KEY", "gladia-test-key")
+	t.Cleanup(func() { os.Unsetenv("GLADIA_API_KEY") })
+
+	cfg := LoadConfig()
+
+	if cfg.GladiaAPIKey != "gladia-test-key" {
+		t.Errorf("GladiaAPIKey: got %q, want %q", cfg.GladiaAPIKey, "gladia-test-key")
 	}
 }

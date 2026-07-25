@@ -84,5 +84,4 @@ Write-Host "OK"
 
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    target = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", OUTPUT)
-    generate_speech_wav(target)
+    generate_speech_wav(OUTPUT)

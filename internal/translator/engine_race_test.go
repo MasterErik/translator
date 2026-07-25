@@ -7,19 +7,14 @@ import (
 	"time"
 )
 
-// TestEngine_ConcurrentProcessFinalTranscript validates that multiple
-// goroutines can call ProcessFinalTranscript concurrently without
-// data races on the sliding window or the result.
-func TestEngine_ConcurrentProcessFinalTranscript(t *testing.T) {
-	mock := &mockLLMProvider{
-		translateFn: func(ctx context.Context, text string, history []string) (string, error) {
-			return "translated: " + text, nil
-		},
-	}
-	engine := NewEngine(mock, 10)
+// TestEngine_ConcurrentProcessQuestion validates that multiple
+// goroutines can call ProcessQuestion concurrently without
+// data races on the result.
+func TestEngine_ConcurrentProcessQuestion(t *testing.T) {
+	mock := &mockLLMProvider{}
+	engine := NewEngine(mock)
 
 	var wg sync.WaitGroup
-	numGoroutines := 10
 	texts := []string{
 		"What is Kubernetes?",
 		"How does Docker work?",
@@ -33,63 +28,15 @@ func TestEngine_ConcurrentProcessFinalTranscript(t *testing.T) {
 		"We use PostgreSQL and Redis.",
 	}
 
-	for i := 0; i < numGoroutines; i++ {
+	for _, text := range texts {
 		wg.Add(1)
-		go func(idx int) {
+		go func(txt string) {
 			defer wg.Done()
-			_, err := engine.ProcessFinalTranscript(context.Background(), texts[idx])
+			_, err := engine.ProcessQuestion(txt)
 			if err != nil {
-				t.Errorf("ProcessFinalTranscript() error in goroutine %d: %v", idx, err)
+				t.Errorf("ProcessQuestion() error: %v", err)
 			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	// Verify window integrity after concurrent access.
-	engine.mu.RLock()
-	windowLen := len(engine.window)
-	engine.mu.RUnlock()
-
-	if windowLen != 10 {
-		t.Errorf("Window length = %d, want 10 after %d concurrent adds", windowLen, numGoroutines)
-	}
-}
-
-// TestEngine_ConcurrentWindowAccess validates that reads and writes
-// to the sliding window do not race.
-func TestEngine_ConcurrentWindowAccess(t *testing.T) {
-	mock := &mockLLMProvider{}
-	engine := NewEngine(mock, 20)
-
-	var wg sync.WaitGroup
-	ctx := context.Background()
-
-	// Writers: add items to the window.
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				_, err := engine.ProcessFinalTranscript(ctx, "concurrent text")
-				if err != nil {
-					t.Errorf("ProcessFinalTranscript() error: %v", err)
-				}
-			}
-		}()
-	}
-
-	// Readers: read the window.
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
-				engine.mu.RLock()
-				_ = len(engine.window)
-				engine.mu.RUnlock()
-			}
-		}()
+		}(text)
 	}
 
 	wg.Wait()
@@ -109,7 +56,7 @@ func TestEngine_ConcurrentQuestionAndAnswers(t *testing.T) {
 			return []string{"hint 1", "hint 2"}, nil
 		},
 	}
-	engine := NewEngine(mock, 15)
+	engine := NewEngine(mock)
 
 	var wg sync.WaitGroup
 	questions := []string{
@@ -124,9 +71,9 @@ func TestEngine_ConcurrentQuestionAndAnswers(t *testing.T) {
 		wg.Add(1)
 		go func(question string) {
 			defer wg.Done()
-			result, err := engine.ProcessFinalTranscript(context.Background(), question)
+			result, err := engine.ProcessQuestion(question)
 			if err != nil {
-				t.Errorf("ProcessFinalTranscript() error: %v", err)
+				t.Errorf("ProcessQuestion() error: %v", err)
 				return
 			}
 			if !result.IsQuestion {
@@ -138,7 +85,7 @@ func TestEngine_ConcurrentQuestionAndAnswers(t *testing.T) {
 	wg.Wait()
 
 	// Асинхронная генерация подсказок запускается в горутинах внутри
-	// ProcessFinalTranscript. Ждём до 1 секунды пока хотя бы один вызов
+	// ProcessQuestion. Ждём до 1 секунды пока хотя бы один вызов
 	// GenerateAnswers зарегистрируется.
 	for i := 0; i < 20; i++ {
 		genMu.Lock()

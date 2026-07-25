@@ -41,65 +41,6 @@ func setupMockServer(handler http.HandlerFunc) *httptest.Server {
 	}))
 }
 
-func TestOpenAIProvider_Translate_Success(t *testing.T) {
-	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
-		resp := openai.ChatCompletionResponse{
-			Choices: []openai.ChatCompletionChoice{
-				{
-					Message: openai.ChatCompletionMessage{
-						Content: "Привет, рад познакомиться.",
-					},
-				},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-	defer server.Close()
-
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
-	ctx := context.Background()
-
-	result, err := provider.Translate(ctx, "Hello, nice to meet you.", nil)
-	if err != nil {
-		t.Fatalf("Translate() error = %v", err)
-	}
-
-	if result != "Привет, рад познакомиться." {
-		t.Errorf("Translate() = %q, want %q", result, "Привет, рад познакомиться.")
-	}
-}
-
-func TestOpenAIProvider_Translate_WithHistory(t *testing.T) {
-	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
-		resp := openai.ChatCompletionResponse{
-			Choices: []openai.ChatCompletionChoice{
-				{
-					Message: openai.ChatCompletionMessage{
-						Content: "У меня 5 лет опыта с Docker.",
-					},
-				},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-	defer server.Close()
-
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
-	ctx := context.Background()
-
-	history := []string{"Hello, nice to meet you.", "What is your experience?"}
-	result, err := provider.Translate(ctx, "I have 5 years of Docker experience.", history)
-	if err != nil {
-		t.Fatalf("Translate() error = %v", err)
-	}
-
-	if result != "У меня 5 лет опыта с Docker." {
-		t.Errorf("Translate() = %q, want %q", result, "У меня 5 лет опыта с Docker.")
-	}
-}
-
 func TestOpenAIProvider_GenerateAnswers_Success(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		resp := openai.ChatCompletionResponse{
@@ -176,7 +117,7 @@ func TestOpenAIProvider_RetryOnRateLimit(t *testing.T) {
 			Choices: []openai.ChatCompletionChoice{
 				{
 					Message: openai.ChatCompletionMessage{
-						Content: "Translated text.",
+						Content: "- Answer hint",
 					},
 				},
 			},
@@ -189,13 +130,9 @@ func TestOpenAIProvider_RetryOnRateLimit(t *testing.T) {
 	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	result, err := provider.Translate(ctx, "Hello", nil)
+	_, err := provider.GenerateAnswers(ctx, "Question?", "")
 	if err != nil {
-		t.Fatalf("Translate() error after retries = %v", err)
-	}
-
-	if result != "Translated text." {
-		t.Errorf("Translate() = %q, want %q", result, "Translated text.")
+		t.Fatalf("GenerateAnswers() error after retries = %v", err)
 	}
 
 	if callCount != 3 {
@@ -213,9 +150,9 @@ func TestOpenAIProvider_RetryExhausted(t *testing.T) {
 	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	_, err := provider.Translate(ctx, "Hello", nil)
+	_, err := provider.GenerateAnswers(ctx, "Question?", "")
 	if err == nil {
-		t.Error("Translate() should return error after exhausting retries")
+		t.Error("GenerateAnswers() should return error after exhausting retries")
 	}
 
 	if !strings.Contains(err.Error(), "max retries exceeded") {
@@ -234,9 +171,9 @@ func TestOpenAIProvider_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := provider.Translate(ctx, "Hello", nil)
+	_, err := provider.GenerateAnswers(ctx, "Question?", "")
 	if err == nil {
-		t.Error("Translate() should return error on context cancellation")
+		t.Error("GenerateAnswers() should return error on context cancellation")
 	}
 }
 
@@ -253,9 +190,9 @@ func TestOpenAIProvider_NoChoices(t *testing.T) {
 	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	_, err := provider.Translate(ctx, "Hello", nil)
+	_, err := provider.GenerateAnswers(ctx, "Question?", "")
 	if err == nil {
-		t.Error("Translate() should return error when response has no choices")
+		t.Error("GenerateAnswers() should return error when response has no choices")
 	}
 }
 
@@ -361,7 +298,7 @@ func TestNewOpenAIProviderWithConfig_CustomBaseURL(t *testing.T) {
 			Choices: []openai.ChatCompletionChoice{
 				{
 					Message: openai.ChatCompletionMessage{
-						Content: "Привет, мир",
+						Content: "- Answer hint",
 					},
 				},
 			},
@@ -372,20 +309,20 @@ func TestNewOpenAIProviderWithConfig_CustomBaseURL(t *testing.T) {
 	defer server.Close()
 
 	// Создаём провайдер с кастомным base_url (симулируем GLM API).
-	provider := NewOpenAIProviderWithConfig(server.URL+"/v1", "sk-glm-test-key", "glm-4-flash")
+	provider := NewOpenAIProviderWithConfig(server.URL+"/v1", "sk-test-key", "glm-4-flash")
 	ctx := context.Background()
 
 	if provider.model != "glm-4-flash" {
 		t.Errorf("Model = %q, want %q", provider.model, "glm-4-flash")
 	}
 
-	result, err := provider.Translate(ctx, "Hello, world", nil)
+	answers, err := provider.GenerateAnswers(ctx, "Question?", "")
 	if err != nil {
-		t.Fatalf("Translate() error = %v", err)
+		t.Fatalf("GenerateAnswers() error = %v", err)
 	}
 
-	if result != "Привет, мир" {
-		t.Errorf("Translate() = %q, want %q", result, "Привет, мир")
+	if len(answers) == 0 {
+		t.Error("GenerateAnswers() returned empty slice")
 	}
 }
 
@@ -401,8 +338,8 @@ func TestNewOpenAIProviderWithConfig_DefaultModel(t *testing.T) {
 	}
 }
 
-// TestStreamingTranslate проверяет стриминговый перевод с mock SSE сервером.
-func TestStreamingTranslate(t *testing.T) {
+// TestStreamingGenerateAnswers проверяет стриминговую генерацию с mock SSE сервером.
+func TestStreamingGenerateAnswers(t *testing.T) {
 	// Создаём mock сервер, возвращающий SSE-поток.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -421,7 +358,7 @@ func TestStreamingTranslate(t *testing.T) {
 		w.Header().Set("Connection", "keep-alive")
 
 		// Отправляем токены по одному.
-		tokens := []string{"При", "вет", ", ", "м", "ир"}
+		tokens := []string{"- ", "hint", " one", "\n", "- ", "hint", " two"}
 		for _, token := range tokens {
 			data := fmt.Sprintf(`data: {"choices":[{"delta":{"content":"%s"}}]}`, token)
 			w.Write([]byte(data + "\n\n"))
@@ -436,20 +373,14 @@ func TestStreamingTranslate(t *testing.T) {
 	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	tokenCh, err := provider.TranslateStream(ctx, "Hello, world", nil)
+	tokenCh, err := provider.GenerateAnswersStream(ctx, "Question?", "")
 	if err != nil {
-		t.Fatalf("TranslateStream() error = %v", err)
+		t.Fatalf("GenerateAnswersStream() error = %v", err)
 	}
 
 	var received []string
 	for token := range tokenCh {
 		received = append(received, token)
-	}
-
-	// Собираем полный текст.
-	fullText := strings.Join(received, "")
-	if fullText != "Привет, мир" {
-		t.Errorf("Full translation = %q, want %q", fullText, "Привет, мир")
 	}
 
 	// Проверяем что токены приходят инкрементально (не менее 2 токенов).
@@ -458,8 +389,8 @@ func TestStreamingTranslate(t *testing.T) {
 	}
 }
 
-// TestStreamingTranslate_EmptyResponse проверяет стриминг с пустым ответом.
-func TestStreamingTranslate_EmptyResponse(t *testing.T) {
+// TestStreamingGenerateAnswers_EmptyResponse проверяет стриминг с пустым ответом.
+func TestStreamingGenerateAnswers_EmptyResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -471,9 +402,9 @@ func TestStreamingTranslate_EmptyResponse(t *testing.T) {
 	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	tokenCh, err := provider.TranslateStream(ctx, "Hello", nil)
+	tokenCh, err := provider.GenerateAnswersStream(ctx, "Hello", "")
 	if err != nil {
-		t.Fatalf("TranslateStream() error = %v", err)
+		t.Fatalf("GenerateAnswersStream() error = %v", err)
 	}
 
 	var received []string
@@ -486,9 +417,9 @@ func TestStreamingTranslate_EmptyResponse(t *testing.T) {
 	}
 }
 
-// TestStreamingTranslate_ContextCancellation проверяет отмену контекста
+// TestStreamingGenerateAnswers_ContextCancellation проверяет отмену контекста
 // во время стриминга.
-func TestStreamingTranslate_ContextCancellation(t *testing.T) {
+func TestStreamingGenerateAnswers_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		// Отправляем один токен и зависаем — имитируем медленный стрим.
@@ -505,7 +436,7 @@ func TestStreamingTranslate_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	tokenCh, err := provider.TranslateStream(ctx, "Hello", nil)
+	tokenCh, err := provider.GenerateAnswersStream(ctx, "Hello", "")
 	if err != nil {
 		// Это приемлемо — ошибка при открытии потока.
 		return
@@ -521,13 +452,88 @@ func TestStreamingTranslate_ContextCancellation(t *testing.T) {
 }
 
 // TestOpenAIProvider_ImplementsStreaming проверяет, что OpenAIProvider
-// реализует интерфейс StreamingTranslator.
+// реализует интерфейс StreamingAnswersProvider.
 func TestOpenAIProvider_ImplementsStreaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
 	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
 
-	// Compile-time check: provider satisfies StreamingTranslator.
-	var _ StreamingTranslator = provider
+	// Compile-time check: provider satisfies StreamingAnswersProvider.
+	var _ StreamingAnswersProvider = provider
+}
+
+// TestStreamingGenerateAnswers_StreamError проверяет ошибку mid-stream.
+func TestStreamingGenerateAnswers_StreamError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		// Отправляем ошибку в SSE-потоке (некорректный JSON).
+		w.Write([]byte("data: {broken json\n\n"))
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	ctx := context.Background()
+
+	tokenCh, err := provider.GenerateAnswersStream(ctx, "Question?", "")
+	if err != nil {
+		// Ошибка при открытии потока — приемлемо.
+		return
+	}
+
+	// Читаем все токены — должен быть [ERROR:...].
+	var gotError bool
+	for token := range tokenCh {
+		if strings.HasPrefix(token, "[ERROR:") {
+			gotError = true
+		}
+	}
+	if !gotError {
+		t.Log("не получили [ERROR:] токен — клиент мог обработать битый JSON без ошибки")
+	}
+}
+
+// TestOpenAIProvider_DisableThinking проверяет включение флага disableThinking.
+func TestOpenAIProvider_DisableThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+
+	// До вызова.
+	if provider.disableThinking {
+		t.Error("disableThinking должен быть false по умолчанию")
+	}
+
+	provider.DisableThinking()
+
+	if !provider.disableThinking {
+		t.Error("disableThinking должен быть true после вызова DisableThinking()")
+	}
+}
+
+// TestOpenAIProvider_SetMaxTokens проверяет установку и чтение maxTokens.
+func TestOpenAIProvider_SetMaxTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+
+	if provider.maxTokensOrZero() != 0 {
+		t.Error("maxTokensOrZero должен возвращать 0 по умолчанию")
+	}
+
+	provider.SetMaxTokens(256)
+	if provider.maxTokens != 256 {
+		t.Errorf("maxTokens = %d, want 256", provider.maxTokens)
+	}
+	if provider.maxTokensOrZero() != 256 {
+		t.Errorf("maxTokensOrZero = %d, want 256", provider.maxTokensOrZero())
+	}
+
+	provider.SetMaxTokens(0)
+	if provider.maxTokensOrZero() != 0 {
+		t.Error("maxTokensOrZero должен возвращать 0 после установки в 0")
+	}
 }

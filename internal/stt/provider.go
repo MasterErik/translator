@@ -13,8 +13,7 @@ import (
 // transcriptions for both interim and final results.
 //
 // Implementations:
-//   - DeepgramProvider (current): WebSocket to Deepgram API.
-//   - SherpaOnnxProvider (future): Local ONNX engine.
+//   - GladiaProvider: Gladia Live WebSocket API (Solaria-1 + Translation).
 type STTProvider interface {
 	// Start begins audio processing. It establishes any connections
 	// (e.g. WebSocket) and starts background workers.

@@ -574,3 +574,156 @@ func TestAudioGracefulClose(t *testing.T) {
 
 	t.Logf("Graceful close: %s (%d bytes)", filepath.Base(audioPath), info.Size())
 }
+
+// =========================================================================
+// Тесты LogDebug
+// =========================================================================
+
+func TestLogDebug_PersistsCSV(t *testing.T) {
+	l, dir := newTestLoggerAudio(t)
+
+	if err := l.LogDebug("test debug message"); err != nil {
+		t.Fatalf("LogDebug: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+
+	var csvPath string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "session_") && strings.HasSuffix(e.Name(), ".csv") {
+			csvPath = filepath.Join(dir, e.Name())
+			break
+		}
+	}
+	if csvPath == "" {
+		t.Fatal("no session CSV file found")
+	}
+
+	f, err := os.Open(csvPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	rows, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+
+	if len(rows) < 2 {
+		t.Fatalf("expected header + 1 data row, got %d rows", len(rows))
+	}
+
+	row := rows[1]
+	// DEBUG event type should be in column 2 (event).
+	if row[2] != "DEBUG" {
+		t.Errorf("event = %q, want DEBUG", row[2])
+	}
+	if row[3] != "test debug message" {
+		t.Errorf("text = %q, want %q", row[3], "test debug message")
+	}
+}
+
+// =========================================================================
+// Тесты SaveAudioChunk при saveAudio=false
+// =========================================================================
+
+func TestSaveAudioChunk_SaveAudioDisabled(t *testing.T) {
+	l, dir := newTempLogger(t) // saveAudio=false
+
+	// Запись аудио должна вернуть nil (без ошибки) и не создать файл.
+	pcm := generatePCM(1280)
+	for i := 0; i < 5; i++ {
+		if err := l.SaveAudioChunk("speaker", pcm); err != nil {
+			t.Fatalf("SaveAudioChunk (saveAudio=false): %v", err)
+		}
+	}
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Проверяем что аудио-файл не создался.
+	audioPath := findAudioFile(t, dir, "session_")
+	if audioPath != "" {
+		t.Errorf("audio file should NOT exist when saveAudio=false, found: %s", audioPath)
+	}
+}
+
+// =========================================================================
+// Тесты LogTranslation с nil answers
+// =========================================================================
+
+func TestLogTranslation_NilAnswers(t *testing.T) {
+	l, dir := newTestLoggerAudio(t)
+
+	event := common.STTEvent{
+		Text:      "hello",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "speaker",
+		Timestamp: time.Now(),
+	}
+
+	// LogTranslation с nil answers — не должно паниковать.
+	if err := l.LogTranslation(event, "привет", nil); err != nil {
+		t.Fatalf("LogTranslation with nil answers: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var csvPath string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "session_") && strings.HasSuffix(e.Name(), ".csv") {
+			csvPath = filepath.Join(dir, e.Name())
+			break
+		}
+	}
+	f, _ := os.Open(csvPath)
+	defer f.Close()
+	r := csv.NewReader(f)
+	rows, _ := r.ReadAll()
+	if len(rows) >= 2 {
+		row := rows[1]
+		if row[5] != "" {
+			t.Errorf("answers column should be empty for nil answers, got %q", row[5])
+		}
+	}
+}
+
+// =========================================================================
+// Тесты VAD: проверка порога речи/тишины
+// =========================================================================
+
+func TestSaveAudioChunk_SilenceNotSaved(t *testing.T) {
+	l, dir := newTestLoggerAudio(t)
+
+	// Шлём тихий PCM (все нули = тишина).
+	silentPCM := make([]byte, 2560) // 80ms at 16kHz mono = 0 amplitude
+	for i := 0; i < 20; i++ {
+		if err := l.SaveAudioChunk("speaker", silentPCM); err != nil {
+			t.Fatalf("SaveAudioChunk (silent): %v", err)
+		}
+	}
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Аудио-файл НЕ должен создаться, потому что VAD не пропустил тишину.
+	audioPath := findAudioFile(t, dir, "session_")
+	if audioPath != "" {
+		t.Errorf("audio file should NOT exist for silent PCM (VAD should reject), found: %s", audioPath)
+	}
+}

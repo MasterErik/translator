@@ -53,8 +53,7 @@ type Pipeline struct {
 	sessLog  logger.SessionLogger
 
 	textStream   chan common.STTEvent
-	streamDone   chan struct{}
-	dispatchDone chan struct{} // сигнал завершения runDispatch (буфер 1)
+	dispatchDone chan struct{} // Сигнал завершения runDispatch (буфер 1)
 }
 
 // Config — все настройки пайплайна (без магических чисел).
@@ -65,16 +64,15 @@ type Config struct {
 	LoopbackName  string
 	MicName       string
 
-	// STT
-	DeepgramAPIKey string
-	DeepgramModel  string
+	// STT (Gladia)
+	GladiaAPIKey string
+	TargetLang   string
 
 	// LLM
 	LLMBaseURL string
 	LLMAPIKey  string
 	LLMModel   string
 	MaxTokens  int
-	WindowSize int
 
 	// Overlay
 	OverlayCfg ui.OverlayConfig
@@ -85,8 +83,6 @@ type Config struct {
 
 	// Каналы и таймауты (избавляемся от магических чисел)
 	TextStreamBuffer int           // default: 64
-	StreamDoneBuffer int           // default: 64
-	StreamTimeout    time.Duration // default: 15s
 	AnswerTimeout    time.Duration // default: 10s
 
 	// Debug
@@ -103,18 +99,12 @@ func New(cfg Config) (*Pipeline, error) {
 	if cfg.TextStreamBuffer <= 0 {
 		cfg.TextStreamBuffer = 64
 	}
-	if cfg.StreamDoneBuffer <= 0 {
-		cfg.StreamDoneBuffer = 64
-	}
-	if cfg.StreamTimeout <= 0 {
-		cfg.StreamTimeout = 15 * time.Second
-	}
 	if cfg.AnswerTimeout <= 0 {
 		cfg.AnswerTimeout = 10 * time.Second
 	}
 
-	// STT-провайдер.
-	deepgramProv := stt.NewDeepgramProvider(cfg.DeepgramAPIKey, cfg.DeepgramModel)
+	// STT-провайдер (Gladia).
+	sttProv := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang)
 
 	// LLM-провайдер.
 	llmAPIKey := cfg.LLMAPIKey
@@ -135,13 +125,13 @@ func New(cfg Config) (*Pipeline, error) {
 	llmProv.SetMaxTokens(cfg.MaxTokens)
 
 	// TranslationEngine.
-	engine := translator.NewEngine(llmProv, cfg.WindowSize)
+	engine := translator.NewEngine(llmProv)
 
 	// Overlay.
 	overlay := ui.NewOverlay(cfg.OverlayCfg)
 
 	// Логгер сессии: NopLogger если LogDir пуст.
-	var sessLog logger.SessionLogger = logger.NewNopSessionLogger()
+	sessLog := logger.SessionLogger(logger.NewNopSessionLogger())
 	if cfg.LogDir != "" {
 		var err error
 		sessLog, err = logger.NewFileSessionLogger(cfg.LogDir, cfg.SaveAudio)
@@ -164,12 +154,11 @@ func New(cfg Config) (*Pipeline, error) {
 	p := &Pipeline{
 		cfg:          cfg,
 		capturer:     cfg.Capturer,
-		sttProv:      deepgramProv,
+		sttProv:      sttProv,
 		engine:       engine,
 		overlay:      overlay,
 		sessLog:      sessLog,
 		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
-		streamDone:   make(chan struct{}, cfg.StreamDoneBuffer),
 		dispatchDone: make(chan struct{}, 1),
 	}
 
@@ -314,7 +303,7 @@ func (p *Pipeline) runCapture(ctx context.Context) {
 	// Направляем loopback (собеседник).
 	go func() {
 		defer wg.Done()
-		p.routeAudioChannel(ctx, loopbackCh, audioStream, "speaker")
+		p.routeAudioChannel(ctx, loopbackCh, audioStream)
 	}()
 
 	<-ctx.Done()
@@ -323,7 +312,7 @@ func (p *Pipeline) runCapture(ctx context.Context) {
 }
 
 // routeAudioChannel читает PCM-фрагменты из src и пересылает в dst (STT).
-func (p *Pipeline) routeAudioChannel(ctx context.Context, src <-chan []byte, dst chan<- []byte, channelID string) {
+func (p *Pipeline) routeAudioChannel(ctx context.Context, src <-chan []byte, dst chan<- []byte) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -427,17 +416,18 @@ func (p *Pipeline) routeSTTEvent(ctx context.Context, event common.STTEvent) {
 // runDispatch — центральный dispatch-узел
 // --------------------------------------------------------------------------
 
-// runDispatch — центральный select-узел, координирующий поток STT-событий
-// и стриминг-перевод с асинхронной генерацией подсказок.
+// runDispatch — центральный dispatch-узел, обрабатывающий поток STT-событий.
 //
-// Логика:
-//   - interim-события: сразу в UI (предпросмотр).
-//   - final-события: запускается стриминг-перевод, токены инкрементально в UI.
-//     После завершения стрима — классификация вопроса и генерация подсказок.
+// Новая логика (Gladia):
+//   - transcript is_final=false → UI Interim (серый текст, предпросмотр).
+//   - transcript is_final=true  → UI History (оригинал) + проверка IsQuestion.
+//     Если вопрос — асинхронная генерация подсказок.
+//   - translation (ChannelID="translation") → UI Translation + UI History
+//     (перевод добавляется к последнему оригиналу).
 //
-// При отмене контекста корректно завершает все горутины.
+// Gladia шлёт translation ПОСЛЕ transcript. Связываем через lastOriginal.
 func (p *Pipeline) runDispatch(ctx context.Context) {
-	slog.Info("dispatch-узел запущен (стриминг)")
+	slog.Info("dispatch-узел запущен (Gladia)")
 
 	// Гарантируем сигнал завершения при любом выходе из runDispatch.
 	defer func() {
@@ -446,156 +436,92 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 		}
 	}()
 
-	activeStreams := 0
+	// lastOriginal хранит последний финальный транскрипт для связки с переводом.
+	var lastOriginal common.STTEvent
 
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("dispatch: контекст отменён, ожидание стримов",
-				"active_streams", activeStreams)
-			for activeStreams > 0 {
-				<-p.streamDone
-				activeStreams--
-			}
-			slog.Info("dispatch-узел остановлен")
+			slog.Info("dispatch: контекст отменён, завершение")
 			return
 
 		case event, ok := <-p.textStream:
 			if !ok {
-				slog.Info("textStream закрыт, dispatch завершает работу",
-					"active_streams", activeStreams)
-				for activeStreams > 0 {
-					<-p.streamDone
-					activeStreams--
-				}
+				slog.Info("textStream закрыт, dispatch завершает работу")
 				return
 			}
 
-			if event.Event != common.EventEndOfTurn {
-				// Промежуточный результат: показываем оригинал в верхней зоне.
+			switch {
+			case event.ChannelID == "translation":
+				// Событие перевода от Gladia — показываем в UI Translation (белый текст).
+				p.overlay.AddMessage(ui.UIMessage{
+					Type:      ui.Translation,
+					Text:      event.Text,
+					Timestamp: event.Timestamp,
+					MsgStatus: "done",
+				})
+
+				// Добавляем оригинал + перевод в историю.
+				p.overlay.AddMessage(ui.UIMessage{
+					Type:        ui.History,
+					Text:        lastOriginal.Text,
+					Translation: event.Text,
+					Timestamp:   event.Timestamp,
+				})
+
+				slog.Info("перевод получен",
+					"original", lastOriginal.Text,
+					"translation", event.Text,
+				)
+
+				// Логируем перевод.
+				if p.sessLog != nil {
+					logEvent := lastOriginal
+					logEvent.Timestamp = time.Now()
+					if err := p.sessLog.LogTranslation(logEvent, event.Text, nil); err != nil {
+						slog.Warn("не удалось записать перевод в лог", "error", err)
+					}
+				}
+
+			case event.Event != common.EventEndOfTurn:
+				// Промежуточный результат: показываем серым в верхней зоне.
 				p.overlay.AddMessage(ui.UIMessage{
 					Type:      ui.Interim,
 					Text:      event.Text,
 					Timestamp: event.Timestamp,
 				})
-				continue
+
+			default:
+				// Финальный транскрипт: сохраняем для связки с переводом,
+				// добавляем оригинал в историю, проверяем вопрос.
+				lastOriginal = event
+
+				p.overlay.AddMessage(ui.UIMessage{
+					Type:      ui.History,
+					Text:      event.Text,
+					Timestamp: event.Timestamp,
+				})
+
+				slog.Info("финальный транскрипт", "text", event.Text)
+
+				if translator.IsQuestion(event.Text) {
+					slog.Info("обнаружен вопрос, запуск генерации подсказок", "text", event.Text)
+					go p.generateAnswersAsync(event.Text)
+				}
 			}
-
-			// Финальный результат: запускаем стриминг-перевод.
-			activeStreams++
-			go func(ev common.STTEvent) {
-				defer func() { p.streamDone <- struct{}{} }()
-				p.handleStreamingTranslation(ev)
-			}(event)
-
-		case <-p.streamDone:
-			activeStreams--
 		}
 	}
 }
 
-// --------------------------------------------------------------------------
-// handleStreamingTranslation — стриминг-перевод одной фразы
-// --------------------------------------------------------------------------
-
-// handleStreamingTranslation выполняет стриминг-перевод одной фразы:
-// токены инкрементально отправляются в UI, после завершения стрима
-// определяется вопрос и генерируются подсказки.
-func (p *Pipeline) handleStreamingTranslation(event common.STTEvent) {
-	// Показываем "[переводится...]" сразу.
-	p.overlay.AddMessage(ui.UIMessage{
-		Type:      ui.Translation,
-		Text:      "[переводится...]",
-		Timestamp: event.Timestamp,
-		MsgStatus: "pending",
-	})
-
-	streamCtx, streamCancel := context.WithTimeout(context.Background(), p.cfg.StreamTimeout)
-	defer streamCancel()
-
-	tokenCh, err := p.engine.ProcessFinalTranscriptStream(streamCtx, event.Text)
-	if err != nil {
-		slog.Error("стриминг-перевод упал",
-			"original_text", event.Text,
-			"error", err,
-		)
-		p.overlay.AddMessage(ui.UIMessage{
-			Type:      ui.Translation,
-			Text:      "[ошибка перевода]",
-			Timestamp: event.Timestamp,
-			MsgStatus: "done",
-		})
-		return
-	}
-
-	var fullText strings.Builder
-	for token := range tokenCh {
-		if strings.HasPrefix(token, "[ERROR:") {
-			slog.Error("ошибка в стриме", "text", event.Text, "token_error", token)
-			return
-		}
-		fullText.WriteString(token)
-		p.overlay.AddMessage(ui.UIMessage{
-			Type:      ui.Translation,
-			Text:      fullText.String(),
-			Timestamp: event.Timestamp,
-			MsgStatus: "streaming",
-		})
-	}
-
-	translation := fullText.String()
-	if translation == "" {
-		slog.Warn("пустой перевод", "text", event.Text)
-		return
-	}
-
-	p.overlay.AddMessage(ui.UIMessage{
-		Type:      ui.Translation,
-		Text:      translation,
-		Timestamp: event.Timestamp,
-		MsgStatus: "done",
-	})
-
-	// Добавляем оригинал и перевод в историю — теперь перевод известен.
-	p.overlay.AddMessage(ui.UIMessage{
-		Type:        ui.History,
-		Text:        event.Text,
-		Translation: translation,
-		Timestamp:   event.Timestamp,
-	})
-
-	isQ := translator.IsQuestion(event.Text)
-
-	slog.Info("стриминг-перевод завершён",
-		"text", event.Text,
-		"translation", translation,
-		"is_question", isQ,
-	)
-
-	if p.sessLog != nil {
-		// BUG #5: используем time.Now() чтобы записи в CSV шли
-		// в хронологическом порядке, а не в порядке STT-событий.
-		logEvent := event
-		logEvent.Timestamp = time.Now()
-		if err := p.sessLog.LogTranslation(logEvent, translation, nil); err != nil {
-			slog.Warn("не удалось записать перевод в лог", "error", err)
-		}
-	}
-
-	if isQ {
-		go p.generateAnswersAsync(event, translation)
-	}
-}
-
-// generateAnswersAsync запускает потоковую генерацию подсказок в фоне.
-// Не блокирует handleStreamingTranslation — перевод сразу показывается пользователю.
-func (p *Pipeline) generateAnswersAsync(event common.STTEvent, translation string) {
+// generateAnswersAsync запускает генерацию подсказок в фоне.
+// Принимает только текст вопроса, вызывает engine.GenerateAnswersStream.
+func (p *Pipeline) generateAnswersAsync(question string) {
 	ansCtx, ansCancel := context.WithTimeout(context.Background(), p.cfg.AnswerTimeout)
 	defer ansCancel()
 
-	tokenCh, err := p.engine.GenerateAnswersStream(ansCtx, event.Text)
+	tokenCh, err := p.engine.GenerateAnswersStream(ansCtx, question)
 	if err != nil {
-		slog.Error("генерация подсказок не удалась", "text", event.Text, "error", err)
+		slog.Error("генерация подсказок не удалась", "question", question, "error", err)
 		return
 	}
 
@@ -603,7 +529,7 @@ func (p *Pipeline) generateAnswersAsync(event common.STTEvent, translation strin
 	var fullText strings.Builder
 	for token := range tokenCh {
 		if strings.HasPrefix(token, "[ERROR:") {
-			slog.Error("ошибка в стриме подсказок", "text", event.Text, "token_error", token)
+			slog.Error("ошибка в стриме подсказок", "question", question, "token_error", token)
 			return
 		}
 		fullText.WriteString(token)
@@ -616,17 +542,12 @@ func (p *Pipeline) generateAnswersAsync(event common.STTEvent, translation strin
 
 	p.overlay.AddMessage(ui.UIMessage{
 		Type:      ui.AnswerCandidates,
-		Text:      event.Text,
+		Text:      question,
 		Answers:   answers,
-		Timestamp: event.Timestamp,
+		Timestamp: time.Now(),
 	})
 
-	// Логируем подсказки.
-	if p.sessLog != nil {
-		if err := p.sessLog.LogTranslation(event, translation, answers); err != nil {
-			slog.Warn("не удалось записать подсказки в лог", "error", err)
-		}
-	}
+	slog.Info("подсказки сгенерированы", "question", question, "count", len(answers))
 }
 
 // parseAnswerHints разбирает сырой ответ LLM на отдельные подсказки.

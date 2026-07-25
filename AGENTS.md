@@ -4,9 +4,9 @@
 
 - Код (имена переменных, функций, типов) — на английском (idiomatic Go: camelCase/PascalCase)
 - Комментарии к публичным API — на русском, в формате godoc
-- Сообщения коммитов — на русском, conventional commits (`feat:`, `fix:`, `refactor:`)
+- Сообщения коммитов — на английском, conventional commits (`feat:`, `fix:`, `refactor:`)
 - Документация (README, ARCHITECTURE, план) — на русском
-- **Диалог с агентом — на русском. Все ответы, пояснения, планы, отчёты — русский язык.**
+- **Диалог и рассуждения с агентом — на русском. Все ответы, пояснения, планы, отчёты — русский язык.**
 
 ## Go-специфичные требования
 
@@ -28,10 +28,10 @@
 ## Interface-Driven Design
 
 - **STTProvider:** `Start(ctx) error`, `Stop() error`, `AudioStream() chan<- []byte`, `TextStream() <-chan STTEvent`
-- **LLMProvider:** `Translate(ctx, text, history) (string, error)`, `GenerateAnswers(ctx, question, cvCtx) ([]string, error)`
+- **LLMProvider:** `GenerateAnswers(ctx, question, cvCtx) ([]string, error)`, `GenerateAnswersStream(ctx, question, cvCtx) (<-chan string, error)`
 - **SessionLogger:** `LogText(event) error`, `SaveAudioChunk(channelID, pcm) error`, `Close() error`
 - **Все модули зависят от интерфейсов, не от конкретных реализаций**
-- Подмена провайдера (Deepgram → Sherpa-onnx) — ТОЛЬКО в `main.go`, без изменений в `internal/translator`, `internal/ui`, `internal/logger`
+- Подмена провайдера (Gladia → альтернативный STT) — ТОЛЬКО в `main.go`/`pipeline.New()`, без изменений в `internal/translator`, `internal/ui`, `internal/logger`
 
 ## Обработка ошибок
 
@@ -52,21 +52,18 @@
 
 ## Зависимости (go.mod)
 
-- **Минимум внешних зависимостей:** любая новая — обоснована в PR
-- **Cgo:** избегать где возможно. `malgo` — единственное допустимое исключение (звук). Sherpa-onnx идёт как будущая опция
 - **Версионирование:** точные версии; `go mod tidy` перед коммитом
-- **Лицензионная совместимость:** только MIT, Apache-2.0, BSD
 
 ## Конфигурация
 
-- **API-ключи:** через переменные окружения (`DEEPGRAM_API_KEY`, `OPENAI_API_KEY`) — НИКОГДА не в коде, не в коммитах
+- **API-ключи:** через переменные окружения (`GLADIA_API_KEY`, `OPENAI_API_KEY`) — НИКОГДА не в коде, не в коммитах
 - **config.yaml:** для несекретных параметров (выбор модели, язык, пути логов, UI-настройки)
 - **Значения по умолчанию:** fallback на разумные дефолты если переменная не задана
 
 ## Performance (опционально, цель)
 
 - Аудио-буферы: 20ms фреймы (320 сэмплов при 16kHz)
-- STT-задержка: < 500ms от речи до текста (с Deepgram)
+- STT-задержка: < 500ms от речи до текста (с Gladia)
 - UI: 30+ FPS; без блокировок event loop'а
 - Перевод: < 2s от получения final-транскрипта (с учётом сети)
 

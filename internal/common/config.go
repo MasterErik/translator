@@ -16,9 +16,9 @@ import (
 // API keys are read from environment variables; non-secret parameters
 // can be loaded from a YAML config file or set via environment variables.
 type Config struct {
-	// DeepgramAPIKey is the API key for Deepgram STT service.
-	// Read from DEEPGRAM_API_KEY environment variable.
-	DeepgramAPIKey string
+	// GladiaAPIKey is the API key for Gladia STT + Translation service.
+	// Read from GLADIA_API_KEY environment variable.
+	GladiaAPIKey string
 
 	// OpenAIAPIKey is the API key for OpenAI LLM service.
 	// Read from OPENAI_API_KEY environment variable.
@@ -37,9 +37,9 @@ type Config struct {
 	// Default: "gpt-4o-mini".
 	OpenAIModel string `yaml:"openai_model"`
 
-	// DeepgramModel specifies the Deepgram model for speech-to-text.
-	// Default: "flux-general-en".
-	DeepgramModel string `yaml:"deepgram_model"`
+	// TargetLang is the language code for Gladia translation (ISO 639-1).
+	// Default: "ru".
+	TargetLang string `yaml:"target_lang"`
 
 	// TargetLanguage is the language to translate into (ISO 639-1 code).
 	// Default: "ru".
@@ -103,8 +103,8 @@ func (c *Config) applyDefaults() {
 	if c.OpenAIModel == "" {
 		c.OpenAIModel = "gpt-4o-mini"
 	}
-	if c.DeepgramModel == "" {
-		c.DeepgramModel = "flux-general-en"
+	if c.TargetLang == "" {
+		c.TargetLang = "ru"
 	}
 	if c.TargetLanguage == "" {
 		c.TargetLanguage = "ru"
@@ -139,14 +139,8 @@ func (c *Config) loadFromEnv() {
 	_ = godotenv.Load()                           // current dir
 	_ = godotenv.Load(filepath.Join(".", ".env")) // explicit
 
-	if v := os.Getenv("DEEPGRAM_API_KEY"); v != "" {
-		c.DeepgramAPIKey = v
-	}
-	// Fallback: SpeechToText-key for backward compatibility.
-	if c.DeepgramAPIKey == "" {
-		if v := os.Getenv("SpeechToText-key"); v != "" {
-			c.DeepgramAPIKey = v
-		}
+	if v := os.Getenv("GLADIA_API_KEY"); v != "" {
+		c.GladiaAPIKey = v
 	}
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		c.OpenAIAPIKey = v
@@ -164,8 +158,8 @@ func (c *Config) loadFromEnv() {
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		c.OpenAIModel = v
 	}
-	if v := os.Getenv("DEEPGRAM_MODEL"); v != "" {
-		c.DeepgramModel = v
+	if v := os.Getenv("TARGET_LANG"); v != "" {
+		c.TargetLang = v
 	}
 	if v := os.Getenv("TARGET_LANGUAGE"); v != "" {
 		c.TargetLanguage = v

@@ -21,7 +21,7 @@ import (
 // Дополнительные моки для интеграционных тестов
 // =========================================================================
 
-// streamingMockLLM — мок с потоковой выдачей токенов.
+// streamingMockLLM — мок с потоковой выдачей токенов для подсказок.
 type streamingMockLLM struct {
 	mu      sync.Mutex
 	tokens  []string
@@ -29,42 +29,11 @@ type streamingMockLLM struct {
 	callLog []string
 }
 
-func (m *streamingMockLLM) Translate(ctx context.Context, text string, history []string) (string, error) {
-	m.mu.Lock()
-	m.callLog = append(m.callLog, "Translate:"+text)
-	m.mu.Unlock()
-	return "sync:" + text, nil
-}
-
 func (m *streamingMockLLM) GenerateAnswers(ctx context.Context, question string, cv string) ([]string, error) {
 	m.mu.Lock()
 	m.callLog = append(m.callLog, "GenAnswers:"+question)
 	m.mu.Unlock()
 	return []string{"hint 1", "hint 2"}, nil
-}
-
-func (m *streamingMockLLM) TranslateStream(ctx context.Context, text string, history []string) (<-chan string, error) {
-	m.mu.Lock()
-	m.callLog = append(m.callLog, "Stream:"+text)
-	m.mu.Unlock()
-
-	ch := make(chan string, len(m.tokens)+1)
-	go func() {
-		defer close(ch)
-		for _, tok := range m.tokens {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(m.delay):
-			}
-			select {
-			case ch <- tok:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return ch, nil
 }
 
 func (m *streamingMockLLM) GenerateAnswersStream(ctx context.Context, question string, cv string) (<-chan string, error) {
@@ -95,34 +64,18 @@ func (m *streamingMockLLM) GenerateAnswersStream(ctx context.Context, question s
 }
 
 var _ translator.LLMProvider = (*streamingMockLLM)(nil)
-var _ translator.StreamingTranslator = (*streamingMockLLM)(nil)
+var _ translator.StreamingAnswersProvider = (*streamingMockLLM)(nil)
 
 // slowLLM — LLM с настраиваемой задержкой (для проверки блокировок).
 type slowLLM struct {
-	mu           sync.Mutex
-	translations map[string]string
-	delay        time.Duration
+	mu    sync.Mutex
+	delay time.Duration
 }
 
 func newSlowLLM(delay time.Duration) *slowLLM {
 	return &slowLLM{
-		translations: make(map[string]string),
-		delay:        delay,
+		delay: delay,
 	}
-}
-
-func (m *slowLLM) Translate(ctx context.Context, text string, history []string) (string, error) {
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-time.After(m.delay):
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if t, ok := m.translations[text]; ok {
-		return t, nil
-	}
-	return "translated: " + text, nil
 }
 
 func (m *slowLLM) GenerateAnswers(ctx context.Context, question string, cv string) ([]string, error) {
@@ -182,14 +135,11 @@ func (o *countingOverlay) messageCount() int {
 // buildTestPipeline собирает Pipeline с указанными компонентами.
 // Позволяет задать любые моки и конфигурацию.
 func buildTestPipeline(sttProv *mockSTT, capt capturer, ovl Overlay, llm translator.LLMProvider, sessLog logger.SessionLogger, txtBufSize int) *Pipeline {
-	engine := translator.NewEngine(llm, 3)
+	engine := translator.NewEngine(llm)
 	cfg := Config{
 		TextStreamBuffer: txtBufSize,
-		StreamDoneBuffer: 64,
-		StreamTimeout:    15 * time.Second,
 		AnswerTimeout:    10 * time.Second,
 		MaxTokens:        256,
-		WindowSize:       3,
 		SaveAudio:        true,
 	}
 	return &Pipeline{
@@ -200,7 +150,6 @@ func buildTestPipeline(sttProv *mockSTT, capt capturer, ovl Overlay, llm transla
 		overlay:    ovl,
 		sessLog:    sessLog,
 		textStream: make(chan common.STTEvent, txtBufSize),
-		streamDone: make(chan struct{}, 64),
 	}
 }
 
@@ -235,15 +184,8 @@ func TestPipelineFullFlow(t *testing.T) {
 	// Overlay.
 	ovl := newCountingOverlay()
 
-	// Mock LLM with canned translation.
-	llm := &mockLLM{
-		translateFn: func(ctx context.Context, text string, history []string) (string, error) {
-			if text == "Hello, how are you?" {
-				return "Привет, как дела?", nil
-			}
-			return "[translated] " + text, nil
-		},
-	}
+	// Mock LLM.
+	llm := &mockLLM{}
 
 	// Session logger.
 	sessLog, err := logger.NewFileSessionLogger(tmpDir, true)
@@ -274,11 +216,18 @@ func TestPipelineFullFlow(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	// Send a final event.
+	// Send a final event + translation (Gladia flow).
 	stt.textCh <- common.STTEvent{
 		Text:      "Hello, how are you?",
 		Event:     common.EventEndOfTurn,
 		ChannelID: "speaker",
+		Timestamp: time.Now(),
+	}
+	// Translation from Gladia.
+	stt.textCh <- common.STTEvent{
+		Text:      "Привет, как дела?",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "translation",
 		Timestamp: time.Now(),
 	}
 
@@ -410,12 +359,10 @@ func TestPipelineSaveAudioDisabled(t *testing.T) {
 }
 
 // =========================================================================
-// TestPipelineInterimDuringLongTranslation — interim не блокируется
-// =========================================================================
-
+// TestPipelineInterimDuringLongTranslation — проверка, что interim-события
+// обрабатываются даже когда в очереди есть final и translation события.
 func TestPipelineInterimDuringLongTranslation(t *testing.T) {
-	llm := newSlowLLM(500 * time.Millisecond)
-	llm.translations["final text"] = "финальный перевод"
+	llm := &mockLLM{}
 
 	ovl := newCountingOverlay()
 
@@ -429,7 +376,7 @@ func TestPipelineInterimDuringLongTranslation(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
-	// Send a final event — will trigger slow translation.
+	// Send a final event.
 	p.textStream <- common.STTEvent{
 		Text:      "final text",
 		Event:     common.EventEndOfTurn,
@@ -447,8 +394,16 @@ func TestPipelineInterimDuringLongTranslation(t *testing.T) {
 		}
 	}
 
-	// Wait for translation to complete.
-	time.Sleep(800 * time.Millisecond)
+	// Send translation event.
+	p.textStream <- common.STTEvent{
+		Text:      "финальный перевод",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "translation",
+		Timestamp: time.Now(),
+	}
+
+	// Wait for events to process.
+	time.Sleep(300 * time.Millisecond)
 
 	msgs := ovl.GetMessages()
 	t.Logf("received %d messages", len(msgs))
@@ -484,8 +439,9 @@ func TestPipelineInterimDuringLongTranslation(t *testing.T) {
 // =========================================================================
 
 func TestPipelineDispatchGracefulShutdown(t *testing.T) {
+	// slowLLM не реализует StreamingAnswersProvider — проверяем, что
+	// dispatch завершается чисто даже с медленным LLM (Gladia flow).
 	llm := newSlowLLM(100 * time.Millisecond)
-	llm.translations["shutdown test"] = "тест остановки"
 
 	ovl := newCountingOverlay()
 
@@ -503,11 +459,19 @@ func TestPipelineDispatchGracefulShutdown(t *testing.T) {
 		p.runDispatch(ctx)
 	}()
 
-	// Send a final event.
+	// Send a final event (speaker original).
 	p.textStream <- common.STTEvent{
 		Text:      "shutdown test",
 		Event:     common.EventEndOfTurn,
 		ChannelID: "speaker",
+		Timestamp: time.Now(),
+	}
+
+	// Send translation event (from Gladia).
+	p.textStream <- common.STTEvent{
+		Text:      "тест остановки",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "translation",
 		Timestamp: time.Now(),
 	}
 
@@ -543,9 +507,13 @@ func TestPipelineDispatchGracefulShutdown(t *testing.T) {
 // TestPipelineStreamingTokensArrive — токены приходят инкрементально
 // =========================================================================
 
+// TestPipelineStreamingTokensArrive — проверяет, что потоковые подсказки
+// от GenerateAnswersStream доходят до UI AnswerCandidates.
+// В новом Gladia flow: финальный транскрипт-вопрос → generateAnswersAsync →
+// токены собираются → AnswerCandidates в оверлее.
 func TestPipelineStreamingTokensArrive(t *testing.T) {
 	llm := &streamingMockLLM{
-		tokens: []string{"При", "вет", ", ", "м", "ир"},
+		tokens: []string{"mock hint 1", "mock hint 2"},
 		delay:  10 * time.Millisecond,
 	}
 	ovl := newCountingOverlay()
@@ -560,8 +528,9 @@ func TestPipelineStreamingTokensArrive(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
+	// Send a question — triggers generateAnswersAsync.
 	p.textStream <- common.STTEvent{
-		Text:      "Hello world",
+		Text:      "Can you explain Docker?",
 		Event:     common.EventEndOfTurn,
 		ChannelID: "speaker",
 		Timestamp: time.Now(),
@@ -573,28 +542,27 @@ func TestPipelineStreamingTokensArrive(t *testing.T) {
 	msgs := ovl.GetMessages()
 	t.Logf("Total UI messages: %d", len(msgs))
 
-	var translations []string
+	var answerCandidates []string
 	for _, m := range msgs {
-		if m.Type == ui.Translation {
-			translations = append(translations, m.Text)
+		if m.Type == ui.AnswerCandidates {
+			answerCandidates = append(answerCandidates, m.Answers...)
+			t.Logf("AnswerCandidates: answers=%v", m.Answers)
 		}
 	}
-	t.Logf("Translation messages: %d", len(translations))
+	t.Logf("AnswerCandidates messages with content: %d answers", len(answerCandidates))
 
-	if len(translations) == 0 {
-		t.Fatal("NO TRANSLATION MESSAGES — UI is empty!")
+	if len(answerCandidates) == 0 {
+		t.Fatal("NO ANSWER CANDIDATES — UI is empty!")
 	}
 
-	expected := len(llm.tokens) + 2 // placeholder + tokens + done
-	if len(translations) != expected {
-		t.Errorf("Expected %d messages (1 placeholder + %d tokens + 1 done), got %d",
-			expected, len(llm.tokens), len(translations))
+	// streamingMockLLM.GenerateAnswersStream returns ["mock hint 1", "mock hint 2"]
+	// engine.GenerateAnswersStream concatenates tokens → parseAnswerHints → up to 3 hints.
+	expectedMin := 1
+	if len(answerCandidates) < expectedMin {
+		t.Errorf("Expected at least %d answer hints, got %d", expectedMin, len(answerCandidates))
 	}
 
-	last := translations[len(translations)-1]
-	if last != "Привет, мир" {
-		t.Errorf("Final translation = %q, expected %q", last, "Привет, мир")
-	}
+	t.Logf("Streaming answer hints: %v", answerCandidates)
 }
 
 // =========================================================================
@@ -645,9 +613,12 @@ func TestPipelineStreamCancellation(t *testing.T) {
 // TestPipelineConcurrentStreams — параллельная обработка стримов
 // =========================================================================
 
+// TestPipelineConcurrentStreams — параллельная обработка нескольких вопросов.
+// Отправляем 3 вопроса одновременно → каждый запускает generateAnswersAsync →
+// все должны сгенерировать AnswerCandidates.
 func TestPipelineConcurrentStreams(t *testing.T) {
 	llm := &streamingMockLLM{
-		tokens: []string{"A", "B", "C"},
+		tokens: []string{"hint A", "hint B"},
 		delay:  50 * time.Millisecond,
 	}
 	ovl := newCountingOverlay()
@@ -662,10 +633,15 @@ func TestPipelineConcurrentStreams(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
-	// Send 3 final events almost simultaneously.
-	for i := 0; i < 3; i++ {
+	// Send 3 questions almost simultaneously.
+	questions := []string{
+		"Can you explain goroutines?",
+		"What is a mutex?",
+		"How does garbage collection work?",
+	}
+	for _, q := range questions {
 		p.textStream <- common.STTEvent{
-			Text:      fmt.Sprintf("text %d", i),
+			Text:      q,
 			Event:     common.EventEndOfTurn,
 			ChannelID: "speaker",
 			Timestamp: time.Now(),
@@ -677,30 +653,31 @@ func TestPipelineConcurrentStreams(t *testing.T) {
 	msgs := ovl.GetMessages()
 	t.Logf("Total messages: %d", len(msgs))
 
-	var transCount int
+	var answerCount int
 	for _, m := range msgs {
-		if m.Type == ui.Translation {
-			transCount++
+		if m.Type == ui.AnswerCandidates {
+			answerCount++
+			t.Logf("AnswerCandidates: answers=%v text=%q", m.Answers, m.Text)
 		}
 	}
-	t.Logf("Translation messages: %d", transCount)
+	t.Logf("AnswerCandidates messages: %d", answerCount)
 
-	if transCount < 3 {
-		t.Errorf("Expected at least 3 translation messages, got %d", transCount)
+	if answerCount < 3 {
+		t.Errorf("Expected at least 3 AnswerCandidates messages, got %d", answerCount)
 	}
 
-	// Verify LLM call log.
+	// Verify LLM call log — each question should trigger GenerateAnswersStream.
 	llm.mu.Lock()
-	streamCalls := 0
+	genCalls := 0
 	for _, c := range llm.callLog {
-		if strings.HasPrefix(c, "Stream:") {
-			streamCalls++
+		if strings.HasPrefix(c, "GenAnswersStream:") {
+			genCalls++
 		}
 	}
 	llm.mu.Unlock()
 
-	if streamCalls != 3 {
-		t.Errorf("Expected 3 stream calls, got %d", streamCalls)
+	if genCalls != 3 {
+		t.Errorf("Expected 3 GenerateAnswersStream calls, got %d", genCalls)
 	}
 }
 
@@ -767,10 +744,13 @@ func TestPipelineInterimNotBlockedInStream(t *testing.T) {
 // TestPipelineFallbackToSync — фолбэк на синхронный Translate
 // =========================================================================
 
+// TestPipelineFallbackToSync — фолбэк с GenerateAnswersStream на GenerateAnswers.
+// Когда LLM не реализует StreamingAnswersProvider, engine.GenerateAnswersStream
+// использует синхронный GenerateAnswers и возвращает результаты через канал.
+// Проверяем, что подсказки доходят до UI AnswerCandidates.
 func TestPipelineFallbackToSync(t *testing.T) {
-	// slowLLM does NOT implement StreamingTranslator — should fall back.
+	// slowLLM does NOT implement StreamingAnswersProvider — should fall back.
 	llm := newSlowLLM(50 * time.Millisecond)
-	llm.translations["hello"] = "привет"
 
 	ovl := newCountingOverlay()
 
@@ -784,8 +764,9 @@ func TestPipelineFallbackToSync(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
+	// Send a question — triggers generateAnswersAsync.
 	p.textStream <- common.STTEvent{
-		Text:      "hello",
+		Text:      "Can you explain Docker?",
 		Event:     common.EventEndOfTurn,
 		ChannelID: "speaker",
 		Timestamp: time.Now(),
@@ -796,14 +777,16 @@ func TestPipelineFallbackToSync(t *testing.T) {
 	msgs := ovl.GetMessages()
 	var found bool
 	for _, m := range msgs {
-		if m.Type == ui.Translation && strings.Contains(m.Text, "привет") {
-			found = true
-			break
+		if m.Type == ui.AnswerCandidates {
+			t.Logf("AnswerCandidates: answers=%v text=%q", m.Answers, m.Text)
+			if len(m.Answers) > 0 {
+				found = true
+			}
 		}
 	}
 
 	if !found {
-		t.Error("Sync fallback failed — translation not received!")
+		t.Error("Sync fallback failed — answer candidates not received!")
 	} else {
 		t.Log("Sync fallback — OK")
 	}
@@ -828,14 +811,11 @@ func TestPipelineWithStubCapture(t *testing.T) {
 	ovl := newCountingOverlay()
 	llm := &mockLLM{}
 
-	engine := translator.NewEngine(llm, 3)
+	engine := translator.NewEngine(llm)
 	cfg := Config{
 		TextStreamBuffer: 16,
-		StreamDoneBuffer: 64,
-		StreamTimeout:    5 * time.Second,
 		AnswerTimeout:    3 * time.Second,
 		MaxTokens:        256,
-		WindowSize:       3,
 		SaveAudio:        true,
 	}
 
@@ -850,7 +830,6 @@ func TestPipelineWithStubCapture(t *testing.T) {
 		overlay:    ovl,
 		sessLog:    nil,
 		textStream: make(chan common.STTEvent, 16),
-		streamDone: make(chan struct{}, 64),
 	}
 
 	if err := stt.Start(context.Background()); err != nil {
@@ -902,20 +881,17 @@ func TestEndOfTurnCycle(t *testing.T) {
 	llm := &mockLLM{}
 	ovl := newMockOverlay()
 
-	engine := translator.NewEngine(llm, 5)
+	engine := translator.NewEngine(llm)
 
 	p := &Pipeline{
 		cfg: Config{
-			StreamTimeout:    5 * time.Second,
 			AnswerTimeout:    3 * time.Second,
 			TextStreamBuffer: 16,
-			StreamDoneBuffer: 16,
 		},
 		sttProv:    sttProv,
 		engine:     engine,
 		overlay:    ovl,
 		textStream: make(chan common.STTEvent, 64),
-		streamDone: make(chan struct{}, 64),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -923,17 +899,21 @@ func TestEndOfTurnCycle(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
-	// 3 Update → EndOfTurn → EndOfTurn (вопрос).
+	// 3 Update → EndOfTurn → translation → EndOfTurn (вопрос) → translation.
 	p.textStream <- common.STTEvent{Event: common.EventUpdate, Text: "I have", Timestamp: time.Now()}
 	p.textStream <- common.STTEvent{Event: common.EventUpdate, Text: "I have five", Timestamp: time.Now()}
 	p.textStream <- common.STTEvent{Event: common.EventUpdate, Text: "I have five years", Timestamp: time.Now()}
 
 	// EndOfTurn 1: не вопрос.
-	p.textStream <- common.STTEvent{Event: common.EventEndOfTurn, Text: "I have five years of experience", Timestamp: time.Now()}
+	p.textStream <- common.STTEvent{Event: common.EventEndOfTurn, Text: "I have five years of experience", ChannelID: "speaker", Timestamp: time.Now()}
+	// Translation for EndOfTurn 1 (from Gladia).
+	p.textStream <- common.STTEvent{Event: common.EventEndOfTurn, Text: "У меня пять лет опыта", ChannelID: "translation", Timestamp: time.Now()}
 	time.Sleep(300 * time.Millisecond)
 
 	// EndOfTurn 2: ВОПРОС.
-	p.textStream <- common.STTEvent{Event: common.EventEndOfTurn, Text: "Can you explain Kubernetes?", Timestamp: time.Now()}
+	p.textStream <- common.STTEvent{Event: common.EventEndOfTurn, Text: "Can you explain Kubernetes?", ChannelID: "speaker", Timestamp: time.Now()}
+	// Translation for EndOfTurn 2 (from Gladia).
+	p.textStream <- common.STTEvent{Event: common.EventEndOfTurn, Text: "Можете объяснить Kubernetes?", ChannelID: "translation", Timestamp: time.Now()}
 	time.Sleep(600 * time.Millisecond)
 
 	cancel()
@@ -954,6 +934,7 @@ func TestEndOfTurnCycle(t *testing.T) {
 		}
 	}
 
+	// History: 2 final transcripts + 2 history-with-translation = 4
 	if historyCount < 2 {
 		t.Errorf("История: ждали >=2, получили %d", historyCount)
 	}
@@ -1000,16 +981,13 @@ func TestTranslationLoggedToCSV(t *testing.T) {
 		t.Fatalf("logger: %v", err)
 	}
 
-	engine := translator.NewEngine(llm, 3)
+	engine := translator.NewEngine(llm)
 
 	p := &Pipeline{
 		cfg: Config{
 			TextStreamBuffer: 8,
-			StreamDoneBuffer: 16,
-			StreamTimeout:    5 * time.Second,
 			AnswerTimeout:    3 * time.Second,
 			MaxTokens:        256,
-			WindowSize:       3,
 			SaveAudio:        false,
 		},
 		capturer:     capt,
@@ -1018,7 +996,6 @@ func TestTranslationLoggedToCSV(t *testing.T) {
 		overlay:      ovl,
 		sessLog:      sessLog,
 		textStream:   make(chan common.STTEvent, 8),
-		streamDone:   make(chan struct{}, 16),
 		dispatchDone: make(chan struct{}, 1),
 	}
 
@@ -1031,11 +1008,18 @@ func TestTranslationLoggedToCSV(t *testing.T) {
 	go func() { defer wg.Done(); p.runDispatch(ctx) }()
 	go func() { defer wg.Done(); p.runUI(ctx) }()
 
-	// Отправляем EndOfTurn.
+	// Отправляем EndOfTurn + translation (Gladia flow).
 	p.textStream <- common.STTEvent{
 		Text:      "Hello world",
 		Event:     common.EventEndOfTurn,
 		ChannelID: "speaker",
+		Timestamp: time.Now(),
+	}
+	// Translation from Gladia.
+	p.textStream <- common.STTEvent{
+		Text:      "Привет, мир",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "translation",
 		Timestamp: time.Now(),
 	}
 

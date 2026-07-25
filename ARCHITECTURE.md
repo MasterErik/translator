@@ -1,20 +1,28 @@
-# Архитектура Translator v3 — AI Interview / Meeting Assistant
+# Архитектура Translator v4 — AI Interview / Meeting Assistant
 
-**Версия:** 3.0 · **Дата:** 2026-07-23
-**Статус:** стриминг-перевод + трёхзонный UI, все тесты PASS
+**Версия:** 4.0 · **Дата:** 2026-07-25
+**Статус:** ✅ Миграция на Gladia завершена. STT, перевод, LLM-подсказки — все компоненты работают. `go vet` чист, `go test -race ./...` → 8/8 PASS.
 
 ## Обзор системы
 
-Приложение реального времени — прозрачный overlay поверх рабочего стола Windows. Переводит речь собеседника (EN→RU), сохраняет IT-термины, генерирует подсказки при детекции вопроса.
+Приложение реального времени — прозрачный overlay поверх рабочего стола Windows. Распознаёт речь собеседника (EN), получает перевод от Gladia (встроенный, EN→RU), сохраняет IT-термины, генерирует подсказки при детекции вопроса.
 
-**Ключевые изменения v3:**
-- **Стриминг-перевод** — токены идут в UI инкрементально, без ожидания полного ответа. Замена worker pool на прямые стрим-горутины.
-- **GLM-4.7-Flash** (Z.AI) вместо GPT-4o-mini — задержка ~1s (было 3-5s)
-- **thinking:disabled** — транспортный слой в `openai.go` инжектит `{"thinking":{"type":"disabled"}}` для Z.AI
-- **Трёхзонный UI** — речь (Interim), перевод (скролл 10 строк), подсказки
-- **Цветовой индикатор** — янтарный (pending) → зелёный (streaming) → тёмный (done)
-- **Событийная перерисовка** — `w.Invalidate()` при каждом `AddMessage`
-- **Свежие контексты** — стриминг и подсказки с собственными `context.WithTimeout`
+**Ключевые изменения v4 (миграция с Deepgram на Gladia):**
+- **STT: Gladia Solaria-1** — turn-aware стриминг через WebSocket
+- **Перевод: Gladia Translation** — встроенный в тот же WebSocket, модель `enhanced`, без отдельного LLM-перевода
+- **LLM: только подсказки** — `GenerateAnswersStream`, без `TranslateStream`
+- **Двухфазный коннект** — POST `/v2/live` → `{id, url}` → WebSocket dial
+- **Меньше горутин** — потеря 3 стриминг-горутин для перевода (было 12, стало 9)
+- **Dispatch упрощён** — transcript → UI, translation → UI, вопрос → GenerateAnswers
+
+### Историческая справка
+
+| Версия | STT | Перевод | Дата |
+|--------|-----|---------|------|
+| v1–v3 | Deepgram Flux v2 | LLM (GLM-4.7-Flash) | до 2026-07-25 |
+| **v4** | **Gladia Solaria-1** | **Gladia Translation (enhanced)** | 2026-07-25 |
+
+Причины миграции: встроенный перевод в Gladia исключает сетевой round-trip до LLM, снижает задержку перевода с ~1.5s до ~200ms, упрощает архитектуру и уменьшает стоимость (один API вместо двух).
 
 ---
 
@@ -23,12 +31,10 @@
 Двухканальный захват через виртуальный аудиоканал VB-Cable для разделения звука собеседника и вашего голоса.
 
 ```
-Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──► chan speaker (PCM)
-Микрофон     ──► WASAPI Capture           ──► chan mic (PCM)
-                        │                           │
-                        └──────────┬────────────────┘
-                                   ▼
-                           route/merge → AudioStream → Deepgram Flux v2
+Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──► audioStream → Gladia WebSocket
+Микрофон     ──► WASAPI Capture           ──► audioStream → Gladia WebSocket
+                                                    │
+                                          (опционально) → логгер аудио
 ```
 
 | Устройство | Тип WASAPI | Роль |
@@ -45,47 +51,33 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 │                        MAIN GOROUTINE                                │
 │  signal.NotifyContext → ctx → запуск всех горутин → ожидание Ctrl+C │
 └──────────────────────────────────────────────────────────────────────┘
-        │          │           │            │
-        ▼          ▼           ▼            ▼
-┌───────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐
-│ CAPTURE   │ │ CAPTURE  │ │ STT      │ │ UI       │
-│ Loopback  │ │ Mic      │ │ Deepgram │ │ GioUI    │
-│ 80ms      │ │ 80ms     │ │ Flux v2  │ │ overlay  │
-│ malgo →   │ │ malgo →  │ │ WS send  │ │ event    │
-│ chan      │ │ chan     │ │ WS recv  │ │ loop     │
-│ speaker   │ │ mic      │ │          │ │          │
-└─────┬─────┘ └────┬─────┘ └────┬─────┘ └──────────┘
-      │            │            │
-      └─────┬──────┘            │ chan STTEvent
-            │                   │ (buf 16)
-            ▼                   │
-    ┌───────────────┐           │
-    │ ROUTE/MERGE   │           │
-    │ 2:1 speaker+  │           │
-    │ mic → Audio-  │           │
-    │ Stream (buf64)│           │
-    └───────────────┘           │
-            │                   ▼
-            ▼           ┌───────────────────┐
-    ┌───────────────┐   │ DISPATCH          │  ← ЦЕНТРАЛЬНЫЙ УЗЕЛ
-    │ AUDIO SAVER   │   │                   │
-    │ (опционально) │   │ select {          │
-    │               │   │  textStream:      │
-    │ PCM → MP3/WAV │   │   interim → UI    │
-    │ (go-lame/beep)│   │   final → stream  │
-    └───────────────┘   │  streamDone:      │
-                        │   счётчик         │
-                        │ }                 │
-                        └────────┬──────────┘
-                                 │
-                    ┌────────────┼────────────┐
-                    ▼            ▼            ▼
-            ┌──────────┐ ┌──────────┐ ┌──────────┐
-            │ STREAM 1 │ │ STREAM 2 │ │ STREAM 3 │
-            │ GLM-4.7  │ │ GLM-4.7  │ │ GLM-4.7  │
-            │ токены→  │ │ токены→  │ │ токены→  │
-            │ UI инкр. │ │ UI инкр. │ │ UI инкр. │
-            └──────────┘ └──────────┘ └──────────┘
+        │          │           │            │            │
+        ▼          ▼           ▼            ▼            ▼
+┌───────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+│ CAPTURE   │ │ CAPTURE  │ │ STT      │ │ DISPATCH │ │ UI       │
+│ Loopback  │ │ Mic      │ │ Gladia   │ │          │ │ GioUI    │
+│ 80ms PCM  │ │ 80ms PCM │ │ Solaria-1│ │ select { │ │ event    │
+│ → audio-  │ │ → fan-out│ │ WebSocket│ │  interim │ │ loop     │
+│   Stream  │ │   STT +  │ │ write+   │ │  → UI    │ │          │
+│           │ │   logger │ │ readPump │ │  final   │ │          │
+│           │ │          │ │ (2 гор.) │ │  → UI    │ │          │
+│           │ │          │ │          │ │  transl. │ │          │
+│           │ │          │ │          │ │  → UI    │ │          │
+│           │ │          │ │          │ │  ? → ans │ │          │
+└───────────┘ └─────────┘ └────┬─────┘ └────┬─────┘ └──────────┘
+                               │            │
+                        textStream (chan STTEvent, buf 64)
+                               │            │
+                        ┌──────┘            │
+                        │                   │
+                        ▼                   ▼
+               ┌──────────────┐    ┌───────────────┐
+               │ Gladia       │    │ runSTT        │
+               │ writePump    │    │ routeSTTEvent │
+               │ audioCh → WS │    │ textCh →      │
+               │ readPump     │    │ textStream    │
+               │ WS → textCh  │    │               │
+               └──────────────┘    └───────────────┘
 ```
 
 ### Список горутин
@@ -93,25 +85,23 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 | # | Горутина | Назначение | Запуск | Завершение |
 |---|----------|-----------|--------|------------|
 | 1 | `main` | graceful shutdown, сигналы | `main()` | `os.Exit(0)` |
-| 2 | `capture·loopback` | malgo WASAPI loopback → chan speaker | `runCapture` | ctx.Done() |
-| 3 | `capture·mic` | malgo WASAPI mic → chan mic | `runCapture` | ctx.Done() |
-| 4 | `route/merge` | speaker+mic → AudioStream | `runCapture` | chan close |
-| 5 | `stt·deepgram` | Flux v2 WebSocket send/recv | `deepgram.Start()` | `deepgram.Stop()` |
-| 6 | `dispatch` | центральный select: textStream + стрим-горутины | `runDispatch()` | textStream close |
-| 7 | `ui·gioui` | GioUI event loop + рендеринг | `runUI()` | DestroyEvent |
-| 8 | `audio·saver` | PCM → MP3/WAV на диск (опционально) | `runCapture` | flush + close |
-| 9 | `logger` | async CSV-логгирование (через канал) | `NewFileSessionLogger()` | `Close()` |
+| 2 | `capture·loopback` | malgo WASAPI loopback → audioStream | `runCapture` | ctx.Done() |
+| 3 | `capture·mic` | malgo WASAPI mic → fan-out (STT + logger) | `runCapture` | ctx.Done() |
+| 4 | `capture·mic·logger` | запись сырого микрофона → логгер | `runCapture` | ctx.Done() |
+| 5 | `stt·gladia·writePump` | audioStream → Gladia WebSocket (BinaryMessage) | `GladiaProvider.Start()` | ctx.Done() / conn close |
+| 6 | `stt·gladia·readPump` | Gladia WebSocket → parseAndEmit → textCh | `GladiaProvider.Start()` | ctx.Done() / conn close |
+| 7 | `route·stt` (runSTT) | textCh → маршрутизация в textStream | `pipeline.Run()` | textCh close |
+| 8 | `dispatch` | центральный select: transcript/translation → UI + вопрос → подсказки | `runDispatch()` | textStream close |
+| 9 | `ui·gioui` | GioUI event loop + рендеринг | `runUI()` | DestroyEvent |
 
 ### Каналы
 
 | Канал | Тип | Буфер | Путь |
 |---|---|---|---|
-| `speakerPCM` | `chan []byte` | 32 | loopback → route |
-| `micPCM` | `chan []byte` | 32 | mic → route |
-| `audioStream` | `chan []byte` | 64 | route → deepgram |
-| `textStream` | `chan STTEvent` | 16 | deepgram → dispatch |
-| `streamDone` | `chan struct{}` | 64 | стрим-горутины → dispatch (shutdown) |
-| `logJobs` | `chan logJob` | 256 | dispatch → logger |
+| `audioCh` (внутри GladiaProvider) | `chan []byte` | 64 | runCapture → writePump |
+| `textCh` (внутри GladiaProvider) | `chan STTEvent` | 32 | readPump → runSTT |
+| `textStream` (в Pipeline) | `chan STTEvent` | 64 | runSTT → dispatch |
+| `dispatchDone` | `chan struct{}` | 1 | dispatch → shutdown |
 
 ---
 
@@ -119,27 +109,28 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 
 ### Interim (промежуточный)
 ```
-PCM → Flux v2 → TurnInfo.Update → textStream → dispatch → UI.AddMsg(Interim) → верхняя зона
+PCM → Gladia WS → transcript (is_final=false) → textCh → textStream → dispatch → UI Interim (серый)
 ```
 
-### Final → Стриминг-перевод
+### Final → Перевод (встроенный Gladia)
 ```
-PCM → Flux v2 → EndOfTurn (~260ms) → textStream → dispatch → go handleStreamingTranslation
-                                                                     │
-                                          ┌──────────────────────────┘
-                                          ▼
-                                    [переводится...] → UI (pending, янтарный фон)
-                                          │
-                                          ▼
-                              ProcessFinalTranscriptStream → TranslateStream
-                                          │
-                                    токены → UI инкрементально (streaming, зелёный фон)
-                                          │
-                                          ▼
-                                    финальный перевод → UI (done, тёмный фон)
-                                          │
-                                          ├─ isQuestion? → GenerateAnswers → UI (подсказки)
-                                          └─ history trim (MaxLines)
+PCM → Gladia WS → transcript (is_final=true) → textCh → textStream → dispatch → UI History (оригинал)
+                                                                          │
+                                                    ┌─────────────────────┘
+                                                    │ (Gladia шлёт translation ПОСЛЕ transcript)
+                                                    ▼
+                    Gladia WS → translation → textCh → textStream → dispatch → UI Translation + UI History (оригинал + перевод)
+```
+
+### Вопрос → Подсказки (LLM)
+```
+dispatch: IsQuestion(transcript.Text) == true
+    │
+    └─► go generateAnswersAsync(question)
+         │
+         └─► engine.GenerateAnswersStream(ctx, question)
+              │
+              └─► SSE-токены → parseAnswerHints → UI AnswerCandidates
 ```
 
 ### UI — три зоны
@@ -147,9 +138,8 @@ PCM → Flux v2 → EndOfTurn (~260ms) → textStream → dispatch → go handle
 ┌──────────────────────────┐
 │ I have five years of...  │ ← Interim (речь, 2 строки, серый текст)
 ├──────────────────────────┤
-│ У меня пять лет опыта... │ ← Перевод (скролл 10 строк)
+│ У меня пять лет опыта... │ ← Перевод (скролл 10 строк, от Gladia)
 │ Мы используем Redis...    │
-│ [переводится...]          │
 ├──────────────────────────┤
 │ 1. Подсказка один        │ ← AnswerCandidates (только для вопросов)
 │ 2. Подсказка два         │
@@ -158,51 +148,38 @@ PCM → Flux v2 → EndOfTurn (~260ms) → textStream → dispatch → go handle
 
 ### Сохранение аудио (SAVE_AUDIO=true)
 ```
-PCM → AudioEncoder → MP3 (go-lame) / WAV (beep) → audio/speaker.mp3
+PCM (mic) → логгер → audio/speaker.mp3
 ```
 
 ---
 
-## Deepgram Flux v2
+## Gladia Live API v2
 
 | Параметр | Значение |
 |---|---|
-| Endpoint | `wss://api.deepgram.com/v2/listen` |
-| Модель | `flux-general-en` |
-| Кодирование | `linear16`, 16000 Hz, mono |
-| Чанк | 80ms (2560 байт) |
-| EndOfTurn | `eot_threshold=0.8`, ~260ms p50 |
-| KeepAlive | НЕ используется (v1-специфичный) |
+| Endpoint init | `POST https://api.gladia.io/v2/live` |
+| Endpoint WS | динамический URL (из ответа init) |
+| Модель STT | `solaria-1` |
+| Модель перевода | `enhanced` |
+| Кодирование | `wav/pcm`, 16-bit, 16000 Hz, mono |
+| Endpointing | `0.3` |
+| Аутентификация | `x-gladia-key` header |
 
-**События Flux:**
-- `Update` → interim-транскрипт → верхняя зона UI
-- `EndOfTurn` → финальный транскрипт → запуск стриминг-перевода
-- `StartOfTurn` / `TurnResumed` → игнорируются (без транскрипта)
+**Двухфазный коннект:**
+1. `POST /v2/live` с JSON-конфигурацией (модель, язык, перевод, endpointing)
+2. Ответ: `{"id": "...", "url": "wss://..."}` — статус 201 Created
+3. WebSocket dial по полученному URL
+4. Отправка PCM-фреймов (BinaryMessage) + чтение JSON-событий
 
-**Фильтрация дублирующих Update:** Deepgram Flux v2 шлёт `Update` на каждый аудио-фрейм (~200ms), даже если транскрипция не изменилась. `DeepgramProvider.lastInterimText` хранит последний промежуточный текст — при совпадении с предыдущим `Update` пропускается. При `EndOfTurn` сбрасывается для следующей фразы. Это снижает нагрузку на UI (лишние `Invalidate`) и уменьшает зашумлённость CSV-лога.
+**События Gladia:**
 
----
+| Тип | STTEvent.Event | ChannelID | Назначение |
+|---|---|---|---|
+| `transcript` (is_final=false) | `EventUpdate` | `"speaker"` | Interim → UI |
+| `transcript` (is_final=true) | `EventEndOfTurn` | `"speaker"` | Final → dispatch (сохраняется как lastOriginal) |
+| `translation` | `EventEndOfTurn` | `"translation"` | Перевод → UI Translation + связка с lastOriginal |
 
-## Translation Engine
-
-```go
-type TranslationEngine struct {
-    llm       LLMProvider       // GLM-4.7-Flash (OpenAI-совместимый)
-    window    []string          // sliding window (max 5)
-    maxWindow int
-    mu        sync.RWMutex
-}
-```
-
-**Pipeline per EndOfTurn (стриминг):**
-1. Append to sliding window → FIFO, trim to maxWindow
-2. Get history (window except most recent)
-3. `TranslateStream(ctx, text, history)` → токены в канал (temperature 0.1)
-4. Токены инкрементально → UI (streaming-статус)
-5. По завершении → классификация `IsQuestion()`
-6. Если вопрос → `GenerateAnswers()` (temperature 0.3)
-
-**Фолбэк:** если провайдер не реализует `StreamingTranslator` → синхронный `Translate` через канал из одного элемента.
+**Связывание transcript ↔ translation:** Gladia шлёт `translation` ПОСЛЕ `transcript`. Dispatch хранит `lastOriginal` — последний финальный транскрипт. При получении `translation` выводит пару (оригинал + перевод) в историю.
 
 ---
 
@@ -214,12 +191,12 @@ type TranslationEngine struct {
 | Модель | `glm-4.7-flash` |
 | thinking | **disabled** (транспортный слой `thinkingTransport`) |
 | max_tokens | `LLM_MAX_TOKENS` (default 1024) |
-| temperature | 0.1 (translate), 0.3 (answers) |
-| Стриминг | SSE, `stream: true` |
+| temperature | 0.3 (answers) |
+| Стриминг | SSE, `stream: true` (`GenerateAnswersStream`) |
+
+**LLM используется ТОЛЬКО для генерации подсказок.** Перевод выполняется Gladia (встроенный, модель `enhanced`).
 
 **thinkingTransport** — `http.RoundTripper` в `openai.go`, инжектит `{"thinking":{"type":"disabled"}}` в тело запроса к `api.z.ai`. Без этого все токены уходят в `reasoning_content`, а `content` остаётся пустым.
-
-**Перевод на GLM не использует Translation Agent** (`/api/v1/agents`). Agent API в 3-4 раза медленнее из-за встроенной трёхэтапной рефлексии (перевод → анализ → исправление) и требует платного аккаунта.
 
 ---
 
@@ -234,22 +211,23 @@ type STTProvider interface {
 }
 
 type LLMProvider interface {
-    Translate(ctx, text, history) (string, error)
-    GenerateAnswers(ctx, question, cvContext) ([]string, error)
+    GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error)
 }
 
-type StreamingTranslator interface {
+type StreamingAnswersProvider interface {
     LLMProvider
-    TranslateStream(ctx, text, history) (<-chan string, error)
+    GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error)
 }
 
 type SessionLogger interface {
     LogText(event STTEvent) error
-    LogTranslation(event, translation, answers []string) error
+    LogTranslation(event STTEvent, translation string, answers []string) error
     SaveAudioChunk(channelID string, pcm []byte) error
     Close() error
 }
 ```
+
+**Изменения относительно v3:** из `LLMProvider` убран `Translate`. Интерфейс `StreamingTranslator` удалён. Перевод выполняется Gladia, а не LLM.
 
 ---
 
@@ -259,10 +237,9 @@ type SessionLogger interface {
 
 ### config.yaml
 ```yaml
-deepgram_model: "flux-general-en"
 openai_model: "glm-4.7-flash"
 llm_base_url: "https://api.z.ai/api/paas/v4/"
-target_language: "ru"
+target_lang: "ru"
 log_dir: "./logs"
 window_size: 5
 save_audio: false
@@ -271,16 +248,16 @@ loopback_device: "CABLE Input (VB-Audio Virtual Cable)"
 
 ### .env
 ```env
-DEEPGRAM_API_KEY=...
+GLADIA_API_KEY=...
 OPENAI_API_KEY=...
 LLM_BASE_URL=https://api.z.ai/api/paas/v4/
 OPENAI_MODEL=glm-4.7-flash
 LLM_MAX_TOKENS=1024
 LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
 OVERLAY_WIDTH=800
-OVERLAY_HEIGHT=400
+OVERLAY_HEIGHT=650
 OVERLAY_MAX_LINES=10
-SAVE_AUDIO=true
+SAVE_AUDIO=false
 ```
 
 ---
@@ -288,14 +265,16 @@ SAVE_AUDIO=true
 ## Graceful Shutdown
 
 1. SIGINT/SIGTERM → ctx cancel
-2. capture.Close() → malgo устройства остановлены
-3. speakerPCM/micPCM закрыты → route завершается
-4. deepgram.Stop() → WebSocket close → textStream закрыт
-5. dispatch: закрытие textStream → ожидание активных стримов (streamDone)
-6. ui: `system.ActionClose` → слив DestroyEvent
-7. audio·saver flush + close (MP3 финальный фрейм)
-8. logger.Close() → drain logJobs → flush CSV
+2. capture.Close() → malgo устройства остановлены, audioCh закрыт
+3. Gladia.Stop() → ctx cancel → writePump/readPump завершаются, WebSocket close
+4. textCh закрывается → runSTT завершается → textStream закрывается
+5. dispatch: textStream close → dispatchDone сигнал
+6. shutdown ждёт dispatchDone
+7. ui: WaitShutdown()
+8. logger.Close() → flush
 9. os.Exit(0)
+
+**Упрощение относительно v3:** нет ожидания стриминг-горутин (streamDone). Только dispatchDone от dispatch.
 
 ---
 
@@ -304,20 +283,104 @@ SAVE_AUDIO=true
 | Слой | Библиотека | Назначение |
 |---|---|---|
 | Audio Capture | `malgo` (CGo) | WASAPI Loopback + Mic |
-| STT | Deepgram Flux `/v2/listen` | Turn-aware streaming |
-| LLM | `go-openai` → GLM-4.7-Flash | Стриминг-перевод + подсказки |
-| MP3 | `go-lame` (CGo) | PCM → MP3 кодирование |
-| WAV | `beep/v2` | WAV fallback |
+| STT + Перевод | Gladia Solaria-1 `/v2/live` | Turn-aware streaming + встроенный перевод |
+| WebSocket | `gorilla/websocket` | Gladia WebSocket клиент |
+| LLM | `go-openai` → GLM-4.7-Flash | Генерация подсказок (стриминг) |
 | UI | `gioui.org` v0.10.1 | Прозрачный трёхзонный overlay |
 | Win32 | `golang.org/x/sys/windows` | WS_EX_TOPMOST/LAYERED |
+| Config | `joho/godotenv` + `gopkg.in/yaml.v3` | .env + config.yaml |
 
 ---
 
-## Задержка
+## Задержка (измеренные значения)
 
 ```
-Flux EndOfTurn:  ~260ms (от речи до финального транскрипта)
-GLM-4.7-Flash:   ~1s   (от запроса до полного перевода, thinking:disabled)
-Первый токен:    ~0ms  (стриминг, UI обновляется инкрементально)
-Общая:           ~1.3s (речь → перевод на экране)
+Gladia STT:       ~260ms (от речи до финального транскрипта, endpointing=0.3)
+Gladia перевод:   ~200ms (от transcript до translation, встроенный)
+LLM подсказки:    ~1-2s  (GenerateAnswersStream, асинхронно, не блокирует UI)
+Общая (речь → перевод на экране): ~460ms
 ```
+
+---
+
+## Интеграционное тестирование
+
+### Структура тестов
+
+```
+test/
+  cable_test/          проверка VB-Cable (CGO, список устройств, 5s захвата)
+  llm_test/            тест LLM-подсказок (GenerateAnswers + GenerateAnswersStream)
+  gladia_test/         интеграционный тест Gladia (STT + перевод на реальном API)
+generate_test_wav.py   генерация тестового WAV-файла (Edge TTS / fallback tone)
+```
+
+### Интеграционный тест Gladia (`test/gladia_test`)
+
+**Что проверяет:**
+1. WebSocket-подключение к Gladia API v2 (двухфазный коннект)
+2. Отправка PCM-аудио чанками по 20ms (640 байт)
+3. Получение и разбор событий: interim, final transcript, translation
+4. Генерацию подсказок через LLM (GLM-4.7-Flash)
+
+**Запуск:**
+```bash
+# 1. Сгенерировать тестовый WAV с речью
+python generate_test_wav.py
+
+# 2. Запустить интеграционный тест
+go run ./test/gladia_test
+```
+
+**Результаты (прогон 2026-07-25):**
+- ✅ Gladia WebSocket — коннект успешен
+- ✅ STT (Solaria-1) — распознавание речи работает
+- ✅ Gladia Translation (enhanced, EN→RU) — перевод работает
+- ✅ LLM (GLM-4.7-Flash) — подсказки генерируются
+- ✅ `go vet ./...` — чисто
+- ✅ `go test -race ./...` — 8/8 PASS, гонок нет
+
+### Генератор тестового WAV (`generate_test_wav.py`)
+
+Генерирует `test_speech.wav` в корне проекта:
+- **Основной режим:** Edge TTS (Windows built-in) — синтезирует фразу *«Hello, could you explain what a deadlock is and how to avoid it in Go programming language?»*
+- **Fallback:** синусоида 440Hz с fade in/out — если Edge TTS недоступен
+- Формат: WAV, 16kHz, mono, 16-bit PCM
+- Длительность: ~3 секунды
+- Требования: Python 3, Windows (для Edge TTS через PowerShell)
+
+### Ручное тестирование LLM (`test/llm_test`)
+
+```bash
+go run ./test/llm_test
+```
+
+Проверяет:
+- `GenerateAnswers` (batch) — вопрос про mutex vs channel
+- `GenerateAnswersStream` (SSE-стриминг) — вопрос про CAP theorem
+- Выводит замеры времени и токены
+
+### Проверка аудиоустройств (`test/cable_test`)
+
+```bash
+go run ./test/cable_test
+```
+
+Выводит все loopback/capture устройства с пометкой ★ для VB-Cable. Требует CGO.
+
+---
+
+## Финальный статус v4
+
+| Компонент | Статус | Примечание |
+|-----------|--------|------------|
+| Gladia STT (Solaria-1) | ✅ | Двухфазный коннект, стриминг PCM |
+| Gladia Translation (enhanced) | ✅ | Встроенный, EN→RU, ~200ms |
+| LLM (GLM-4.7-Flash) | ✅ | Только подсказки, thinking disabled |
+| Pipeline | ✅ | 9 горутин, синхронный dispatch |
+| GioUI | ✅ | Три зоны: interim / перевод / подсказки |
+| VB-Cable | ✅ | Loopback (собеседник) + Mic (свой голос) |
+| Graceful shutdown | ✅ | ctx cancel → drain channels → flush logs |
+| go vet | ✅ | Чисто |
+| go test -race | ✅ | 8/8 PASS |
+| Интеграционный тест Gladia | ✅ | STT + перевод + LLM — всё работает |

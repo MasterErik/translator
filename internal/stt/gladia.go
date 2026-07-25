@@ -1,0 +1,428 @@
+package stt
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/mastererik/translator/internal/common"
+)
+
+// gladiaBaseURL — базовый URL Gladia Live API v2.
+const gladiaBaseURL = "https://api.gladia.io/v2/live"
+
+// gladiaDialTimeout — таймаут на установку WebSocket-соединения.
+const gladiaDialTimeout = 15 * time.Second
+
+// gladiaHTTPTimeout — таймаут на HTTP POST при инициализации сессии.
+const gladiaHTTPTimeout = 10 * time.Second
+
+// gladiaWriteTimeout — дедлайн на запись фрейма в WebSocket.
+const gladiaWriteTimeout = 5 * time.Second
+
+// gladiaInitRequest — JSON-тело для POST /v2/live при инициализации сессии.
+type gladiaInitRequest struct {
+	Encoding     string               `json:"encoding"`
+	BitDepth     int                  `json:"bit_depth"`
+	SampleRate   int                  `json:"sample_rate"`
+	Channels     int                  `json:"channels"`
+	Model        string               `json:"model"`
+	Endpointing  float64              `json:"endpointing"`
+	LanguageCfg  gladiaLanguageConfig `json:"language_config"`
+	RealtimeProc gladiaRealtimeConfig `json:"realtime_processing"`
+	MessagesCfg  gladiaMessagesConfig `json:"messages_config"`
+}
+
+type gladiaLanguageConfig struct {
+	Languages     []string `json:"languages"`
+	CodeSwitching bool     `json:"code_switching"`
+}
+
+type gladiaRealtimeConfig struct {
+	Translation    bool                 `json:"translation"`
+	TranslationCfg gladiaTranslationCfg `json:"translation_config"`
+}
+
+type gladiaTranslationCfg struct {
+	TargetLanguages []string `json:"target_languages"`
+	Model           string   `json:"model"`
+}
+
+type gladiaMessagesConfig struct {
+	ReceivePartialTranscripts       bool `json:"receive_partial_transcripts"`
+	ReceiveFinalTranscripts         bool `json:"receive_final_transcripts"`
+	ReceiveRealtimeProcessingEvents bool `json:"receive_realtime_processing_events"`
+}
+
+// gladiaInitResponse — ответ от POST /v2/live: id и url для WebSocket.
+type gladiaInitResponse struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// gladiaMessage — общая обёртка для событий Gladia WebSocket.
+type gladiaMessage struct {
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data"`
+}
+
+// gladiaUtterance — текстовый фрагмент с языком.
+type gladiaUtterance struct {
+	Text     string `json:"text"`
+	Language string `json:"language"`
+}
+
+// gladiaTranscriptData — данные события transcript.
+type gladiaTranscriptData struct {
+	ID        string          `json:"id"`
+	IsFinal   bool            `json:"is_final"`
+	Utterance gladiaUtterance `json:"utterance"`
+}
+
+// gladiaTranslationData — данные события translation.
+type gladiaTranslationData struct {
+	UtteranceID         string          `json:"utterance_id"`
+	Utterance           gladiaUtterance `json:"utterance"`
+	TranslatedUtterance gladiaUtterance `json:"translated_utterance"`
+}
+
+// GladiaProvider реализует STTProvider через Gladia Live API.
+//
+// Двухфазный коннект:
+//  1. POST /v2/live → получить {id, url}
+//  2. WebSocket dial к url → отправка PCM, чтение JSON-событий
+//
+// События transcript → промежуточный (Update) или финальный (EndOfTurn) результат.
+// События translation → EventEndOfTurn с ChannelID="translation".
+type GladiaProvider struct {
+	apiKey     string
+	targetLang string
+
+	wsConn  *websocket.Conn
+	audioCh chan []byte
+	textCh  chan common.STTEvent
+
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// NewGladiaProvider создаёт новый GladiaProvider.
+//
+// Параметры:
+//   - apiKey: ключ Gladia API (x-gladia-key)
+//   - targetLang: целевой язык перевода, по умолчанию "ru"
+func NewGladiaProvider(apiKey, targetLang string) *GladiaProvider {
+	if targetLang == "" {
+		targetLang = "ru"
+	}
+	return &GladiaProvider{
+		apiKey:     apiKey,
+		targetLang: targetLang,
+		audioCh:    make(chan []byte, 64),
+		textCh:     make(chan common.STTEvent, 32),
+	}
+}
+
+// Start инициализирует сессию Gladia и запускает фоновые горутины.
+//
+//  1. POST /v2/live → получение WebSocket URL
+//  2. Dial WebSocket
+//  3. Запуск writePump и readPump
+func (g *GladiaProvider) Start(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.cancel != nil {
+		return fmt.Errorf("gladia: уже запущен")
+	}
+
+	g.ctx, g.cancel = context.WithCancel(ctx)
+
+	// Фаза 1: POST /v2/live → получить wsURL.
+	wsURL, err := g.initSession(g.ctx)
+	if err != nil {
+		g.cancel = nil
+		g.ctx = nil
+		return fmt.Errorf("gladia init: %w", err)
+	}
+
+	// Фаза 2: WebSocket dial.
+	dialer := websocket.Dialer{
+		HandshakeTimeout: gladiaDialTimeout,
+	}
+	conn, _, err := dialer.DialContext(g.ctx, wsURL, nil)
+	if err != nil {
+		g.cancel = nil
+		g.ctx = nil
+		return fmt.Errorf("gladia websocket dial: %w", err)
+	}
+	g.wsConn = conn
+
+	slog.Info("gladia: сессия запущена", "wsURL", wsURL)
+
+	go g.writePump()
+	go g.readPump()
+
+	return nil
+}
+
+// Stop останавливает провайдера: отменяет контекст и закрывает WebSocket.
+// Идемпотентен — повторные вызовы безопасны.
+func (g *GladiaProvider) Stop() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.cancel == nil {
+		return nil
+	}
+
+	g.cancel()
+
+	if g.wsConn != nil {
+		_ = g.wsConn.Close()
+		g.wsConn = nil
+	}
+
+	return nil
+}
+
+// AudioStream возвращает канал для отправки PCM-аудио (16 кГц, mono, 16-bit).
+func (g *GladiaProvider) AudioStream() chan<- []byte {
+	return g.audioCh
+}
+
+// TextStream возвращает канал для чтения событий STTEvent.
+func (g *GladiaProvider) TextStream() <-chan common.STTEvent {
+	return g.textCh
+}
+
+// initSession отправляет POST /v2/live с конфигурацией сессии
+// и возвращает WebSocket URL для подключения.
+func (g *GladiaProvider) initSession(ctx context.Context) (string, error) {
+	reqBody := gladiaInitRequest{
+		Encoding:    "wav/pcm",
+		BitDepth:    16,
+		SampleRate:  16000,
+		Channels:    1,
+		Model:       "solaria-1",
+		Endpointing: 0.3,
+		LanguageCfg: gladiaLanguageConfig{
+			Languages:     []string{"en"},
+			CodeSwitching: false,
+		},
+		RealtimeProc: gladiaRealtimeConfig{
+			Translation: true,
+			TranslationCfg: gladiaTranslationCfg{
+				TargetLanguages: []string{g.targetLang},
+				Model:           "enhanced",
+			},
+		},
+		MessagesCfg: gladiaMessagesConfig{
+			ReceivePartialTranscripts:       true,
+			ReceiveFinalTranscripts:         true,
+			ReceiveRealtimeProcessingEvents: true,
+		},
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal init request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, gladiaBaseURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create init request: %w", err)
+	}
+	httpReq.Header.Set("x-gladia-key", g.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: gladiaHTTPTimeout}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("init POST: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("init POST: статус %d (ожидался 201)", resp.StatusCode)
+	}
+
+	var initResp gladiaInitResponse
+	if err := json.NewDecoder(resp.Body).Decode(&initResp); err != nil {
+		return "", fmt.Errorf("decode init response: %w", err)
+	}
+
+	if initResp.URL == "" {
+		return "", fmt.Errorf("init response: пустой url")
+	}
+
+	return initResp.URL, nil
+}
+
+// writePump читает PCM-фреймы из audioCh и отправляет их в WebSocket.
+// Завершается при отмене контекста или закрытии audioCh.
+func (g *GladiaProvider) writePump() {
+	defer func() {
+		g.mu.Lock()
+		if g.wsConn != nil {
+			_ = g.wsConn.Close()
+			g.wsConn = nil
+		}
+		g.mu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case chunk, ok := <-g.audioCh:
+			if !ok {
+				return
+			}
+
+			g.mu.Lock()
+			conn := g.wsConn
+			g.mu.Unlock()
+
+			if conn == nil {
+				return
+			}
+
+			if err := conn.SetWriteDeadline(time.Now().Add(gladiaWriteTimeout)); err != nil {
+				slog.Warn("gladia: set write deadline", "error", err)
+				return
+			}
+
+			if err := conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+				slog.Warn("gladia: ошибка записи в WebSocket", "error", err)
+				return
+			}
+		}
+	}
+}
+
+// readPump читает JSON-сообщения из WebSocket и передаёт их в parseAndEmit.
+// Завершается при отмене контекста или ошибке чтения.
+func (g *GladiaProvider) readPump() {
+	defer func() {
+		g.mu.Lock()
+		if g.wsConn != nil {
+			_ = g.wsConn.Close()
+			g.wsConn = nil
+		}
+		g.mu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		default:
+		}
+
+		g.mu.Lock()
+		conn := g.wsConn
+		g.mu.Unlock()
+
+		if conn == nil {
+			return
+		}
+
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				slog.Debug("gladia: WebSocket закрыт", "error", err)
+			} else {
+				slog.Warn("gladia: ошибка чтения из WebSocket", "error", err)
+			}
+			return
+		}
+
+		g.parseAndEmit(message)
+	}
+}
+
+// parseAndEmit разбирает JSON-сообщение Gladia и маппит его на STTEvent.
+//
+// Маппинг:
+//   - transcript + is_final=false → EventUpdate (промежуточный результат)
+//   - transcript + is_final=true  → EventEndOfTurn (финальный результат)
+//   - translation                 → EventEndOfTurn с ChannelID="translation"
+func (g *GladiaProvider) parseAndEmit(message []byte) {
+	var msg gladiaMessage
+	if err := json.Unmarshal(message, &msg); err != nil {
+		slog.Warn("gladia: не удалось разобрать сообщение", "error", err, "raw", string(message))
+		return
+	}
+
+	switch msg.Type {
+	case "transcript":
+		var data gladiaTranscriptData
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			slog.Warn("gladia: не удалось разобрать transcript", "error", err)
+			return
+		}
+
+		text := data.Utterance.Text
+		if text == "" {
+			return
+		}
+
+		eventType := common.EventUpdate
+		if data.IsFinal {
+			eventType = common.EventEndOfTurn
+		}
+
+		g.emit(common.STTEvent{
+			Text:      text,
+			Event:     eventType,
+			ChannelID: "speaker",
+			Timestamp: time.Now(),
+		})
+
+	case "translation":
+		var data gladiaTranslationData
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			slog.Warn("gladia: не удалось разобрать translation", "error", err)
+			return
+		}
+
+		text := data.TranslatedUtterance.Text
+		if text == "" {
+			return
+		}
+
+		g.emit(common.STTEvent{
+			Text:      text,
+			Event:     common.EventEndOfTurn,
+			ChannelID: "translation",
+			Timestamp: time.Now(),
+		})
+
+	default:
+		// metadata, error и прочие типы игнорируем.
+	}
+}
+
+// emit отправляет STTEvent в textCh. Если канал заполнен или контекст отменён,
+// событие пишется в лог и отбрасывается.
+func (g *GladiaProvider) emit(evt common.STTEvent) {
+	select {
+	case g.textCh <- evt:
+	case <-g.ctx.Done():
+		slog.Warn("gladia: контекст отменён, событие не отправлено", "event", evt.Event)
+	default:
+		slog.Warn("gladia: канал textCh заполнен, событие отброшено", "event", evt.Event)
+	}
+}
+
+// Compile-time interface check.
+var _ STTProvider = (*GladiaProvider)(nil)

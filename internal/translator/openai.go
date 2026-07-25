@@ -49,13 +49,6 @@ func (t *thinkingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	return t.base.RoundTrip(req)
 }
 
-// NewOpenAIProvider creates a new OpenAI-backed LLM provider.
-// If model is empty, it defaults to "gpt-4o-mini".
-// Uses the default OpenAI API base URL (https://api.openai.com/v1).
-func NewOpenAIProvider(apiKey, model string) *OpenAIProvider {
-	return NewOpenAIProviderWithConfig("https://api.openai.com/v1", apiKey, model)
-}
-
 // DisableThinking disables reasoning/thinking mode for models that default to it
 // (e.g. GLM-4.7-Flash). This ensures all tokens go to content, not reasoning_content.
 func (p *OpenAIProvider) DisableThinking() {
@@ -100,47 +93,6 @@ func (p *OpenAIProvider) maxTokensOrZero() int {
 		return p.maxTokens
 	}
 	return 0
-}
-
-// Translate sends the text and conversation history to the OpenAI API
-// and returns the Russian translation. It uses a low temperature (0.1)
-// for deterministic output and preserves IT terminology as instructed
-// by the system prompt.
-//
-// The call respects context deadlines and retries on HTTP 429
-// with exponential backoff (1s, 2s, 4s).
-func (p *OpenAIProvider) Translate(ctx context.Context, text string, history []string) (string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	userPrompt := BuildTranslationPrompt(text, history)
-
-	req := openai.ChatCompletionRequest{
-		Model: p.model,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: SystemPromptTranslation,
-			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: userPrompt,
-			},
-		},
-		Temperature: 0.1,
-		MaxTokens:   p.maxTokens,
-	}
-
-	resp, err := p.createChatCompletionWithRetry(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("translate: %w", err)
-	}
-
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("translate: no choices in response")
-	}
-
-	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
 // GenerateAnswers sends the detected question and CV context to the OpenAI
@@ -215,77 +167,6 @@ func (p *OpenAIProvider) createChatCompletionWithRetry(ctx context.Context, req 
 	}
 
 	return openai.ChatCompletionResponse{}, fmt.Errorf("max retries exceeded: %w", lastErr)
-}
-
-// TranslateStream translates text with streaming output via SSE.
-// Tokens are delivered one-by-one through the returned channel.
-// The channel is closed when translation is complete or on error.
-func (p *OpenAIProvider) TranslateStream(ctx context.Context, text string, history []string) (<-chan string, error) {
-	tokenCh := make(chan string, 64)
-
-	userPrompt := BuildTranslationPrompt(text, history)
-
-	p.mu.Lock()
-	maxTok := p.maxTokens
-	p.mu.Unlock()
-
-	req := openai.ChatCompletionRequest{
-		Model: p.model,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: SystemPromptTranslation,
-			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: userPrompt,
-			},
-		},
-		Temperature: 0.1,
-		MaxTokens:   maxTok,
-		Stream:      true,
-	}
-
-	stream, err := p.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		close(tokenCh)
-		return nil, fmt.Errorf("translate stream: %w", err)
-	}
-
-	go func() {
-		defer close(tokenCh)
-		defer stream.Close()
-
-		for {
-			response, recvErr := stream.Recv()
-			if recvErr != nil {
-				if recvErr.Error() == "EOF" {
-					break
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				select {
-				case tokenCh <- "[ERROR: " + recvErr.Error() + "]":
-				case <-ctx.Done():
-				}
-				return
-			}
-
-			if len(response.Choices) > 0 {
-				delta := response.Choices[0].Delta.Content
-				if delta != "" {
-					select {
-					case tokenCh <- delta:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}()
-
-	return tokenCh, nil
 }
 
 // GenerateAnswersStream генерирует подсказки потоково через SSE.
@@ -435,4 +316,4 @@ func stripBulletPrefix(s string) string {
 
 // Compile-time interface check.
 var _ LLMProvider = (*OpenAIProvider)(nil)
-var _ StreamingTranslator = (*OpenAIProvider)(nil)
+var _ StreamingAnswersProvider = (*OpenAIProvider)(nil)

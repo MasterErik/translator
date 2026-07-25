@@ -19,8 +19,8 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.OpenAIModel == "" {
 		t.Error("OpenAIModel should have a default value")
 	}
-	if cfg.DeepgramModel == "" {
-		t.Error("DeepgramModel should have a default value")
+	if cfg.TargetLang == "" {
+		t.Error("TargetLang should have a default value")
 	}
 	if cfg.TargetLanguage == "" {
 		t.Error("TargetLanguage should have a default value")

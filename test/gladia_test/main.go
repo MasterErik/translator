@@ -1,7 +1,7 @@
-// Deepgram integration test.
-// Usage: go run ./test/deepgram_test [--wav=test.wav] [--text="Hello world"]
+// Gladia integration test.
+// Usage: go run ./test/gladia_test [--wav=test.wav] [--text="Hello world"]
 //
-// Requires: DEEPGRAM_API_KEY and OPENAI_API_KEY in .env or environment.
+// Requires: GLADIA_API_KEY and OPENAI_API_KEY in .env or environment.
 package main
 
 import (
@@ -20,38 +20,43 @@ import (
 func main() {
 	cfg := common.LoadConfig()
 
-	if cfg.DeepgramAPIKey == "" {
-		fmt.Fprintln(os.Stderr, "ERROR: DEEPGRAM_API_KEY not set in .env or environment")
+	if cfg.GladiaAPIKey == "" {
+		_, _ = fmt.Fprintln(os.Stderr, "ERROR: GLADIA_API_KEY not set in .env or environment")
 		os.Exit(1)
 	}
-	if cfg.OpenAIAPIKey == "" {
-		fmt.Fprintln(os.Stderr, "ERROR: OPENAI_API_KEY not set in .env or environment")
+	if cfg.LLMAPIKey == "" {
+		_, _ = fmt.Fprintln(os.Stderr, "ERROR: LLM_API_KEY (or OPENAI_API_KEY) not set in .env or environment")
 		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// --- Test 1: Deepgram STT ---
-	fmt.Println("=== TEST 1: Speech-to-Text (Deepgram) ===")
+	// --- Test 1: Gladia STT ---
+	fmt.Println("=== TEST 1: Speech-to-Text (Gladia) ===")
 	testSTT(ctx, cfg)
 
-	// --- Test 2: OpenAI Translation ---
-	fmt.Println("\n=== TEST 2: Translation (GPT-4o-mini) ===")
-	testTranslation(ctx, cfg)
+	// --- Test 2: OpenAI Answer Generation ---
+	fmt.Println("\n=== TEST 2: Answer Generation (GPT-4o-mini) ===")
+	testAnswerGeneration(ctx, cfg)
 }
 
 func testSTT(ctx context.Context, cfg *common.Config) {
-	prov := stt.NewDeepgramProvider(cfg.DeepgramAPIKey, cfg.DeepgramModel)
+	prov := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang)
 
 	if err := prov.Start(ctx); err != nil {
-		fmt.Printf("  FAIL: Deepgram connect: %v\n", err)
+		fmt.Printf("  FAIL: Gladia connect: %v\n", err)
 		return
 	}
 	defer prov.Stop()
-	fmt.Println("  OK: WebSocket connected to Deepgram")
+	fmt.Println("  OK: WebSocket connected to Gladia")
 
+	// Генерируем тестовый WAV если его нет.
 	wavPath := "test_speech.wav"
+	if _, err := os.Stat(wavPath); os.IsNotExist(err) {
+		fmt.Println("  SKIP: no test_speech.wav — run: python generate_test_wav.py")
+		return
+	}
 	pcm, err := readWAVToPCM(wavPath)
 	if err != nil {
 		fmt.Printf("  SKIP: no test WAV file (%s) — %v\n", wavPath, err)
@@ -113,26 +118,11 @@ loop:
 	}
 }
 
-func testTranslation(ctx context.Context, cfg *common.Config) {
-	prov := translator.NewOpenAIProvider(cfg.OpenAIAPIKey, cfg.OpenAIModel)
-
-	testPhrases := []string{
-		"Hello, could you explain what a deadlock is and how to avoid it in Go?",
-		"I have five years of experience with Kubernetes and microservices.",
-	}
-
-	for _, phrase := range testPhrases {
-		fmt.Printf("\n  Input:  %q\n", phrase)
-		translated, err := prov.Translate(ctx, phrase, nil)
-		if err != nil {
-			fmt.Printf("  FAIL: %v\n", err)
-			continue
-		}
-		fmt.Printf("  Output: %q\n", translated)
-	}
+func testAnswerGeneration(ctx context.Context, cfg *common.Config) {
+	prov := translator.NewOpenAIProviderWithConfig(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.OpenAIModel)
 
 	// Test answer generation.
-	fmt.Println("\n  --- Answer Generation ---")
+	fmt.Println("  --- Answer Generation ---")
 	q := "What is the difference between a mutex and a channel in Go?"
 	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
 	fmt.Printf("  Question: %q\n", q)
@@ -146,7 +136,7 @@ func testTranslation(ctx context.Context, cfg *common.Config) {
 	}
 }
 
-// readWAVToPCM reads a WAV file and returns 16kHz mono PCM bytes suitable for Deepgram.
+// readWAVToPCM reads a WAV file and returns 16kHz mono PCM bytes suitable for Gladia.
 // Handles resampling from any sample rate to 16kHz.
 func readWAVToPCM(path string) ([]byte, error) {
 	f, err := os.Open(path)
