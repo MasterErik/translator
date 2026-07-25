@@ -31,19 +31,14 @@ func NewCapture(config CaptureConfig) *Capture {
 }
 
 // Start initializes audio devices and begins dual-channel capture.
-// It returns two read-only channels — loopbackChan for system audio and
-// micChan for microphone audio — both delivering resampled 16kHz mono PCM.
-// Capture stops when ctx is cancelled; the channels are closed once all
-// devices have stopped and in-flight data is drained.
+// Returns loopbackCh (system audio) and micCh (microphone), both 16kHz mono.
+// Capture stops when ctx is cancelled; channels are closed after drain.
 func (c *Capture) Start(ctx context.Context) (<-chan []byte, <-chan []byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Initialize malgo context.
 	var err error
-	c.ctx, err = malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
-		// Debug-level logging; suppress by default.
-	})
+	c.ctx, err = malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {})
 	if err != nil {
 		return nil, nil, fmt.Errorf("capture: init malgo context: %w", err)
 	}
@@ -51,16 +46,13 @@ func (c *Capture) Start(ctx context.Context) (<-chan []byte, <-chan []byte, erro
 	loopbackCh := make(chan []byte, channelBufferSize)
 	micCh := make(chan []byte, channelBufferSize)
 
-	// Start loopback capture.
 	if err := c.startLoopback(ctx, loopbackCh); err != nil {
 		c.ctx.Uninit()
 		c.ctx.Free()
 		return nil, nil, fmt.Errorf("capture: start loopback: %w", err)
 	}
 
-	// Start microphone capture.
 	if err := c.startMic(ctx, micCh); err != nil {
-		// Clean up loopback if mic fails.
 		c.loopback.Uninit()
 		c.ctx.Uninit()
 		c.ctx.Free()
@@ -102,10 +94,7 @@ func (c *Capture) startLoopback(ctx context.Context, ch chan []byte) error {
 	}
 
 	c.loopback = device
-
-	// Launch shutdown goroutine.
 	go c.monitorShutdown(ctx, device, ch, "loopback")
-
 	return nil
 }
 
@@ -141,17 +130,14 @@ func (c *Capture) startMic(ctx context.Context, ch chan []byte) error {
 	}
 
 	c.mic = device
-
-	// Launch shutdown goroutine.
 	go c.monitorShutdown(ctx, device, ch, "microphone")
-
 	return nil
 }
 
 // findDevice looks up a device by name or returns nil (default) if name is empty.
 func (c *Capture) findDevice(kind malgo.DeviceType, name string) (*malgo.DeviceID, error) {
 	if name == "" {
-		return nil, nil // Use default device.
+		return nil, nil
 	}
 
 	devices, err := c.ctx.Devices(kind)
@@ -168,10 +154,9 @@ func (c *Capture) findDevice(kind malgo.DeviceType, name string) (*malgo.DeviceI
 	return nil, fmt.Errorf("device %q not found", name)
 }
 
-// makeDataCallback returns a malgo DataProc that resamples captured audio
-// and sends it to the provided channel. For capture devices, only the
-// input slice is populated; the output slice is nil.
-func (c *Capture) makeDataCallback(ch chan<- []byte, inputRate int, outputRate int) malgo.DataProc {
+// makeDataCallback returns a malgo DataProc that resamples 48kHz stereo → 16kHz mono
+// and sends to ch. Non-blocking — drops frames under backpressure.
+func (c *Capture) makeDataCallback(ch chan<- []byte, inputRate, outputRate int) malgo.DataProc {
 	return func(output, input []byte, framecount uint32) {
 		if len(input) == 0 {
 			return
@@ -179,33 +164,25 @@ func (c *Capture) makeDataCallback(ch chan<- []byte, inputRate int, outputRate i
 
 		resampled, err := ResampleStereoToMono(input, inputRate, outputRate)
 		if err != nil {
-			// Drop frames that can't be resampled (e.g. partial frames
-			// at device start/stop boundaries).
 			return
 		}
 
 		select {
 		case ch <- resampled:
 		default:
-			// Channel full — drop the frame to avoid blocking the
-			// audio callback. This can happen under extreme backpressure.
 		}
 	}
 }
 
-// monitorShutdown waits for ctx cancellation, then stops the device and
-// closes the output channel after a brief drain period.
+// monitorShutdown waits for ctx cancellation, stops the device, drains and closes the channel.
 func (c *Capture) monitorShutdown(ctx context.Context, device *malgo.Device, ch chan []byte, name string) {
 	<-ctx.Done()
 
-	// Stop and uninitialize the device.
 	_ = device.Stop()
 	device.Uninit()
 
-	// Brief drain: wait for any in-flight callbacks to finish.
 	time.Sleep(time.Duration(c.config.BufferSizeMs) * time.Millisecond)
 
-	// Drain remaining channel items and close.
 	for {
 		select {
 		case <-ch:

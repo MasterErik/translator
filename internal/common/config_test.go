@@ -246,3 +246,89 @@ openai_model: "gpt-4"
 		t.Errorf("SAVE_AUDIO env should override YAML true: got %v, want false", cfg.SaveAudio)
 	}
 }
+
+// TestLLMBaseURLDefault проверяет значение по умолчанию для LLMBaseURL.
+func TestLLMBaseURLDefault(t *testing.T) {
+	os.Unsetenv("LLM_BASE_URL")
+
+	cfg := LoadConfig()
+
+	if cfg.LLMBaseURL != "https://api.openai.com/v1" {
+		t.Errorf("LLMBaseURL default: got %q, want %q", cfg.LLMBaseURL, "https://api.openai.com/v1")
+	}
+}
+
+// TestLLMBaseURLEnv проверяет переопределение LLMBaseURL через env.
+func TestLLMBaseURLEnv(t *testing.T) {
+	os.Setenv("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/")
+	t.Cleanup(func() { os.Unsetenv("LLM_BASE_URL") })
+
+	cfg := LoadConfig()
+
+	if cfg.LLMBaseURL != "https://api.z.ai/api/paas/v4/" {
+		t.Errorf("LLMBaseURL env override: got %q, want %q", cfg.LLMBaseURL, "https://api.z.ai/api/paas/v4/")
+	}
+}
+
+// TestLLMAPIKeyFallback проверяет fallback LLM_API_KEY → OPENAI_API_KEY.
+func TestLLMAPIKeyFallback(t *testing.T) {
+	os.Setenv("OPENAI_API_KEY", "sk-openai-key")
+	os.Unsetenv("LLM_API_KEY")
+	t.Cleanup(func() {
+		os.Unsetenv("OPENAI_API_KEY")
+	})
+
+	cfg := LoadConfig()
+
+	if cfg.LLMAPIKey != "sk-openai-key" {
+		t.Errorf("LLMAPIKey fallback: got %q, want %q", cfg.LLMAPIKey, "sk-openai-key")
+	}
+}
+
+// TestLLMAPIKeyOverride проверяет, что LLM_API_KEY имеет приоритет над OPENAI_API_KEY.
+func TestLLMAPIKeyOverride(t *testing.T) {
+	os.Setenv("OPENAI_API_KEY", "sk-openai-key")
+	os.Setenv("LLM_API_KEY", "sk-glm-key")
+	t.Cleanup(func() {
+		os.Unsetenv("OPENAI_API_KEY")
+		os.Unsetenv("LLM_API_KEY")
+	})
+
+	cfg := LoadConfig()
+
+	if cfg.LLMAPIKey != "sk-glm-key" {
+		t.Errorf("LLMAPIKey override: got %q, want %q", cfg.LLMAPIKey, "sk-glm-key")
+	}
+	// OpenAIAPIKey всё ещё должно быть sk-openai-key.
+	if cfg.OpenAIAPIKey != "sk-openai-key" {
+		t.Errorf("OpenAIAPIKey should be unchanged: got %q", cfg.OpenAIAPIKey)
+	}
+}
+
+// TestLLMBaseURLFromYAML проверяет чтение llm_base_url из YAML.
+func TestLLMBaseURLFromYAML(t *testing.T) {
+	os.Unsetenv("LLM_BASE_URL")
+	os.Unsetenv("OPENAI_MODEL")
+
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	content := `
+llm_base_url: "https://api.z.ai/api/paas/v4/"
+openai_model: "glm-4-flash"
+`
+	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfigFromYAML(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.LLMBaseURL != "https://api.z.ai/api/paas/v4/" {
+		t.Errorf("LLMBaseURL from YAML: got %q, want %q", cfg.LLMBaseURL, "https://api.z.ai/api/paas/v4/")
+	}
+	if cfg.OpenAIModel != "glm-4-flash" {
+		t.Errorf("OpenAIModel from YAML: got %q, want %q", cfg.OpenAIModel, "glm-4-flash")
+	}
+}

@@ -1,17 +1,20 @@
-# Архитектура Translator v2 — AI Interview / Meeting Assistant
+# Архитектура Translator v3 — AI Interview / Meeting Assistant
 
-**Версия:** 2.0 · **Дата:** 2026-07-22
-**Статус:** live-тест пройден, 119 тестов, 0 data race
+**Версия:** 3.0 · **Дата:** 2026-07-23
+**Статус:** стриминг-перевод + трёхзонный UI, все тесты PASS
 
 ## Обзор системы
 
 Приложение реального времени — прозрачный overlay поверх рабочего стола Windows. Переводит речь собеседника (EN→RU), сохраняет IT-термины, генерирует подсказки при детекции вопроса.
 
-**Ключевые изменения v2:**
-- Deepgram Flux `/v2/listen` — встроенный turn detection, EndOfTurn ~260ms
-- Worker pool (N=3) — перевод не блокирует STT-поток
-- MP3/WAV сохранение аудио (go-lame/beep), сжатие ~10x
-- `SAVE_AUDIO` опционально (`.env`), по умолчанию false
+**Ключевые изменения v3:**
+- **Стриминг-перевод** — токены идут в UI инкрементально, без ожидания полного ответа. Замена worker pool на прямые стрим-горутины.
+- **GLM-4.7-Flash** (Z.AI) вместо GPT-4o-mini — задержка ~1s (было 3-5s)
+- **thinking:disabled** — транспортный слой в `openai.go` инжектит `{"thinking":{"type":"disabled"}}` для Z.AI
+- **Трёхзонный UI** — речь (Interim), перевод (скролл 10 строк), подсказки
+- **Цветовой индикатор** — янтарный (pending) → зелёный (streaming) → тёмный (done)
+- **Событийная перерисовка** — `w.Invalidate()` при каждом `AddMessage`
+- **Свежие контексты** — стриминг и подсказки с собственными `context.WithTimeout`
 
 ---
 
@@ -22,10 +25,10 @@
 ```
 Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──► chan speaker (PCM)
 Микрофон     ──► WASAPI Capture           ──► chan mic (PCM)
-                         │                           │
-                         └──────────┬────────────────┘
-                                    ▼
-                            route/merge → AudioStream → Deepgram Flux v2
+                        │                           │
+                        └──────────┬────────────────┘
+                                   ▼
+                           route/merge → AudioStream → Deepgram Flux v2
 ```
 
 | Устройство | Тип WASAPI | Роль |
@@ -35,7 +38,7 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 
 ---
 
-## Многопоточная архитектура (12 горутин)
+## Многопоточная архитектура (9 горутин)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -64,32 +67,25 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
     └───────────────┘           │
             │                   ▼
             ▼           ┌───────────────────┐
-    ┌───────────────┐   │ STT DISPATCH      │  ← ЦЕНТРАЛЬНЫЙ УЗЕЛ
+    ┌───────────────┐   │ DISPATCH          │  ← ЦЕНТРАЛЬНЫЙ УЗЕЛ
     │ AUDIO SAVER   │   │                   │
     │ (опционально) │   │ select {          │
     │               │   │  textStream:      │
     │ PCM → MP3/WAV │   │   interim → UI    │
-    │ (go-lame/beep)│   │   final → worker  │
-    └───────────────┘   │  transResults:    │
-                        │   translation → UI│
+    │ (go-lame/beep)│   │   final → stream  │
+    └───────────────┘   │  streamDone:      │
+                        │   счётчик         │
                         │ }                 │
                         └────────┬──────────┘
                                  │
                     ┌────────────┼────────────┐
                     ▼            ▼            ▼
             ┌──────────┐ ┌──────────┐ ┌──────────┐
-            │WORKER 1  │ │WORKER 2  │ │WORKER 3  │
-            │Translate │ │Translate │ │Translate │
-            │GPT-4o-mini│ │GPT-4o-mini│ │GPT-4o-mini│
-            │+Answers  │ │+Answers  │ │+Answers  │
-            └────┬─────┘ └────┬─────┘ └────┬─────┘
-                 └────────────┼────────────┘
-                              ▼ chan transResults (buf 16)
-                    ┌──────────────────┐
-                    │ STT DISPATCH     │
-                    │ → UI.AddMsg()    │
-                    │ → Logger.LogText │
-                    └──────────────────┘
+            │ STREAM 1 │ │ STREAM 2 │ │ STREAM 3 │
+            │ GLM-4.7  │ │ GLM-4.7  │ │ GLM-4.7  │
+            │ токены→  │ │ токены→  │ │ токены→  │
+            │ UI инкр. │ │ UI инкр. │ │ UI инкр. │
+            └──────────┘ └──────────┘ └──────────┘
 ```
 
 ### Список горутин
@@ -101,11 +97,10 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 | 3 | `capture·mic` | malgo WASAPI mic → chan mic | `runCapture` | ctx.Done() |
 | 4 | `route/merge` | speaker+mic → AudioStream | `runCapture` | chan close |
 | 5 | `stt·deepgram` | Flux v2 WebSocket send/recv | `deepgram.Start()` | `deepgram.Stop()` |
-| 6 | `stt·dispatch` | центральный select: textStream + transResults | `runDispatch()` | textStream close |
+| 6 | `dispatch` | центральный select: textStream + стрим-горутины | `runDispatch()` | textStream close |
 | 7 | `ui·gioui` | GioUI event loop + рендеринг | `runUI()` | DestroyEvent |
 | 8 | `audio·saver` | PCM → MP3/WAV на диск (опционально) | `runCapture` | flush + close |
-| 9–11 | `worker·1..3` | параллельный перевод GPT-4o-mini | dispatch | ctx.Done() |
-| 12 | `logger` | async JSON-логгирование (через канал) | `NewFileSessionLogger()` | `Close()` |
+| 9 | `logger` | async CSV-логгирование (через канал) | `NewFileSessionLogger()` | `Close()` |
 
 ### Каналы
 
@@ -115,7 +110,7 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 | `micPCM` | `chan []byte` | 32 | mic → route |
 | `audioStream` | `chan []byte` | 64 | route → deepgram |
 | `textStream` | `chan STTEvent` | 16 | deepgram → dispatch |
-| `transResults` | `chan transResult` | 16 | workers → dispatch |
+| `streamDone` | `chan struct{}` | 64 | стрим-горутины → dispatch (shutdown) |
 | `logJobs` | `chan logJob` | 256 | dispatch → logger |
 
 ---
@@ -124,16 +119,41 @@ Chrome/Teams ──► CABLE Input (Playback) ──► WASAPI Loopback ──�
 
 ### Interim (промежуточный)
 ```
-PCM → Flux v2 → TurnInfo.Update → textStream → dispatch → UI.AddMsg(interim)
+PCM → Flux v2 → TurnInfo.Update → textStream → dispatch → UI.AddMsg(Interim) → верхняя зона
 ```
 
-### Final (окончательный)
+### Final → Стриминг-перевод
 ```
-PCM → Flux v2 → TurnInfo.EndOfTurn (~260ms) → textStream → dispatch → go worker
-                                                                          │
-                                                              GPT-4o-mini (1-3s)
-                                                                          │
-                                                              transResults → dispatch → UI
+PCM → Flux v2 → EndOfTurn (~260ms) → textStream → dispatch → go handleStreamingTranslation
+                                                                     │
+                                          ┌──────────────────────────┘
+                                          ▼
+                                    [переводится...] → UI (pending, янтарный фон)
+                                          │
+                                          ▼
+                              ProcessFinalTranscriptStream → TranslateStream
+                                          │
+                                    токены → UI инкрементально (streaming, зелёный фон)
+                                          │
+                                          ▼
+                                    финальный перевод → UI (done, тёмный фон)
+                                          │
+                                          ├─ isQuestion? → GenerateAnswers → UI (подсказки)
+                                          └─ history trim (MaxLines)
+```
+
+### UI — три зоны
+```
+┌──────────────────────────┐
+│ I have five years of...  │ ← Interim (речь, 2 строки, серый текст)
+├──────────────────────────┤
+│ У меня пять лет опыта... │ ← Перевод (скролл 10 строк)
+│ Мы используем Redis...    │
+│ [переводится...]          │
+├──────────────────────────┤
+│ 1. Подсказка один        │ ← AnswerCandidates (только для вопросов)
+│ 2. Подсказка два         │
+└──────────────────────────┘
 ```
 
 ### Сохранение аудио (SAVE_AUDIO=true)
@@ -155,31 +175,51 @@ PCM → AudioEncoder → MP3 (go-lame) / WAV (beep) → audio/speaker.mp3
 | KeepAlive | НЕ используется (v1-специфичный) |
 
 **События Flux:**
-- `Update` → interim-транскрипт
-- `EndOfTurn` → финальный транскрипт, запуск перевода
+- `Update` → interim-транскрипт → верхняя зона UI
+- `EndOfTurn` → финальный транскрипт → запуск стриминг-перевода
 - `StartOfTurn` / `TurnResumed` → игнорируются (без транскрипта)
+
+**Фильтрация дублирующих Update:** Deepgram Flux v2 шлёт `Update` на каждый аудио-фрейм (~200ms), даже если транскрипция не изменилась. `DeepgramProvider.lastInterimText` хранит последний промежуточный текст — при совпадении с предыдущим `Update` пропускается. При `EndOfTurn` сбрасывается для следующей фразы. Это снижает нагрузку на UI (лишние `Invalidate`) и уменьшает зашумлённость CSV-лога.
 
 ---
 
-## Translation Engine (worker pool)
+## Translation Engine
 
 ```go
 type TranslationEngine struct {
-    llm       LLMProvider       // GPT-4o-mini
+    llm       LLMProvider       // GLM-4.7-Flash (OpenAI-совместимый)
     window    []string          // sliding window (max 5)
     maxWindow int
     mu        sync.RWMutex
 }
 ```
 
-**Pipeline per EndOfTurn:**
+**Pipeline per EndOfTurn (стриминг):**
 1. Append to sliding window → FIFO, trim to maxWindow
 2. Get history (window except most recent)
-3. Translate(text, history) → Russian (temperature 0.1)
-4. Classify: `isQuestion()` — ? suffix or question words
-5. If question → async GenerateAnswers() (temperature 0.3)
+3. `TranslateStream(ctx, text, history)` → токены в канал (temperature 0.1)
+4. Токены инкрементально → UI (streaming-статус)
+5. По завершении → классификация `IsQuestion()`
+6. Если вопрос → `GenerateAnswers()` (temperature 0.3)
 
-**Worker pool:** N=3 горутины (настраивается через `TRANSLATION_WORKERS` env). Каждая вызывает `ProcessFinalTranscript()` → результат в `transResults` → dispatch → UI.
+**Фолбэк:** если провайдер не реализует `StreamingTranslator` → синхронный `Translate` через канал из одного элемента.
+
+---
+
+## LLM: GLM-4.7-Flash (Z.AI)
+
+| Параметр | Значение |
+|---|---|
+| Endpoint | `https://api.z.ai/api/paas/v4/chat/completions` |
+| Модель | `glm-4.7-flash` |
+| thinking | **disabled** (транспортный слой `thinkingTransport`) |
+| max_tokens | `LLM_MAX_TOKENS` (default 1024) |
+| temperature | 0.1 (translate), 0.3 (answers) |
+| Стриминг | SSE, `stream: true` |
+
+**thinkingTransport** — `http.RoundTripper` в `openai.go`, инжектит `{"thinking":{"type":"disabled"}}` в тело запроса к `api.z.ai`. Без этого все токены уходят в `reasoning_content`, а `content` остаётся пустым.
+
+**Перевод на GLM не использует Translation Agent** (`/api/v1/agents`). Agent API в 3-4 раза медленнее из-за встроенной трёхэтапной рефлексии (перевод → анализ → исправление) и требует платного аккаунта.
 
 ---
 
@@ -198,14 +238,15 @@ type LLMProvider interface {
     GenerateAnswers(ctx, question, cvContext) ([]string, error)
 }
 
-type SessionLogger interface {
-    LogText(event STTEvent) error
-    SaveAudioChunk(channelID string, pcm []byte) error
-    Close() error
+type StreamingTranslator interface {
+    LLMProvider
+    TranslateStream(ctx, text, history) (<-chan string, error)
 }
 
-type AudioEncoder interface {
-    Write(pcm []int16) error
+type SessionLogger interface {
+    LogText(event STTEvent) error
+    LogTranslation(event, translation, answers []string) error
+    SaveAudioChunk(channelID string, pcm []byte) error
     Close() error
 }
 ```
@@ -216,25 +257,30 @@ type AudioEncoder interface {
 
 Приоритет: **env > .env > config.yaml**
 
+### config.yaml
 ```yaml
-# config.yaml
 deepgram_model: "flux-general-en"
-openai_model: "gpt-4o-mini"
+openai_model: "glm-4.7-flash"
+llm_base_url: "https://api.z.ai/api/paas/v4/"
 target_language: "ru"
 log_dir: "./logs"
-audio_sample_rate: 16000
 window_size: 5
 save_audio: false
 loopback_device: "CABLE Input (VB-Audio Virtual Cable)"
 ```
 
+### .env
 ```env
-# .env
 DEEPGRAM_API_KEY=...
 OPENAI_API_KEY=...
-SAVE_AUDIO=true           # опциональное сохранение аудио
-TRANSLATION_WORKERS=3     # количество параллельных переводчиков
+LLM_BASE_URL=https://api.z.ai/api/paas/v4/
+OPENAI_MODEL=glm-4.7-flash
+LLM_MAX_TOKENS=1024
 LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
+OVERLAY_WIDTH=800
+OVERLAY_HEIGHT=400
+OVERLAY_MAX_LINES=10
+SAVE_AUDIO=true
 ```
 
 ---
@@ -245,12 +291,11 @@ LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
 2. capture.Close() → malgo устройства остановлены
 3. speakerPCM/micPCM закрыты → route завершается
 4. deepgram.Stop() → WebSocket close → textStream закрыт
-5. workers завершаются по ctx.Done()
-6. transResults закрыт → dispatch завершается
-7. ui получает DestroyEvent
-8. audio·saver flush + close (MP3 финальный фрейм)
-9. logger.Close() → drain logJobs → flush JSON
-10. os.Exit(0)
+5. dispatch: закрытие textStream → ожидание активных стримов (streamDone)
+6. ui: `system.ActionClose` → слив DestroyEvent
+7. audio·saver flush + close (MP3 финальный фрейм)
+8. logger.Close() → drain logJobs → flush CSV
+9. os.Exit(0)
 
 ---
 
@@ -260,20 +305,19 @@ LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
 |---|---|---|
 | Audio Capture | `malgo` (CGo) | WASAPI Loopback + Mic |
 | STT | Deepgram Flux `/v2/listen` | Turn-aware streaming |
-| LLM | `go-openai` → GPT-4o-mini | Перевод + подсказки |
+| LLM | `go-openai` → GLM-4.7-Flash | Стриминг-перевод + подсказки |
 | MP3 | `go-lame` (CGo) | PCM → MP3 кодирование |
 | WAV | `beep/v2` | WAV fallback |
-| UI | `gioui.org` v0.10.1 | Прозрачный overlay |
+| UI | `gioui.org` v0.10.1 | Прозрачный трёхзонный overlay |
 | Win32 | `golang.org/x/sys/windows` | WS_EX_TOPMOST/LAYERED |
-| Logger | `encoding/json` | JSON Lines |
 
 ---
 
-## Задержка (было → стало)
+## Задержка
 
 ```
-v1 (Nova-2):  речь → тишина ~1-2с → is_final → перевод 1-3с  =  2-5 сек
-v2 (Flux):    речь → EndOfTurn ~260ms → worker pool → перевод  =  ~1.2-3.2 сек
+Flux EndOfTurn:  ~260ms (от речи до финального транскрипта)
+GLM-4.7-Flash:   ~1s   (от запроса до полного перевода, thinking:disabled)
+Первый токен:    ~0ms  (стриминг, UI обновляется инкрементально)
+Общая:           ~1.3s (речь → перевод на экране)
 ```
-
-Выигрыш: ~1-2 секунды за счёт Flux turn detection + параллелизм worker pool.

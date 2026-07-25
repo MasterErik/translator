@@ -38,6 +38,14 @@ type DeepgramProvider struct {
 	mu      sync.Mutex
 	ctx     context.Context
 	cancel  context.CancelFunc
+
+	// lastFinalText хранит последний финальный текст (EndOfTurn)
+	// для фильтрации дублирующих EagerEndOfTurn.
+	lastFinalText string
+
+	// lastInterimText хранит последний промежуточный текст (Update)
+	// для фильтрации дублирующих Update от Deepgram Flux v2.
+	lastInterimText string
 }
 
 // NewDeepgramProvider creates a new DeepgramProvider with the given API key and model.
@@ -230,7 +238,7 @@ func (d *DeepgramProvider) writePump() {
 }
 
 // readPump reads WebSocket JSON messages from Deepgram and parses transcription results.
-// It emits interim (IsFinal=false) and final (IsFinal=true) STTEvent values on textCh.
+// It emits interim (Event=EventUpdate) and final (Event=EventEndOfTurn) STTEvent values on textCh.
 func (d *DeepgramProvider) readPump() {
 	defer func() {
 		d.mu.Lock()
@@ -302,7 +310,7 @@ type fluxResponse struct {
 }
 
 // parseAndEmit parses a Deepgram Flux TurnInfo JSON message and emits the appropriate STTEvent.
-// Update events → interim (IsFinal=false), EndOfTurn → final (IsFinal=true).
+// Update events → interim (Event=EventUpdate), EndOfTurn → final (Event=EventEndOfTurn).
 // StartOfTurn and TurnResumed are skipped (no transcript).
 func (d *DeepgramProvider) parseAndEmit(message []byte) {
 	var resp fluxResponse
@@ -328,18 +336,41 @@ func (d *DeepgramProvider) parseAndEmit(message []byte) {
 		return
 	}
 
-	// EndOfTurn → final, everything else (Update, EagerEndOfTurn) → interim.
-	isFinal := (resp.Event == "EndOfTurn")
+	// EndOfTurn → final, EagerEndOfTurn → пропускаем если дублирует последний EndOfTurn,
+	// Update → interim; пропускаем дублирующие Update (Deepgram Flux v2 шлёт на каждый фрейм).
+	// всё остальное (Update) → interim.
 
-	event := common.STTEvent{
+	if resp.Event == common.EventUpdate {
+		// Фильтрация: Deepgram Flux v2 шлёт Update на каждый аудио-фрейм (~200ms),
+		// даже если транскрипция не изменилась. Пропускаем дубликаты.
+		if transcript == d.lastInterimText {
+			return
+		}
+		d.lastInterimText = transcript
+	}
+
+	if resp.Event == common.EventEagerEndOfTurn {
+		// Фильтрация: EagerEndOfTurn может дублировать последний EndOfTurn.
+		// Если текст совпадает — пропускаем, иначе отправляем как interim.
+		if transcript == d.lastFinalText {
+			return
+		}
+	}
+
+	if resp.Event == common.EventEndOfTurn {
+		d.lastFinalText = transcript
+		d.lastInterimText = "" // сброс для следующей фразы
+	}
+
+	evt := common.STTEvent{
 		Text:      transcript,
-		IsFinal:   isFinal,
+		Event:     resp.Event,
 		ChannelID: "speaker", // Flux is single-channel; caller can override downstream
 		Timestamp: time.Now(),
 	}
 
 	select {
-	case d.textCh <- event:
+	case d.textCh <- evt:
 	case <-d.ctx.Done():
 	default:
 		slog.Warn("deepgram: text channel full, dropping event")

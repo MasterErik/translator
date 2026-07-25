@@ -81,6 +81,37 @@ func NewEngine(llm LLMProvider, maxWindow int) *TranslationEngine {
 	}
 }
 
+// ProcessFinalTranscriptStream обрабатывает финальную транскрипцию
+// с потоковой передачей токенов перевода. Токены отправляются в канал
+// по мере генерации — UI обновляется инкрементально без ожидания полного ответа.
+//
+// Канал закрывается после завершения перевода. После закрытия канала
+// нужно проверить IsQuestion и при необходимости запустить генерацию подсказок.
+func (e *TranslationEngine) ProcessFinalTranscriptStream(ctx context.Context, text string) (<-chan string, error) {
+	// 1. Add to sliding window.
+	e.addToWindow(text)
+
+	// 2. Get window history for context.
+	history := e.getWindowHistory()
+
+	// 3. Check if streaming is supported.
+	streamer, ok := e.llm.(StreamingTranslator)
+	if !ok {
+		// Fallback: синхронный перевод через канал из одного элемента.
+		ch := make(chan string, 1)
+		translation, err := e.llm.Translate(ctx, text, history)
+		if err != nil {
+			close(ch)
+			return nil, fmt.Errorf("process final transcript stream: %w", err)
+		}
+		ch <- translation
+		close(ch)
+		return ch, nil
+	}
+
+	return streamer.TranslateStream(ctx, text, history)
+}
+
 // ProcessFinalTranscript processes a final (non-interim) transcript:
 //  1. Adds the text to the sliding window history.
 //  2. Calls the LLM provider to translate the text (EN→RU).
@@ -106,7 +137,7 @@ func (e *TranslationEngine) ProcessFinalTranscript(ctx context.Context, text str
 	}
 
 	// 4. Classify.
-	isQuestion := isQuestion(text)
+	isQuestion := IsQuestion(text)
 
 	slog.Info("транскрипт обработан",
 		"text", text,
@@ -172,11 +203,11 @@ func (e *TranslationEngine) getWindowHistory() []string {
 	return history
 }
 
-// isQuestion performs a heuristic check to determine whether the given
+// IsQuestion performs a heuristic check to determine whether the given
 // English text is a question. It checks for:
 //   - A trailing question mark.
 //   - Leading question words or phrases.
-func isQuestion(text string) bool {
+func IsQuestion(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return false
@@ -196,4 +227,30 @@ func isQuestion(text string) bool {
 	}
 
 	return false
+}
+
+// GenerateAnswers делегирует генерацию подсказок LLM-провайдеру.
+func (e *TranslationEngine) GenerateAnswers(ctx context.Context, question string) ([]string, error) {
+	return e.llm.GenerateAnswers(ctx, question, "")
+}
+
+// GenerateAnswersStream делегирует потоковую генерацию подсказок LLM-провайдеру.
+// Токены доставляются по одному через возвращаемый канал.
+// Канал закрывается по завершении генерации или при ошибке.
+func (e *TranslationEngine) GenerateAnswersStream(ctx context.Context, question string) (<-chan string, error) {
+	streamer, ok := e.llm.(StreamingTranslator)
+	if !ok {
+		// Fallback: синхронная генерация через канал из N элементов.
+		answers, err := e.llm.GenerateAnswers(ctx, question, "")
+		if err != nil {
+			return nil, fmt.Errorf("generate answers stream: %w", err)
+		}
+		ch := make(chan string, len(answers))
+		for _, a := range answers {
+			ch <- a
+		}
+		close(ch)
+		return ch, nil
+	}
+	return streamer.GenerateAnswersStream(ctx, question, "")
 }

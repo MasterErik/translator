@@ -5,21 +5,21 @@ package logger
 
 import "github.com/mastererik/translator/internal/common"
 
-// SessionLogger is the interface for session recording and persistence.
-// It logs STT events as structured records and saves raw PCM audio
-// chunks for each audio channel.
+// SessionLogger — интерфейс логирования сессии.
+// FileSessionLogger пишет CSV + MP3. NopSessionLogger — заглушка.
 type SessionLogger interface {
-	// LogText records an STT transcription event to the session log.
-	// Events from different channels ("speaker", "mic") are all written
-	// to the same session file, typically in JSON Lines format.
+	// LogText записывает STT-событие в лог.
 	LogText(event common.STTEvent) error
 
-	// SaveAudioChunk appends a raw PCM audio chunk to the file for the
-	// given channelID ("speaker" or "mic"). Chunks are written
-	// sequentially to preserve timing.
+	// LogTranslation записывает результат перевода (с подсказками).
+	LogTranslation(event common.STTEvent, translation string, answers []string) error
+
+	// SaveAudioChunk добавляет PCM-фрагмент в аудио-файл.
 	SaveAudioChunk(channelID string, pcm []byte) error
 
-	// Close flushes all buffered data to disk and closes open file handles.
-	// Must be called during graceful shutdown to avoid data loss.
+	// LogDebug записывает отладочное сообщение.
+	LogDebug(msg string) error
+
+	// Close завершает логгер, сбрасывает буферы, закрывает файлы.
 	Close() error
 }

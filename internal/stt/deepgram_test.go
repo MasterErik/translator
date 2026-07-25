@@ -102,7 +102,7 @@ func makeFinalResponse(transcript string) []byte {
 }
 
 // TestDeepgramProvider_InterimEvents verifies that interim transcription results
-// are properly parsed and emitted as STTEvent with IsFinal=false.
+// are properly parsed and emitted as STTEvent with Event=EventUpdate.
 func TestDeepgramProvider_InterimEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -123,8 +123,8 @@ func TestDeepgramProvider_InterimEvents(t *testing.T) {
 
 	select {
 	case event := <-provider.textCh:
-		if event.IsFinal {
-			t.Errorf("expected interim event (IsFinal=false), got IsFinal=true")
+		if event.Event != common.EventUpdate {
+			t.Errorf("expected interim event (Event=EventUpdate), got Event=%s", event.Event)
 		}
 		if event.Text != "Hello world" {
 			t.Errorf("expected text 'Hello world', got '%s'", event.Text)
@@ -138,7 +138,7 @@ func TestDeepgramProvider_InterimEvents(t *testing.T) {
 }
 
 // TestDeepgramProvider_FinalEvents verifies that final transcription results
-// are properly parsed and emitted as STTEvent with IsFinal=true.
+// are properly parsed and emitted as STTEvent with Event=EventEndOfTurn.
 func TestDeepgramProvider_FinalEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -156,8 +156,8 @@ func TestDeepgramProvider_FinalEvents(t *testing.T) {
 
 	select {
 	case event := <-provider.textCh:
-		if !event.IsFinal {
-			t.Errorf("expected final event (IsFinal=true), got IsFinal=false")
+		if event.Event != common.EventEndOfTurn {
+			t.Errorf("expected final event (Event=EventEndOfTurn), got Event=%s", event.Event)
 		}
 		if event.Text != "This is a final result" {
 			t.Errorf("expected text 'This is a final result', got '%s'", event.Text)
@@ -190,8 +190,8 @@ func TestDeepgramProvider_EndOfTurn(t *testing.T) {
 
 	select {
 	case event := <-provider.textCh:
-		if !event.IsFinal {
-			t.Errorf("expected final event for EndOfTurn, got IsFinal=false")
+		if event.Event != common.EventEndOfTurn {
+			t.Errorf("expected final event for EndOfTurn, got Event=%s", event.Event)
 		}
 		if event.Text != "speech final text" {
 			t.Errorf("expected 'speech final text', got '%s'", event.Text)
@@ -332,7 +332,7 @@ func TestDeepgramProvider_WebSocketIntegration(t *testing.T) {
 	hasInterim := false
 	hasFinal := false
 	for _, ev := range events {
-		if !ev.IsFinal {
+		if ev.Event != common.EventEndOfTurn {
 			hasInterim = true
 		} else {
 			hasFinal = true

@@ -24,6 +24,15 @@ type Config struct {
 	// Read from OPENAI_API_KEY environment variable.
 	OpenAIAPIKey string
 
+	// LLMBaseURL is the base URL for the OpenAI-compatible API.
+	// Supports any OpenAI-compatible provider (OpenAI, Z.AI GLM, etc.).
+	// Read from LLM_BASE_URL environment variable. Default: "https://api.openai.com/v1".
+	LLMBaseURL string `yaml:"llm_base_url"`
+
+	// LLMAPIKey is the API key for the LLM service.
+	// Read from LLM_API_KEY environment variable. Falls back to OPENAI_API_KEY.
+	LLMAPIKey string
+
 	// OpenAIModel specifies the OpenAI model to use for translation and answer generation.
 	// Default: "gpt-4o-mini".
 	OpenAIModel string `yaml:"openai_model"`
@@ -68,10 +77,29 @@ type Config struct {
 	// Default: false. Read from SAVE_AUDIO env or YAML (true/1/yes → enabled).
 	// Приоритет: env > .env > yaml.
 	SaveAudio bool `yaml:"save_audio"`
+
+	// MaxTokens limits the maximum number of output tokens for LLM requests.
+	// 0 means provider default (no limit). Read from LLM_MAX_TOKENS env.
+	MaxTokens int
+
+	// OverlayWidth is the overlay window width in pixels. Default: 800.
+	// Read from OVERLAY_WIDTH env.
+	OverlayWidth int
+
+	// OverlayHeight is the overlay window height in pixels. Default: 650.
+	// Read from OVERLAY_HEIGHT env.
+	OverlayHeight int
+
+	// OverlayMaxLines is the maximum number of translation history lines.
+	// Default: 5. Read from OVERLAY_MAX_LINES env.
+	OverlayMaxLines int
 }
 
 // applyDefaults sets reasonable default values for any unconfigured fields.
 func (c *Config) applyDefaults() {
+	if c.LLMBaseURL == "" {
+		c.LLMBaseURL = "https://api.openai.com/v1"
+	}
 	if c.OpenAIModel == "" {
 		c.OpenAIModel = "gpt-4o-mini"
 	}
@@ -93,6 +121,15 @@ func (c *Config) applyDefaults() {
 	if c.WindowSize == 0 {
 		c.WindowSize = 5
 	}
+	if c.OverlayWidth == 0 {
+		c.OverlayWidth = 800
+	}
+	if c.OverlayHeight == 0 {
+		c.OverlayHeight = 650
+	}
+	if c.OverlayMaxLines == 0 {
+		c.OverlayMaxLines = 10
+	}
 }
 
 // loadFromEnv reads API keys and overridable settings from environment variables.
@@ -113,6 +150,16 @@ func (c *Config) loadFromEnv() {
 	}
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		c.OpenAIAPIKey = v
+	}
+	if v := os.Getenv("LLM_BASE_URL"); v != "" {
+		c.LLMBaseURL = v
+	}
+	if v := os.Getenv("LLM_API_KEY"); v != "" {
+		c.LLMAPIKey = v
+	}
+	// Fallback: LLM_API_KEY → OPENAI_API_KEY.
+	if c.LLMAPIKey == "" {
+		c.LLMAPIKey = c.OpenAIAPIKey
 	}
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		c.OpenAIModel = v
@@ -152,6 +199,26 @@ func (c *Config) loadFromEnv() {
 	}
 	if v := os.Getenv("SAVE_AUDIO"); v != "" {
 		c.SaveAudio = isTruthy(v)
+	}
+	if v := os.Getenv("LLM_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.MaxTokens = n
+		}
+	}
+	if v := os.Getenv("OVERLAY_WIDTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.OverlayWidth = n
+		}
+	}
+	if v := os.Getenv("OVERLAY_HEIGHT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.OverlayHeight = n
+		}
+	}
+	if v := os.Getenv("OVERLAY_MAX_LINES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.OverlayMaxLines = n
+		}
 	}
 }
 

@@ -346,7 +346,7 @@ func TestIsQuestion_EdgeCases(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := isQuestion(tt.text)
+		got := IsQuestion(tt.text)
 		if got != tt.expected {
 			t.Errorf("isQuestion(%q) = %v, want %v", tt.text, got, tt.expected)
 		}

@@ -5,7 +5,7 @@
 //   - Проверяет наличие CABLE Input (loopback) и CABLE Output (capture)
 //   - Захватывает 5 секунд тишины через loopback для проверки инициализации
 //
-// Использование: go run ./cmd/cable_test
+// Использование: go run ./test/cable_test
 package main
 
 import (

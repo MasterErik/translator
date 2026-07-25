@@ -1,8 +1,11 @@
 package translator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -19,21 +22,84 @@ const maxRetries = 3
 //
 // All exported methods are safe for concurrent use.
 type OpenAIProvider struct {
-	client *openai.Client
-	model  string
-	mu     sync.Mutex
+	client          *openai.Client
+	model           string
+	maxTokens       int
+	disableThinking bool
+	mu              sync.Mutex
+}
+
+// thinkingTransport injects "thinking":{"type":"disabled"} into JSON request bodies.
+// GLM-4.7-Flash defaults to reasoning mode; this disables it for plain translation.
+type thinkingTransport struct {
+	base http.RoundTripper
+}
+
+func (t *thinkingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err == nil && strings.Contains(req.URL.Host, "api.z.ai") {
+			// Inject "thinking":{"type":"disabled"} after the opening brace.
+			body = bytes.Replace(body, []byte(`{`), []byte(`{"thinking":{"type":"disabled"},`), 1)
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
+	return t.base.RoundTrip(req)
 }
 
 // NewOpenAIProvider creates a new OpenAI-backed LLM provider.
 // If model is empty, it defaults to "gpt-4o-mini".
+// Uses the default OpenAI API base URL (https://api.openai.com/v1).
 func NewOpenAIProvider(apiKey, model string) *OpenAIProvider {
+	return NewOpenAIProviderWithConfig("https://api.openai.com/v1", apiKey, model)
+}
+
+// DisableThinking disables reasoning/thinking mode for models that default to it
+// (e.g. GLM-4.7-Flash). This ensures all tokens go to content, not reasoning_content.
+func (p *OpenAIProvider) DisableThinking() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.disableThinking = true
+}
+
+// NewOpenAIProviderWithConfig creates a new LLM provider with a custom
+// base URL and API key. Supports any OpenAI-compatible API.
+//
+// baseURL — e.g. "https://api.openai.com/v1" or "https://api.deepinfra.com/v1/openai".
+// apiKey  — the API key for the provider.
+// model   — model name; defaults to "gpt-4o-mini" if empty.
+func NewOpenAIProviderWithConfig(baseURL, apiKey, model string) *OpenAIProvider {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
+	cfg := openai.DefaultConfig(apiKey)
+	cfg.BaseURL = baseURL
+	// Inject thinking-disabled transport for Z.AI (GLM-4.7-Flash reasoning mode).
+	cfg.HTTPClient = &http.Client{
+		Transport: &thinkingTransport{base: http.DefaultTransport},
+	}
 	return &OpenAIProvider{
-		client: openai.NewClient(apiKey),
+		client: openai.NewClientWithConfig(cfg),
 		model:  model,
 	}
+}
+
+// SetMaxTokens sets the maximum number of output tokens for all requests.
+// 0 means provider default (unlimited).
+func (p *OpenAIProvider) SetMaxTokens(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.maxTokens = n
+}
+
+// maxTokensOrZero returns MaxTokens only if > 0 (0 means "not set" in API).
+func (p *OpenAIProvider) maxTokensOrZero() int {
+	if p.maxTokens > 0 {
+		return p.maxTokens
+	}
+	return 0
 }
 
 // Translate sends the text and conversation history to the OpenAI API
@@ -62,6 +128,7 @@ func (p *OpenAIProvider) Translate(ctx context.Context, text string, history []s
 			},
 		},
 		Temperature: 0.1,
+		MaxTokens:   p.maxTokens,
 	}
 
 	resp, err := p.createChatCompletionWithRetry(ctx, req)
@@ -102,6 +169,7 @@ func (p *OpenAIProvider) GenerateAnswers(ctx context.Context, question string, c
 			},
 		},
 		Temperature: 0.3,
+		MaxTokens:   p.maxTokens,
 	}
 
 	resp, err := p.createChatCompletionWithRetry(ctx, req)
@@ -149,6 +217,148 @@ func (p *OpenAIProvider) createChatCompletionWithRetry(ctx context.Context, req 
 	return openai.ChatCompletionResponse{}, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
+// TranslateStream translates text with streaming output via SSE.
+// Tokens are delivered one-by-one through the returned channel.
+// The channel is closed when translation is complete or on error.
+func (p *OpenAIProvider) TranslateStream(ctx context.Context, text string, history []string) (<-chan string, error) {
+	tokenCh := make(chan string, 64)
+
+	userPrompt := BuildTranslationPrompt(text, history)
+
+	p.mu.Lock()
+	maxTok := p.maxTokens
+	p.mu.Unlock()
+
+	req := openai.ChatCompletionRequest{
+		Model: p.model,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: SystemPromptTranslation,
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: userPrompt,
+			},
+		},
+		Temperature: 0.1,
+		MaxTokens:   maxTok,
+		Stream:      true,
+	}
+
+	stream, err := p.client.CreateChatCompletionStream(ctx, req)
+	if err != nil {
+		close(tokenCh)
+		return nil, fmt.Errorf("translate stream: %w", err)
+	}
+
+	go func() {
+		defer close(tokenCh)
+		defer stream.Close()
+
+		for {
+			response, recvErr := stream.Recv()
+			if recvErr != nil {
+				if recvErr.Error() == "EOF" {
+					break
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case tokenCh <- "[ERROR: " + recvErr.Error() + "]":
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			if len(response.Choices) > 0 {
+				delta := response.Choices[0].Delta.Content
+				if delta != "" {
+					select {
+					case tokenCh <- delta:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	return tokenCh, nil
+}
+
+// GenerateAnswersStream генерирует подсказки потоково через SSE.
+// Токены доставляются по одному через возвращаемый канал.
+// Канал закрывается по завершении генерации или при ошибке.
+func (p *OpenAIProvider) GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error) {
+	tokenCh := make(chan string, 64)
+
+	userPrompt := BuildAnswerPrompt(question, cvContext)
+
+	p.mu.Lock()
+	maxTok := p.maxTokens
+	p.mu.Unlock()
+
+	req := openai.ChatCompletionRequest{
+		Model: p.model,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: SystemPromptAnswerGen,
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: userPrompt,
+			},
+		},
+		Temperature: 0.3,
+		MaxTokens:   maxTok,
+		Stream:      true,
+	}
+
+	stream, err := p.client.CreateChatCompletionStream(ctx, req)
+	if err != nil {
+		close(tokenCh)
+		return nil, fmt.Errorf("generate answers stream: %w", err)
+	}
+
+	go func() {
+		defer close(tokenCh)
+		defer stream.Close()
+
+		for {
+			response, recvErr := stream.Recv()
+			if recvErr != nil {
+				if recvErr.Error() == "EOF" {
+					break
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case tokenCh <- "[ERROR: " + recvErr.Error() + "]":
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			if len(response.Choices) > 0 {
+				delta := response.Choices[0].Delta.Content
+				if delta != "" {
+					select {
+					case tokenCh <- delta:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	return tokenCh, nil
+}
+
 // isRateLimitError checks if the error message indicates an HTTP 429
 // rate-limit response from the OpenAI API.
 func isRateLimitError(err error) bool {
@@ -174,14 +384,12 @@ func parseAnswerHints(raw string) []string {
 			continue
 		}
 
-		// Strip common bullet/numbering prefixes.
 		clean := stripBulletPrefix(trimmed)
 		if clean != "" {
 			hints = append(hints, clean)
 		}
 	}
 
-	// Limit to at most 3 hints.
 	if len(hints) > 3 {
 		hints = hints[:3]
 	}
@@ -191,9 +399,7 @@ func parseAnswerHints(raw string) []string {
 
 // stripBulletPrefix removes common list markers from the beginning of a line.
 // Supported formats: "1. ", "1) ", "- ", "* ", "• ".
-// If the entire string is just a bullet marker (e.g., "-" or "1."), returns "".
 func stripBulletPrefix(s string) string {
-	// Try numbered prefixes like "1. " or "1) ".
 	for i := 0; i < len(s); i++ {
 		if s[i] >= '0' && s[i] <= '9' {
 			continue
@@ -202,32 +408,31 @@ func stripBulletPrefix(s string) string {
 			if i+1 < len(s) && s[i+1] == ' ' {
 				return strings.TrimSpace(s[i+2:])
 			}
-			// Bare numbered marker like "1." or "1)" with nothing after.
 			return ""
 		}
 		break
 	}
 
-	// Try bullet markers.
 	if len(s) >= 2 && s[1] == ' ' {
 		switch s[0] {
 		case '-', '*':
 			return strings.TrimSpace(s[2:])
 		}
 	}
-	// Bare bullet marker like "-" or "*" with nothing after.
 	if len(s) == 1 && (s[0] == '-' || s[0] == '*') {
 		return ""
 	}
 
-	// Handle Unicode bullet (•) which is 3 bytes in UTF-8.
 	if strings.HasPrefix(s, "• ") {
 		return strings.TrimSpace(s[3:])
 	}
-	// Bare Unicode bullet.
 	if s == "•" {
 		return ""
 	}
 
 	return s
 }
+
+// Compile-time interface check.
+var _ LLMProvider = (*OpenAIProvider)(nil)
+var _ StreamingTranslator = (*OpenAIProvider)(nil)

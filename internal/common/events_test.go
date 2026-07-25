@@ -10,7 +10,7 @@ func TestSTTEventCreation(t *testing.T) {
 	ts := time.Now()
 	evt := STTEvent{
 		Text:      "Hello, world",
-		IsFinal:   true,
+		Event:     EventEndOfTurn,
 		ChannelID: "speaker",
 		Timestamp: ts,
 		Error:     nil,
@@ -19,8 +19,8 @@ func TestSTTEventCreation(t *testing.T) {
 	if evt.Text != "Hello, world" {
 		t.Errorf("Text: got %q, want %q", evt.Text, "Hello, world")
 	}
-	if !evt.IsFinal {
-		t.Error("IsFinal should be true")
+	if evt.Event != EventEndOfTurn {
+		t.Errorf("Event: got %q, want %q", evt.Event, EventEndOfTurn)
 	}
 	if evt.ChannelID != "speaker" {
 		t.Errorf("ChannelID: got %q, want %q", evt.ChannelID, "speaker")
@@ -36,7 +36,7 @@ func TestSTTEventCreation(t *testing.T) {
 func TestSTTEventWithError(t *testing.T) {
 	evt := STTEvent{
 		Text:      "",
-		IsFinal:   true,
+		Event:     EventEndOfTurn,
 		ChannelID: "mic",
 		Timestamp: time.Now(),
 		Error:     errors.New("connection lost"),
@@ -56,13 +56,13 @@ func TestSTTEventWithError(t *testing.T) {
 func TestSTTEventInterim(t *testing.T) {
 	evt := STTEvent{
 		Text:      "Hel",
-		IsFinal:   false,
+		Event:     EventUpdate,
 		ChannelID: "speaker",
 		Timestamp: time.Now(),
 	}
 
-	if evt.IsFinal {
-		t.Error("interim event should have IsFinal=false")
+	if evt.Event != EventUpdate {
+		t.Error("interim event should have Event=EventUpdate")
 	}
 }
 

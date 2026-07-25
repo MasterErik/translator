@@ -29,7 +29,7 @@ func TestConcurrentLogTextAndSaveAudioChunk(t *testing.T) {
 				if j%2 == 0 {
 					_ = l.LogText(common.STTEvent{
 						Text:      "concurrent",
-						IsFinal:   true,
+						Event:     common.EventEndOfTurn,
 						ChannelID: "speaker",
 					})
 				} else {
@@ -77,7 +77,7 @@ func TestConcurrentMixedChannels(t *testing.T) {
 				_ = l.LogText(common.STTEvent{
 					Text:      "mixed channels",
 					ChannelID: channels[id%2],
-					IsFinal:   j%10 == 0,
+					Event:     common.EventEndOfTurn,
 				})
 			}
 		}(i)

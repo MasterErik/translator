@@ -1,4 +1,8 @@
+//go:build ignore
+// +build ignore
+
 // Package main — worker pool для асинхронного перевода.
+// deprecated: worker pool заменён стриминг-диспатчем (dispatch.go).
 package main
 
 import (

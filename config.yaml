@@ -1,7 +1,14 @@
 # Translator — non-secret configuration
 # API keys are in .env file (not here — never commit API keys!)
 
-# OpenAI model for translation and answer generation
+# LLM base URL — supports any OpenAI-compatible provider.
+# OpenAI:      https://api.openai.com/v1
+# Z.AI GLM:    https://api.z.ai/api/paas/v4/
+llm_base_url: "https://api.openai.com/v1"
+
+# LLM model — supports any model on the configured base_url.
+# OpenAI:      gpt-4o-mini (default)
+# Z.AI GLM:    glm-4.7-flash (бесплатный, ~0.4s latency, 2-3x быстрее GPT-4o-mini)
 openai_model: "gpt-4o-mini"
 
 # Deepgram model for speech-to-text

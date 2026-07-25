@@ -3,6 +3,7 @@ package translator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -350,4 +351,183 @@ func TestStripBulletPrefix(t *testing.T) {
 			t.Errorf("stripBulletPrefix(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
+}
+
+// TestNewOpenAIProviderWithConfig_CustomBaseURL проверяет создание провайдера
+// с кастомным base_url (например, для Z.AI GLM).
+func TestNewOpenAIProviderWithConfig_CustomBaseURL(t *testing.T) {
+	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
+		resp := openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionChoice{
+				{
+					Message: openai.ChatCompletionMessage{
+						Content: "Привет, мир",
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	// Создаём провайдер с кастомным base_url (симулируем GLM API).
+	provider := NewOpenAIProviderWithConfig(server.URL+"/v1", "sk-glm-test-key", "glm-4-flash")
+	ctx := context.Background()
+
+	if provider.model != "glm-4-flash" {
+		t.Errorf("Model = %q, want %q", provider.model, "glm-4-flash")
+	}
+
+	result, err := provider.Translate(ctx, "Hello, world", nil)
+	if err != nil {
+		t.Fatalf("Translate() error = %v", err)
+	}
+
+	if result != "Привет, мир" {
+		t.Errorf("Translate() = %q, want %q", result, "Привет, мир")
+	}
+}
+
+// TestNewOpenAIProviderWithConfig_DefaultModel проверяет, что пустая модель
+// даёт значение по умолчанию.
+func TestNewOpenAIProviderWithConfig_DefaultModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	provider := NewOpenAIProviderWithConfig(server.URL+"/v1", "sk-key", "")
+	if provider.model != "gpt-4o-mini" {
+		t.Errorf("Default model = %q, want %q", provider.model, "gpt-4o-mini")
+	}
+}
+
+// TestStreamingTranslate проверяет стриминговый перевод с mock SSE сервером.
+func TestStreamingTranslate(t *testing.T) {
+	// Создаём mock сервер, возвращающий SSE-поток.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("streaming not supported")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Отправляем токены по одному.
+		tokens := []string{"При", "вет", ", ", "м", "ир"}
+		for _, token := range tokens {
+			data := fmt.Sprintf(`data: {"choices":[{"delta":{"content":"%s"}}]}`, token)
+			w.Write([]byte(data + "\n\n"))
+			flusher.Flush()
+		}
+		// Финальное сообщение с finish_reason.
+		w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	ctx := context.Background()
+
+	tokenCh, err := provider.TranslateStream(ctx, "Hello, world", nil)
+	if err != nil {
+		t.Fatalf("TranslateStream() error = %v", err)
+	}
+
+	var received []string
+	for token := range tokenCh {
+		received = append(received, token)
+	}
+
+	// Собираем полный текст.
+	fullText := strings.Join(received, "")
+	if fullText != "Привет, мир" {
+		t.Errorf("Full translation = %q, want %q", fullText, "Привет, мир")
+	}
+
+	// Проверяем что токены приходят инкрементально (не менее 2 токенов).
+	if len(received) < 2 {
+		t.Errorf("Expected at least 2 tokens, got %d: %v", len(received), received)
+	}
+}
+
+// TestStreamingTranslate_EmptyResponse проверяет стриминг с пустым ответом.
+func TestStreamingTranslate_EmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		// Только [DONE] без токенов.
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	ctx := context.Background()
+
+	tokenCh, err := provider.TranslateStream(ctx, "Hello", nil)
+	if err != nil {
+		t.Fatalf("TranslateStream() error = %v", err)
+	}
+
+	var received []string
+	for token := range tokenCh {
+		received = append(received, token)
+	}
+
+	if len(received) != 0 {
+		t.Errorf("Expected 0 tokens, got %d: %v", len(received), received)
+	}
+}
+
+// TestStreamingTranslate_ContextCancellation проверяет отмену контекста
+// во время стриминга.
+func TestStreamingTranslate_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Отправляем один токен и зависаем — имитируем медленный стрим.
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Ждём пока клиент не отменит контекст (закроет соединение).
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	tokenCh, err := provider.TranslateStream(ctx, "Hello", nil)
+	if err != nil {
+		// Это приемлемо — ошибка при открытии потока.
+		return
+	}
+
+	// Читаем один токен, потом контекст отменяется.
+	<-tokenCh
+	// Канал должен закрыться при отмене контекста.
+	// Ждём закрытия или таймаута.
+	for range tokenCh {
+		// drain
+	}
+}
+
+// TestOpenAIProvider_ImplementsStreaming проверяет, что OpenAIProvider
+// реализует интерфейс StreamingTranslator.
+func TestOpenAIProvider_ImplementsStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+
+	// Compile-time check: provider satisfies StreamingTranslator.
+	var _ StreamingTranslator = provider
 }

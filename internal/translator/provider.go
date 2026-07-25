@@ -22,3 +22,24 @@ type LLMProvider interface {
 	// cvContext may be empty.
 	GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error)
 }
+
+// StreamingTranslator extends LLMProvider with streaming translation.
+// Tokens are delivered one-by-one through a channel, enabling
+// incremental UI updates (typewriter effect) and reducing perceived latency.
+//
+// The channel is closed when translation is complete or on error.
+// Implementations must ensure the channel is always closed.
+type StreamingTranslator interface {
+	LLMProvider
+
+	// TranslateStream translates text with streaming output.
+	// Returns a channel that receives translation tokens one at a time.
+	// The last value on the channel is the complete translation,
+	// followed by channel close.
+	TranslateStream(ctx context.Context, text string, history []string) (<-chan string, error)
+
+	// GenerateAnswersStream генерирует подсказки потоково.
+	// Возвращает канал с токенами ответа. Канал закрывается
+	// по завершении генерации или при ошибке.
+	GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error)
+}

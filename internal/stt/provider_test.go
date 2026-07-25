@@ -17,7 +17,7 @@ func TestSTTProviderInterface(t *testing.T) {
 	// Verify that common.STTEvent can be used with the interface.
 	_ = common.STTEvent{
 		Text:      "test",
-		IsFinal:   true,
+		Event:     common.EventEndOfTurn,
 		ChannelID: "speaker",
 	}
 }

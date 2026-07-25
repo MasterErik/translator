@@ -38,8 +38,7 @@ type wavEncoder struct {
 	samples   []int16
 }
 
-// newMP3Encoder создаёт MP3-файл и инициализирует go-lame writer
-// с параметрами 16000 Hz, mono, quality=5.
+// newMP3Encoder создаёт MP3-файл с параметрами 16000 Hz, mono, quality=5.
 func newMP3Encoder(dir, channelID string) (*mp3Encoder, error) {
 	path := filepath.Join(dir, channelID+".mp3")
 	f, err := os.Create(path)
@@ -119,14 +118,11 @@ func (e *wavEncoder) Close() error {
 }
 
 // pcmStreamer адаптирует срез []int16 (mono) к интерфейсу beep.Streamer.
-// beep использует [2]float64 для стерео; для mono заполняется только [0].
 type pcmStreamer struct {
 	data []int16
 	pos  int
 }
 
-// Stream заполняет samples значениями из внутреннего буфера.
-// Возвращает n — количество записанных сэмплов, ok=false когда буфер исчерпан.
 func (s *pcmStreamer) Stream(samples [][2]float64) (n int, ok bool) {
 	for i := range samples {
 		if s.pos >= len(s.data) {

@@ -6,18 +6,20 @@
 ## Возможности
 
 - **Двухканальный захват аудио** — VB-Cable (собеседник) + микрофон
-- **Распознавание речи** — Deepgram WebSocket /v2/listen (Flux), задел под локальный Sherpa-onnx
-- **Перевод** — GPT-4o-mini с сохранением IT-терминов (Deadlock, Kubernetes, CQRS…)
+- **Распознавание речи** — Deepgram WebSocket `/v2/listen` (Flux), задел под локальный Sherpa-onnx
+- **Стриминг-перевод** — GLM-4.7-Flash (Z.AI), токены в UI инкрементально, задержка ~1s
+- **Трёхзонный UI** — текущая речь / история перевода (10 строк) / подсказки
+- **Цветовой индикатор** — янтарный (ожидание) → зелёный (стриминг) → тёмный (готово)
 - **Подсказки** — 2–3 тезиса ответа при детекции вопроса
 - **Прозрачный оверлей** — GioUI, всегда поверх окон, не перехватывает фокус
-- **Логирование** — JSON-транскрипты + PCM-дампы аудио
+- **Логирование** — CSV-транскрипты + MP3/WAV дампы аудио
 
 ## Требования
 
 - **Go 1.22+**
 - **GCC (MinGW-w64)** — обязателен для production-сборки, путь: MSYS2 `C:\msys64\ucrt64\bin`
 - **VB-Cable** ([vb-audio.com/Cable](https://vb-audio.com/Cable/)) — виртуальный аудиокабель
-- **API-ключи:** Deepgram (STT) + OpenAI (перевод)
+- **API-ключи:** Deepgram (STT) + Z.AI (перевод, OpenAI-совместимый)
 
 ## Быстрый старт
 
@@ -32,148 +34,103 @@ cd translator
 
 ### Production (полная, с реальным аудио)
 
-**Требуется GCC в PATH.** Без GCC получится сборка-заглушка — аудио не пишется (см. раздел «Устранение неполадок»).
+**Требуется GCC в PATH.** Без GCC получится сборка-заглушка — аудио не пишется.
 
 ```bash
-# Убедиться что GCC доступен
 export PATH="/c/msys64/ucrt64/bin:$PATH"
-
-# Полная сборка
-go build -o translator.exe ./cmd/app
+go build -o translator.exe .
 ```
 
 Результат: `translator.exe` в корне проекта.
 
 ### Для разработки и тестов (без GCC)
 
-Если GCC недоступен, сборка использует заглушку захвата аудио (тишина вместо реального звука).
-STT, перевод и GioUI при этом работают — можно тестировать логику без аудиожелеза.
+STT, перевод и GioUI работают — можно тестировать логику без аудиожелеза.
 
 ```bash
-# Явно отключить CGO
-CGO_ENABLED=0 go build -o translator.exe ./cmd/app
+CGO_ENABLED=0 go build -o translator.exe .
 ```
 
 ## Запуск
 
 ```bash
-# Собранным .exe
 ./translator.exe
-
-# Или напрямую
-go run ./cmd/app
+# или
+go run .
 ```
 
-Остановка: `Ctrl+C` — корректное завершение, логи сохраняются в `logs/`.
-
-Логи выводятся в stderr в JSON-формате (slog). Пример нормального запуска:
-
-```json
-{"msg":"translator запускается","deepgram_model":"flux-general-en","openai_model":"gpt-4o-mini"}
-{"msg":"доступные аудиоустройства","loopback":["CABLE Input ...",...],"capture":[...]}
-{"msg":"создание захвата аудио","loopback_device":"CABLE Input (VB-Audio Virtual Cable)","mic_device":"<системный по умолчанию>"}
-{"msg":"translator работает, Ctrl+C для остановки"}
-```
+Остановка: `Ctrl+C` или закрытие окна из контекстного меню таскбара.
 
 ## Конфигурация
 
-### API-ключи (`.env`)
+### API-ключи и модель (`.env`)
 
 ```env
 DEEPGRAM_API_KEY=ваш_deepgram_ключ
-OPENAI_API_KEY=ваш_openai_ключ
+OPENAI_API_KEY=ваш_zai_ключ
+LLM_BASE_URL=https://api.z.ai/api/paas/v4/
+OPENAI_MODEL=glm-4.7-flash
+LLM_MAX_TOKENS=1024
 ```
 
 ### Настройки аудио
 
-Имена устройств задаются в `.env`, `config.yaml` или переменных окружения.
-Приоритет: **env-переменные > `.env` > `config.yaml` > системные по умолчанию**.
-
-**.env (рекомендуется для translator.exe):**
-
 ```env
 LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
 MIC_DEVICE=Microphone (Realtek High Definition Audio)
+SAVE_AUDIO=true
 ```
 
-**config.yaml:**
+### Настройки оверлея
+
+```env
+OVERLAY_WIDTH=800
+OVERLAY_HEIGHT=400
+OVERLAY_MAX_LINES=10
+```
+
+### config.yaml (несекретные параметры)
 
 ```yaml
-loopback_device: "CABLE Input (VB-Audio Virtual Cable)"
-mic_device:     "Microphone (Realtek High Definition Audio)"
+deepgram_model: "flux-general-en"
+openai_model: "glm-4.7-flash"
+llm_base_url: "https://api.z.ai/api/paas/v4/"
+window_size: 5
+save_audio: false
 ```
 
-Если поля пусты — используются системные устройства по умолчанию (звук из динамиков).
+Приоритет: **env > .env > config.yaml**
 
-### Как узнать имена устройств
-
-**Способ 1 — встроенный cable_test (рекомендуется):**
+### Как узнать имена аудиоустройств
 
 ```bash
-go run ./cmd/cable_test
+go run ./test/cable_test
 ```
 
-Выводит все loopback/capture устройства с пометкой ★ для устройств VB-Cable
-и делает пробный 5-секундный захват.
-
-**Способ 2 — PowerShell:**
-
-```powershell
-Install-Module -Name AudioDeviceCmdlets -Scope CurrentUser
-Get-AudioDevice -List          # все устройства
-Get-AudioDevice -Playback      # воспроизведение → для LOOPBACK_DEVICE
-Get-AudioDevice -Recording     # запись → для MIC_DEVICE
-```
-
-**Способ 3 — настройки Windows:**
-Параметры → Звук → Управление звуковыми устройствами.
+Выводит все loopback/capture устройства с пометкой ★ для VB-Cable.
 
 ## Настройка аудиоканалов
-
-Приложение захватывает два аудиопотока одновременно:
 
 | Канал | Тип WASAPI | Устройство | Назначение |
 |-------|-----------|-----------|------------|
 | **Loopback** | Playback | `CABLE Input` (VB-Cable) | Речь собеседника → STT → перевод |
 | **Микрофон** | Recording | Системный микрофон | Ваш голос → логирование |
 
-### Как работает VB-Cable
-
 ```
 Chrome/Teams → CABLE Input (Playback) → WASAPI Loopback → Translator
 Микрофон     → WASAPI Capture          → Translator
 ```
 
-1. Установите VB-Cable с [vb-audio.com/Cable](https://vb-audio.com/Cable/)
-2. В настройках звука приложения для звонков (Zoom, Teams, Meet) выберите `CABLE Input` как устройство вывода
-3. В `.env` или `config.yaml` укажите:
-   - `LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)`
-   - `MIC_DEVICE` — ваш физический микрофон
-4. Приложение читает звук из CABLE Input (loopback) и микрофона, преобразует 48kHz Stereo → 16kHz Mono, отправляет в Deepgram
-
-### Без VB-Cable
-
-Оставьте `LOOPBACK_DEVICE` пустым — захватывается системный звук по умолчанию.
-Подходит для тестов, но **смешивает ваш голос с голосом собеседника**
-(двухканальное разделение без VB-Cable невозможно).
-
 ## Устранение неполадок
 
 ### «translator запускается (stub-захват, без CGO)»
 
-Сборка прошла без GCC — захват аудио работает в режиме заглушки (тишина).
-Реальный звук не пишется, устройства не перечисляются.
-
-**Решение:** добавить GCC в PATH перед сборкой:
-
+Сборка без GCC — аудио не пишется. Добавить GCC в PATH:
 ```bash
 export PATH="/c/msys64/ucrt64/bin:$PATH"
-go build -o translator.exe ./cmd/app
 ```
 
 ### «C compiler "gcc" not found»
-
-GCC не установлен или не в PATH. Установить через MSYS2:
 
 ```bash
 pacman -S mingw-w64-ucrt-x86_64-gcc
@@ -181,59 +138,52 @@ pacman -S mingw-w64-ucrt-x86_64-gcc
 
 ### «устройство не найдено среди loopback-устройств»
 
-Проверьте, что в `LOOPBACK_DEVICE` указано **Playback**-устройство (не Recording).
-`CABLE Input` — Playback, `CABLE Output` — Recording. Для loopback нужно `CABLE Input`.
+`LOOPBACK_DEVICE` должно быть **Playback**-устройством. VB-Cable: `CABLE Input` = Playback, `CABLE Output` = Recording.
 
-Запустите `go run ./cmd/cable_test` чтобы увидеть полный список.
+### Пустой перевод / английский текст вместо перевода
 
-### go test -race не работает
-
-Race detector требует CGO: `export PATH="/c/msys64/ucrt64/bin:$PATH"`.
+- Проверить `LLM_BASE_URL` и `OPENAI_API_KEY` в `.env`
+- Проверить `LLM_MAX_TOKENS` ≥ 1024 (reasoning-токены!)
+- `thinking:disabled` включён автоматически для `api.z.ai`
 
 ## Тесты
 
 ```bash
 export PATH="/c/msys64/ucrt64/bin:$PATH"
-
 go test ./... -count=1        # все тесты
 go test -race ./...           # детектор гонок
 go vet ./...                  # статический анализ
 ```
 
-## Ручное тестирование STT и перевода
+## Ручное тестирование
 
 ```bash
-python generate_test_wav.py         # сгенерировать тестовую речь (Windows TTS)
-go run ./cmd/manual_test            # проверить STT + перевод на реальных API
-```
-
-## Проверка VB-Cable
-
-```bash
-go run ./cmd/cable_test             # список устройств + пробный захват
+go run ./test/llm_test          # тест перевода (GLM-4.7-Flash, стриминг, подсказки)
+go run ./test/cable_test        # проверка VB-Cable
+go run ./test/deepgram_test     # STT + перевод на реальных API
 ```
 
 ## Структура проекта
 
 ```
-cmd/
-  app/              точка входа + graceful shutdown
-  cable_test/       проверка VB-Cable (перечисление устройств + пробный захват)
-  manual_test/      ручной тест STT + перевода (Deepgram + OpenAI)
+test/
+  cable_test/       проверка VB-Cable
+  llm_test/         интеграционный тест LLM (перевод + стриминг + подсказки)
+  deepgram_test/    ручной тест STT + перевода
 internal/
-  common/           Config, STTEvent, UIEvent
-  capture/          malgo: loopback + микрофон, ресамплер 48→16kHz Stereo→Mono
-  stt/              DeepgramProvider, SherpaOnnxProvider (заглушка)
-  translator/       OpenAIProvider, TranslationEngine, промпты
-  ui/               GioUI-оверлей, Win32 WS_EX_TOPMOST/LAYERED
-  logger/           FileSessionLogger: JSON + PCM-дамп
+  common/           Config, STTEvent
+  capture/          malgo: loopback + микрофон, ресамплер
+  stt/              DeepgramProvider (Flux v2), SherpaOnnxProvider (заглушка)
+  translator/       OpenAIProvider (GLM-4.7-Flash), TranslationEngine, промпты
+  ui/               GioUI трёхзонный оверлей (Interim / Перевод / Подсказки)
+  logger/           FileSessionLogger: CSV + MP3/WAV аудио
 ```
 
 ## Документация
 
-- `ARCHITECTURE.md` — полная архитектура, потоки данных, схема VB-Cable
+- `ARCHITECTURE.md` — полная архитектура v3, потоки данных, схема горутин
 - `AGENTS.md` — стандарты кода (Go, concurrency, тестирование)
-- `.hermes/plans/translator.md` — план реализации с отметками о выполнении
+- `.hermes/plans/` — планы реализации
 
 ## Лицензия
 

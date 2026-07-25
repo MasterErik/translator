@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 package main
 
 import (
@@ -108,7 +111,7 @@ func TestWorkerPool(t *testing.T) {
 		jobs <- transJob{
 			event: common.STTEvent{
 				Text:      fmt.Sprintf("text %d", i),
-				IsFinal:   true,
+				Event:     common.EventEndOfTurn,
 				ChannelID: "speaker",
 				Timestamp: time.Now(),
 			},
@@ -164,7 +167,7 @@ func TestWorkerErrorHandling(t *testing.T) {
 	jobs <- transJob{
 		event: common.STTEvent{
 			Text:      "error test",
-			IsFinal:   true,
+			Event:     common.EventEndOfTurn,
 			ChannelID: "speaker",
 			Timestamp: time.Now(),
 		},

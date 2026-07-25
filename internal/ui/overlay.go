@@ -2,9 +2,10 @@ package ui
 
 import (
 	"context"
+	"image"
 	"image/color"
+	"log/slog"
 	"sync"
-	"time"
 
 	"gioui.org/app"
 	"gioui.org/io/system"
@@ -17,29 +18,28 @@ import (
 	"gioui.org/widget/material"
 )
 
-// Overlay manages a GioUI window that displays translated subtitles
-// and answer candidates in a two-zone transparent overlay.
-//
-// It is safe for concurrent use: AddMessage and GetMessages are
-// protected by a read-write mutex.
+// Overlay — прозрачное окно с четырьмя зонами.
 type Overlay struct {
 	cfg      OverlayConfig
 	messages []UIMessage
 	mu       sync.RWMutex
 	shutdown chan struct{}
+
+	invalidate func()
 }
 
-// NewOverlay creates a new Overlay with the given configuration.
-// The overlay is not started until Run is called.
 func NewOverlay(cfg OverlayConfig) *Overlay {
+	if cfg.Width <= 0 {
+		cfg.Width = 800
+	}
+	if cfg.Height <= 0 {
+		cfg.Height = 400
+	}
 	if cfg.FontSize <= 0 {
 		cfg.FontSize = 18
 	}
-	if cfg.TopZoneRatio <= 0 || cfg.TopZoneRatio > 1 {
-		cfg.TopZoneRatio = 0.6
-	}
-	if cfg.Title == "" {
-		cfg.Title = "Translator Overlay"
+	if cfg.MaxLines <= 0 {
+		cfg.MaxLines = 10
 	}
 	return &Overlay{
 		cfg:      cfg,
@@ -48,62 +48,113 @@ func NewOverlay(cfg OverlayConfig) *Overlay {
 	}
 }
 
-// AddMessage appends a UIMessage to the overlay's message buffer.
-// It is safe for concurrent use.
+// AddMessage — Interim и AnswerCandidates заменяются. Translation "done" добавляется,
+// pending/streaming заменяют последний незавершённый перевод. History — просто append.
 func (o *Overlay) AddMessage(msg UIMessage) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.messages = append(o.messages, msg)
+
+	switch msg.Type {
+	case Interim:
+		// Только последний interim.
+		for i := len(o.messages) - 1; i >= 0; i-- {
+			if o.messages[i].Type == Interim {
+				o.messages[i] = msg
+				o.invalidateIf()
+				return
+			}
+		}
+		o.messages = append(o.messages, msg)
+
+	case Translation:
+		if msg.MsgStatus == "done" {
+			// Удаляем pending/streaming, добавляем done.
+			o.removePendingTranslations()
+			o.messages = append(o.messages, msg)
+		} else {
+			// pending/streaming: заменяем последний незавершённый.
+			for i := len(o.messages) - 1; i >= 0; i-- {
+				if o.messages[i].Type == Translation && o.messages[i].MsgStatus != "done" {
+					o.messages[i] = msg
+					o.invalidateIf()
+					return
+				}
+			}
+			o.messages = append(o.messages, msg)
+		}
+
+	case AnswerCandidates:
+		for i := len(o.messages) - 1; i >= 0; i-- {
+			if o.messages[i].Type == AnswerCandidates {
+				o.messages[i] = msg
+				o.invalidateIf()
+				return
+			}
+		}
+		o.messages = append(o.messages, msg)
+
+	case History:
+		// История: просто добавляем, не заменяем.
+		o.messages = append(o.messages, msg)
+
+	default:
+		o.messages = append(o.messages, msg)
+	}
+
+	o.invalidateIf()
 }
 
-// GetMessages returns a copy of all messages currently in the overlay buffer.
-// It is safe for concurrent use.
+func (o *Overlay) invalidateIf() {
+	if o.invalidate != nil {
+		o.invalidate()
+	}
+}
+
+func (o *Overlay) removePendingTranslations() {
+	for i := len(o.messages) - 1; i >= 0; i-- {
+		if o.messages[i].Type == Translation && o.messages[i].MsgStatus != "done" {
+			o.messages = append(o.messages[:i], o.messages[i+1:]...)
+		}
+	}
+}
+
 func (o *Overlay) GetMessages() []UIMessage {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	result := make([]UIMessage, len(o.messages))
-	copy(result, o.messages)
-	return result
+	out := make([]UIMessage, len(o.messages))
+	copy(out, o.messages)
+	return out
 }
 
-// Run starts the GioUI window and enters the event loop. It blocks until
-// the provided context is cancelled or the window is destroyed.
-//
-// Run configures the window with the title and size from OverlayConfig,
-// and calls app.TopMost(true) for always-on-top behavior. On Windows,
-// it additionally calls setTopmost after window creation for WS_EX_LAYERED
-// and WS_EX_TRANSPARENT extended styles (transparency + click-through).
-//
-// Run returns nil on normal shutdown; if the context is cancelled it
-// returns ctx.Err(). If the window is destroyed externally it returns
-// the error from the destroy event.
+// ── GioUI Window ──
+
 func (o *Overlay) Run(ctx context.Context) error {
 	var w app.Window
-
 	w.Option(
-		app.Title(o.cfg.Title),
+		app.Title(""),
 		app.Size(unit.Dp(o.cfg.Width), unit.Dp(o.cfg.Height)),
 		app.TopMost(true),
 	)
+	o.invalidate = func() { w.Invalidate() }
 
 	th := material.NewTheme()
 	var ops op.Ops
 
-	// Apply additional Windows extended styles after a short delay
-	// to allow the window HWND to be created.
 	go o.applyWindowStyles()
-
 	defer close(o.shutdown)
 
-	// Event loop.
+	slog.Info("UI-оверлей запущен", "width", o.cfg.Width, "height", o.cfg.Height)
+
 	for {
 		select {
 		case <-ctx.Done():
-			// Request window close and drain remaining events.
 			w.Perform(system.ActionClose)
-			// Drain one more event to process the close.
-			w.Event()
-			return ctx.Err()
+			for {
+				evt := w.Event()
+				if _, ok := evt.(app.DestroyEvent); ok {
+					return ctx.Err()
+				}
+			}
 		default:
 		}
 
@@ -113,172 +164,267 @@ func (o *Overlay) Run(ctx context.Context) error {
 			return e.Err
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
-
-			// Render the two-zone overlay.
 			o.render(gtx, th)
-
 			e.Frame(gtx.Ops)
 		}
 	}
 }
 
-// WaitShutdown blocks until Run() has finished and the shutdown channel
-// is closed. Safe to call from any goroutine.
-func (o *Overlay) WaitShutdown() {
-	<-o.shutdown
-}
+func (o *Overlay) WaitShutdown()      { <-o.shutdown }
+func (o *Overlay) applyWindowStyles() {}
 
-// applyWindowStyles finds the window HWND by title and applies Windows
-// extended styles for transparency and click-through. It retries with
-// backoff since the HWND may not be immediately available.
-func (o *Overlay) applyWindowStyles() {
-	// Wait briefly for the window to be created.
-	time.Sleep(200 * time.Millisecond)
+// ── Rendering: четыре зоны ──
 
-	for i := 0; i < 20; i++ {
-		hwnd, err := findWindowHWND(o.cfg.Title)
-		if err != nil {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		if err := setTopmost(hwnd); err != nil {
-			// Non-fatal: the overlay still works without extended styles.
-			return
-		}
-		return
-	}
-}
-
-// render draws the two-zone overlay layout into the provided graphics context.
-// The top zone (TopZoneRatio% height) displays the latest Translation message
-// against a semi-transparent dark background. The bottom zone displays
-// numbered answer candidates with a light-green tint.
 func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensions {
-	msgs := o.GetMessages()
+	o.mu.RLock()
+	interim := o.lastInterim()
+	streaming, hasStreaming := o.streamingTranslation()
+	lastDone, hasDone := o.lastDone()
+	answers, hasAnswers := o.lastAnswers()
+	history := o.historyMessages()
+	o.mu.RUnlock()
 
-	// Background: semi-transparent dark.
-	bgColor := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
+	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
+	if hasStreaming {
+		bg = statusColor(streaming.MsgStatus)
+	}
+	paintBackground(gtx, bg)
 
-	// Fill the entire window with the background color.
-	paintBackground(gtx, bgColor)
+	fs := o.cfg.FontSize
 
-	// Render the two zones stacked vertically.
-	layout.Flex{
-		Axis: layout.Vertical,
-	}.Layout(gtx,
-		layout.Flexed(float32(o.cfg.TopZoneRatio), func(gtx layout.Context) layout.Dimensions {
-			return layoutTopZoneContent(gtx, th, msgs, o.cfg.FontSize)
+	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// 1. Речь.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutInterim(gtx, th, interim, fs+2)
 		}),
-		layout.Flexed(float32(1.0-o.cfg.TopZoneRatio), func(gtx layout.Context) layout.Dimensions {
-			return layoutBottomZoneContent(gtx, th, msgs, o.cfg.FontSize)
+
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutZoneSeparator(gtx)
+		}),
+
+		// 2. Перевод.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutTranslation(gtx, th, lastDone, hasDone, streaming, hasStreaming, fs)
+		}),
+
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutZoneSeparator(gtx)
+		}),
+
+		// 3. Подсказки.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !hasAnswers {
+				return layout.Dimensions{}
+			}
+			return layoutAnswers(gtx, th, answers, fs)
+		}),
+
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutZoneSeparator(gtx)
+		}),
+
+		// 4. История (скролл).
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layoutHistory(gtx, th, history, fs)
 		}),
 	)
 
-	return layout.Dimensions{
-		Size: gtx.Constraints.Max,
+	return layout.Dimensions{Size: gtx.Constraints.Max}
+}
+
+func (o *Overlay) lastInterim() UIMessage {
+	for i := len(o.messages) - 1; i >= 0; i-- {
+		if o.messages[i].Type == Interim {
+			return o.messages[i]
+		}
+	}
+	return UIMessage{}
+}
+
+func (o *Overlay) streamingTranslation() (UIMessage, bool) {
+	for i := len(o.messages) - 1; i >= 0; i-- {
+		if o.messages[i].Type == Translation && o.messages[i].MsgStatus != "done" {
+			return o.messages[i], true
+		}
+	}
+	return UIMessage{}, false
+}
+
+func (o *Overlay) lastDone() (UIMessage, bool) {
+	for i := len(o.messages) - 1; i >= 0; i-- {
+		if o.messages[i].Type == Translation && o.messages[i].MsgStatus == "done" {
+			return o.messages[i], true
+		}
+	}
+	return UIMessage{}, false
+}
+
+func (o *Overlay) lastAnswers() (UIMessage, bool) {
+	for i := len(o.messages) - 1; i >= 0; i-- {
+		if o.messages[i].Type == AnswerCandidates && len(o.messages[i].Answers) > 0 {
+			return o.messages[i], true
+		}
+	}
+	return UIMessage{}, false
+}
+
+func (o *Overlay) historyMessages() []UIMessage {
+	var out []UIMessage
+	for _, m := range o.messages {
+		if m.Type == History {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// ── Zone renderers ──
+
+// layoutZoneSeparator — разделитель между зонами (3px).
+func layoutZoneSeparator(gtx layout.Context) layout.Dimensions {
+	h := 3
+	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, h)}
+	defer rect.Push(gtx.Ops).Pop()
+	paint.Fill(gtx.Ops, color.NRGBA{R: 60, G: 60, B: 80, A: 255})
+	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, h)}
+}
+
+func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
+	if msg.Text == "" {
+		return layout.Dimensions{Size: gtx.Constraints.Max}
+	}
+	label := material.Label(th, unit.Sp(fs), msg.Text)
+	label.Color = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
+	label.Alignment = text.Start
+	label.MaxLines = 2
+	return label.Layout(gtx)
+}
+
+func layoutSeparator(gtx layout.Context) layout.Dimensions {
+	h := 2
+	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, h)}
+	defer rect.Push(gtx.Ops).Pop()
+	paint.Fill(gtx.Ops, color.NRGBA{R: 100, G: 100, B: 100, A: 100})
+	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, h)}
+}
+
+// layoutTranslation показывает ТОЛЬКО текущий перевод (streaming или последний done).
+// Не накапливает историю переводов. MaxLines = 5.
+func layoutTranslation(gtx layout.Context, th *material.Theme, lastDone UIMessage, hasDone bool, streaming UIMessage, hasStreaming bool, fs int) layout.Dimensions {
+	// Приоритет: streaming > последний done.
+	if hasStreaming && streaming.Text != "" && streaming.Text != "[переводится...]" {
+		l := material.Label(th, unit.Sp(fs), streaming.Text)
+		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		l.Alignment = text.Start
+		l.MaxLines = 5
+		return l.Layout(gtx)
+	}
+
+	if hasStreaming {
+		// Показываем "[переводится...]" (pending).
+		l := material.Label(th, unit.Sp(fs), "[переводится...]")
+		l.Color = color.NRGBA{R: 255, G: 200, B: 50, A: 255}
+		l.Alignment = text.Start
+		l.MaxLines = 5
+		return l.Layout(gtx)
+	}
+
+	if hasDone && lastDone.Text != "" {
+		l := material.Label(th, unit.Sp(fs), lastDone.Text)
+		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 220}
+		l.Alignment = text.Start
+		l.MaxLines = 5
+		return l.Layout(gtx)
+	}
+
+	return layout.Dimensions{}
+}
+
+func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
+	afs := fs - 2
+	if afs < 10 {
+		afs = 10
+	}
+	children := make([]layout.FlexChild, 0, len(msg.Answers)+1)
+
+	// Разделитель перед подсказками.
+	children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+		return layoutSeparator(gtx)
+	}))
+
+	for i, ans := range msg.Answers {
+		idx, ansText := i, ans
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			l := material.Label(th, unit.Sp(afs), formatAnswer(idx+1, ansText))
+			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
+			l.Alignment = text.Start
+			l.MaxLines = 1
+			return l.Layout(gtx)
+		}))
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+// layoutHistory — вертикальный список всех History-сообщений со скроллом.
+// Каждый элемент показывает оригинал (серым) и перевод (белым).
+func layoutHistory(gtx layout.Context, th *material.Theme, history []UIMessage, fs int) layout.Dimensions {
+	if len(history) == 0 {
+		return layout.Dimensions{}
+	}
+
+	hfs := fs - 2
+	if hfs < 10 {
+		hfs = 10
+	}
+
+	list := &layout.List{Axis: layout.Vertical}
+	return list.Layout(gtx, len(history), func(gtx layout.Context, i int) layout.Dimensions {
+		m := history[i]
+
+		// Показываем оригинал (серым) и перевод (белым) в две строки.
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				l := material.Label(th, unit.Sp(hfs), m.Text)
+				l.Color = color.NRGBA{R: 180, G: 180, B: 180, A: 200}
+				l.Alignment = text.Start
+				l.MaxLines = 1
+				return l.Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if m.Translation == "" {
+					return layout.Dimensions{}
+				}
+				l := material.Label(th, unit.Sp(hfs), m.Translation)
+				l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+				l.Alignment = text.Start
+				l.MaxLines = 2
+				return l.Layout(gtx)
+			}),
+		)
+	})
+}
+
+// ── Helpers ──
+
+func statusColor(status string) color.NRGBA {
+	switch status {
+	case "pending":
+		return color.NRGBA{R: 80, G: 60, B: 0, A: 200}
+	case "streaming":
+		return color.NRGBA{R: 0, G: 80, B: 40, A: 200}
+	default:
+		return color.NRGBA{R: 0, G: 0, B: 0, A: 180}
 	}
 }
 
-// paintBackground fills the entire rendering area with the given color.
 func paintBackground(gtx layout.Context, c color.NRGBA) {
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 	paint.Fill(gtx.Ops, c)
 }
 
-// layoutTopZoneContent renders the latest translation text centered
-// with large white text.
-func layoutTopZoneContent(gtx layout.Context, th *material.Theme, msgs []UIMessage, fontSize int) layout.Dimensions {
-	// Find the latest translation message.
-	var latestText string
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Type == Translation {
-			latestText = msgs[i].Text
-			break
-		}
-	}
-	if latestText == "" {
-		// Fallback: show the text of the latest AnswerCandidates message.
-		for i := len(msgs) - 1; i >= 0; i-- {
-			if msgs[i].Type == AnswerCandidates && msgs[i].Text != "" {
-				latestText = msgs[i].Text
-				break
-			}
-		}
-	}
-
-	if latestText == "" {
-		return layout.Dimensions{}
-	}
-
-	return layout.Flex{
-		Axis:      layout.Vertical,
-		Alignment: layout.Middle,
-	}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			label := material.Label(th, unit.Sp(fontSize), latestText)
-			label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255} // white
-			label.Alignment = text.Middle
-			return label.Layout(gtx)
-		}),
-	)
-}
-
-// layoutBottomZoneContent renders the numbered answer candidates with
-// a light-green tint.
-func layoutBottomZoneContent(gtx layout.Context, th *material.Theme, msgs []UIMessage, fontSize int) layout.Dimensions {
-	// Find the latest AnswerCandidates message.
-	var answers []string
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Type == AnswerCandidates && len(msgs[i].Answers) > 0 {
-			answers = msgs[i].Answers
-			break
-		}
-	}
-
-	if len(answers) == 0 {
-		return layout.Dimensions{}
-	}
-
-	// Use a slightly smaller font for answers.
-	answerFontSize := fontSize - 2
-	if answerFontSize < 10 {
-		answerFontSize = 10
-	}
-
-	// Build flex children for each answer.
-	children := make([]layout.FlexChild, 0, len(answers))
-	for i, ans := range answers {
-		idx := i
-		ansText := ans
-		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			textContent := formatAnswer(idx+1, ansText)
-			label := material.Label(th, unit.Sp(answerFontSize), textContent)
-			// Light green tint for answer candidates.
-			label.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
-			label.Alignment = text.Start
-			label.MaxLines = 2
-			return label.Layout(gtx)
-		}))
-	}
-
-	if len(children) == 0 {
-		return layout.Dimensions{}
-	}
-
-	return layout.Flex{
-		Axis:      layout.Vertical,
-		Alignment: layout.Start,
-	}.Layout(gtx, children...)
-}
-
-// formatAnswer returns a numbered answer string like "1. text" or "2. text".
 func formatAnswer(num int, text string) string {
-	digits := [...]string{
-		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-	}
-	if num >= 0 && num < 10 {
-		return digits[num] + ". " + text
+	if num >= 1 && num <= 9 {
+		return string(rune('0'+num)) + ". " + text
 	}
 	return text
 }

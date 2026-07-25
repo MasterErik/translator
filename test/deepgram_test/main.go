@@ -1,5 +1,5 @@
-// Manual integration test for Translator.
-// Usage: go run ./cmd/manual_test [--wav=test.wav] [--text="Hello world"]
+// Deepgram integration test.
+// Usage: go run ./test/deepgram_test [--wav=test.wav] [--text="Hello world"]
 //
 // Requires: DEEPGRAM_API_KEY and OPENAI_API_KEY in .env or environment.
 package main
@@ -92,7 +92,7 @@ loop:
 				fmt.Printf("  STT error: %v\n", event.Error)
 				break loop
 			}
-			if event.IsFinal {
+			if event.Event == common.EventEndOfTurn {
 				finalText = event.Text
 				fmt.Printf("  FINAL: %q\n", finalText)
 			} else if event.Text != "" {
