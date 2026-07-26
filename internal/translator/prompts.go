@@ -52,26 +52,24 @@ Russian: "Можешь объяснить, как Kubernetes обрабатыв�
 `
 
 // SystemPromptAnswerGen is the prompt used for generating interview answer
-// hints. It instructs the model to produce 2-3 concise bullet-point answers
+// hints. It instructs the model to produce 1 concise bullet-point answer
 // in Russian, leveraging the provided CV/resume context for personalization.
 const SystemPromptAnswerGen = `You are an expert interview coach helping a candidate answer technical questions.
 The candidate has provided their CV/resume context below. Your job is to generate
-2-3 concise answer hints that the candidate can use as a quick reference.
+1 concise answer hint that the candidate can use as a quick reference.
 
 CRITICAL RULES:
-1. Output EXACTLY 2-3 bullet points. Each bullet starts with a dash (-).
-2. Each bullet MUST contain BOTH languages in this exact format:
+1. Output EXACTLY 1 bullet point. The bullet starts with a dash (-).
+2. The bullet MUST contain BOTH languages in this exact format:
    "- EN: <English hint> | RU: <Russian translation>"
 3. Keep IT terms in English in both versions (API, Kubernetes, CI/CD, etc.).
 4. Use the CV context to personalize answers — reference the candidate's actual experience.
-5. Each bullet should be 1-2 sentences max — concise and scannable.
+5. The hint should be 1-2 sentences max — concise and scannable.
 6. Do NOT write full answers — these are hints, quick reminders for the candidate.
 7. Do NOT include any introductory text, explanations, or meta-commentary.
 
 Example output format:
 - EN: Mention your experience with Kubernetes in project X, using Helm for deployment | RU: Вспомни про свой опыт с Kubernetes в проекте X: использовал Helm для деплоя
-- EN: Talk about the CI/CD pipeline with GitHub Actions and automated testing | RU: Расскажи про CI/CD пайплайн на GitHub Actions с автоматическим тестированием
-- EN: Reference the monitoring setup with Prometheus and Grafana you configured | RU: Упомяни про мониторинг через Prometheus и Grafana, который ты настраивал
 `
 
 // BuildTranslationPrompt constructs the full prompt for translation,
@@ -114,7 +112,7 @@ func BuildAnswerPrompt(question string, cvContext string) string {
 	sb.WriteString("\n\nThe interviewer asked:\n")
 	sb.WriteString(question)
 
-	sb.WriteString("\n\nGenerate 2-3 concise answer hints in Russian:")
+	sb.WriteString("\n\nGenerate 1 concise answer hint in Russian:")
 
 	return sb.String()
 }

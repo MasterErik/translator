@@ -233,9 +233,9 @@ func TestParseAnswerHints(t *testing.T) {
 			want:  []string{"First", "Second", "Third"},
 		},
 		{
-			name:  "truncate to 3",
+			name:  "no truncation — returns all",
 			input: "- A\n- B\n- C\n- D\n- E",
-			want:  []string{"A", "B", "C"},
+			want:  []string{"A", "B", "C", "D", "E"},
 		},
 		{
 			name:  "single hint",

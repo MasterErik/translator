@@ -670,14 +670,14 @@ func TestPipelineConcurrentStreams(t *testing.T) {
 	llm.mu.Lock()
 	genCalls := 0
 	for _, c := range llm.callLog {
-		if strings.HasPrefix(c, "GenAnswersStream:") {
+		if strings.HasPrefix(c, "GenAnswers:") {
 			genCalls++
 		}
 	}
 	llm.mu.Unlock()
 
 	if genCalls != 3 {
-		t.Errorf("Expected 3 GenerateAnswersStream calls, got %d", genCalls)
+		t.Errorf("Expected 3 GenerateAnswers calls, got %d", genCalls)
 	}
 }
 

@@ -776,18 +776,26 @@ func TestPipelineDispatch_ErrorEvent(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
+	// Перевод для этого транскрипта.
+	p.textStream <- common.STTEvent{
+		Text:      "нормальный текст",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "translation",
+		Timestamp: time.Now(),
+	}
+
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 
 	msgs := ovl.GetMessages()
 	var historyFound bool
 	for _, m := range msgs {
-		if m.Type == ui.History && m.Text == "normal text" {
+		if m.Type == ui.History && m.Text == "normal text" && m.Translation == "нормальный текст" {
 			historyFound = true
 		}
 	}
 	if !historyFound {
-		t.Error("dispatch должен обрабатывать нормальные события после ошибки")
+		t.Error("dispatch должен добавлять History с переводом после транскрипта")
 	}
 }
 
@@ -1012,4 +1020,134 @@ func (m *localStreamingMockLLM) GenerateAnswersStream(ctx context.Context, quest
 }
 
 var _ translator.LLMProvider = (*localStreamingMockLLM)(nil)
+
+// TestPipelineNoHistoryDuplicates — проверяет отсутствие дублей в History.
+func TestPipelineNoHistoryDuplicates(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+
+	llm := &mockLLM{}
+	engine := translator.NewEngine(llm)
+
+	p := &Pipeline{
+		cfg:        Config{TextStreamBuffer: 64, AnswerTimeout: 3 * time.Second},
+		sttProv:    stt,
+		capturer:   capt,
+		engine:     engine,
+		overlay:    ovl,
+		textStream: make(chan common.STTEvent, 64),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); p.runDispatch(ctx) }()
+
+	// Симулируем 3 фразы: transcript + translation.
+	for i := 0; i < 3; i++ {
+		orig := fmt.Sprintf("original %d", i+1)
+		trans := fmt.Sprintf("translation %d", i+1)
+
+		// Финальный транскрипт.
+		p.textStream <- common.STTEvent{Text: orig, Event: common.EventEndOfTurn, ChannelID: "speaker"}
+		time.Sleep(50 * time.Millisecond)
+
+		// Перевод.
+		p.textStream <- common.STTEvent{Text: trans, Event: common.EventEndOfTurn, ChannelID: "translation"}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	wg.Wait()
+
+	msgs := ovl.GetMessages()
+
+	// Считаем History записи.
+	var hist []ui.UIMessage
+	for _, m := range msgs {
+		if m.Type == ui.History {
+			hist = append(hist, m)
+		}
+	}
+
+	// Должно быть ровно 3 (по одной на каждую пару transcript+translation).
+	if len(hist) != 3 {
+		t.Errorf("History count = %d, want 3 (no duplicates)", len(hist))
+		for i, m := range hist {
+			t.Logf("  [%d] text=%q translation=%q", i, m.Text, m.Translation)
+		}
+	}
+
+	// Проверяем что нет дублей по английскому оригиналу.
+	seenText := map[string]bool{}
+	for _, m := range hist {
+		if seenText[m.Text] {
+			t.Errorf("дубликат английского оригинала в History: text=%q", m.Text)
+		}
+		seenText[m.Text] = true
+	}
+
+	// Проверяем что у каждой записи есть перевод.
+	for i, m := range hist {
+		if m.Translation == "" {
+			t.Errorf("History[%d]: нет перевода (text=%q)", i, m.Text)
+		}
+	}
+}
+// TestPipelineHistoryDedup — проверяет что повторные переводы не дублируются.
+func TestPipelineHistoryDedup(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+	engine := translator.NewEngine(llm)
+
+	p := &Pipeline{
+		cfg:        Config{TextStreamBuffer: 64, AnswerTimeout: 3 * time.Second},
+		sttProv:    stt,
+		capturer:   capt,
+		engine:     engine,
+		overlay:    ovl,
+		textStream: make(chan common.STTEvent, 64),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); p.runDispatch(ctx) }()
+
+	// Один транскрипт + три одинаковых перевода (Gladia может слать повторы).
+	p.textStream <- common.STTEvent{Text: "Hello", Event: common.EventEndOfTurn, ChannelID: "speaker"}
+	time.Sleep(50 * time.Millisecond)
+
+	for i := 0; i < 3; i++ {
+		p.textStream <- common.STTEvent{Text: "Привет", Event: common.EventEndOfTurn, ChannelID: "translation"}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	wg.Wait()
+
+	var hist []ui.UIMessage
+	for _, m := range ovl.GetMessages() {
+		if m.Type == ui.History {
+			hist = append(hist, m)
+		}
+	}
+
+	if len(hist) != 1 {
+		t.Errorf("History count = %d, want 1 (дедупликация не сработала)", len(hist))
+		for i, m := range hist {
+			t.Logf("  [%d] text=%q translation=%q", i, m.Text, m.Translation)
+		}
+	}
+}
+
 var _ translator.StreamingAnswersProvider = (*localStreamingMockLLM)(nil)

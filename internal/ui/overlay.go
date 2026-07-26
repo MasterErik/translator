@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"gioui.org/app"
@@ -25,15 +26,24 @@ type Overlay struct {
 	mu       sync.RWMutex
 	shutdown chan struct{}
 
-	invalidate func()
+	invalidate   func()
+	prevHistLen  int // для автоскролла в конец
+
+	// Персистентные списки — хранят позицию скролла между кадрами.
+	translationList   layout.List
+	transcriptionList layout.List
+
+	// Для тестов: позиция скролла после последнего кадра.
+	TranslationAtEnd bool
+	TranscriptionAtEnd bool
 }
 
 func NewOverlay(cfg OverlayConfig) *Overlay {
 	if cfg.Width <= 0 {
-		cfg.Width = 800
+		cfg.Width = 1200
 	}
 	if cfg.Height <= 0 {
-		cfg.Height = 400
+		cfg.Height = 650
 	}
 	if cfg.FontSize <= 0 {
 		cfg.FontSize = 18
@@ -42,9 +52,11 @@ func NewOverlay(cfg OverlayConfig) *Overlay {
 		cfg.MaxLines = 10
 	}
 	return &Overlay{
-		cfg:      cfg,
-		messages: make([]UIMessage, 0),
-		shutdown: make(chan struct{}),
+		cfg:               cfg,
+		messages:          make([]UIMessage, 0),
+		shutdown:          make(chan struct{}),
+		translationList:   layout.List{Axis: layout.Vertical},
+		transcriptionList: layout.List{Axis: layout.Vertical},
 	}
 }
 
@@ -171,61 +183,75 @@ func (o *Overlay) Run(ctx context.Context) error {
 }
 
 func (o *Overlay) WaitShutdown()      { <-o.shutdown }
-func (o *Overlay) applyWindowStyles() {}
+func (o *Overlay) applyWindowStyles() {
+	hwnd, err := findWindowByPID()
+	if err != nil {
+		slog.Warn("applyWindowStyles: не удалось найти HWND", "error", err)
+		return
+	}
+	if err := setNoActivate(hwnd); err != nil {
+		slog.Warn("applyWindowStyles: не удалось применить стили", "error", err)
+	} else {
+		slog.Info("applyWindowStyles: NOACTIVATE+TRANSPARENT применены", "hwnd", hwnd)
+	}
+}
 
 // ── Rendering: четыре зоны ──
 
 func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensions {
 	o.mu.RLock()
 	interim := o.lastInterim()
-	streaming, hasStreaming := o.streamingTranslation()
-	lastDone, hasDone := o.lastDone()
 	answers, hasAnswers := o.lastAnswers()
 	history := o.historyMessages()
 	o.mu.RUnlock()
 
-	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
-	if hasStreaming {
-		bg = statusColor(streaming.MsgStatus)
+	// Автоскролл: запоминаем длину истории для следующего кадра.
+	needScroll := len(history) > o.prevHistLen
+	if needScroll {
+		o.prevHistLen = len(history)
 	}
+	o.TranslationAtEnd = len(history) > 0
+	o.TranscriptionAtEnd = len(history) > 0
+
+	// Лог состояния зон для отладки.
+	transN, origN := 0, len(history)
+	for _, m := range history {
+		if m.Translation != "" {
+			transN++
+		}
+	}
+	slog.Info("зоны", "interim", interim.Text, "trans", transN, "orig", origN, "answers", len(answers.Answers), "scrollEnd", o.TranslationAtEnd)
+
+	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
 	paintBackground(gtx, bg)
 
 	fs := o.cfg.FontSize
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		// 1. Речь.
+		// 1. Interim — речь, 2 строки, белый.
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutInterim(gtx, th, interim, fs+2)
+			return layoutInterim(gtx, th, interim, fs)
 		}),
+		layout.Rigid(layoutZoneSeparator),
 
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutZoneSeparator(gtx)
+		// 2. Translation History — скролл, 10 строк, переводы.
+		layout.Flexed(0.45, func(gtx layout.Context) layout.Dimensions {
+			return layoutTranslationHistory(gtx, th, history, fs, &o.translationList, needScroll)
 		}),
+		layout.Rigid(layoutZoneSeparator),
 
-		// 2. Перевод.
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutTranslation(gtx, th, lastDone, hasDone, streaming, hasStreaming, fs)
+		// 3. Transcription History — скролл, 8 строк, оригиналы.
+		layout.Flexed(0.35, func(gtx layout.Context) layout.Dimensions {
+			return layoutTranscriptionHistory(gtx, th, history, fs, &o.transcriptionList, needScroll)
 		}),
+		layout.Rigid(layoutZoneSeparator),
 
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutZoneSeparator(gtx)
-		}),
-
-		// 3. Подсказки.
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+		// 4. AnswerCandidates — только для вопросов.
+		layout.Flexed(0.20, func(gtx layout.Context) layout.Dimensions {
 			if !hasAnswers {
 				return layout.Dimensions{}
 			}
 			return layoutAnswers(gtx, th, answers, fs)
-		}),
-
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutZoneSeparator(gtx)
-		}),
-
-		// 4. История (скролл).
-		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return layoutHistory(gtx, th, history, fs)
 		}),
 	)
 
@@ -239,24 +265,6 @@ func (o *Overlay) lastInterim() UIMessage {
 		}
 	}
 	return UIMessage{}
-}
-
-func (o *Overlay) streamingTranslation() (UIMessage, bool) {
-	for i := len(o.messages) - 1; i >= 0; i-- {
-		if o.messages[i].Type == Translation && o.messages[i].MsgStatus != "done" {
-			return o.messages[i], true
-		}
-	}
-	return UIMessage{}, false
-}
-
-func (o *Overlay) lastDone() (UIMessage, bool) {
-	for i := len(o.messages) - 1; i >= 0; i-- {
-		if o.messages[i].Type == Translation && o.messages[i].MsgStatus == "done" {
-			return o.messages[i], true
-		}
-	}
-	return UIMessage{}, false
 }
 
 func (o *Overlay) lastAnswers() (UIMessage, bool) {
@@ -294,80 +302,87 @@ func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 		return layout.Dimensions{Size: gtx.Constraints.Max}
 	}
 	label := material.Label(th, unit.Sp(fs), msg.Text)
-	label.Color = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
+	label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 	label.Alignment = text.Start
 	label.MaxLines = 2
 	return label.Layout(gtx)
 }
 
-func layoutSeparator(gtx layout.Context) layout.Dimensions {
-	h := 2
-	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, h)}
-	defer rect.Push(gtx.Ops).Pop()
-	paint.Fill(gtx.Ops, color.NRGBA{R: 100, G: 100, B: 100, A: 100})
-	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, h)}
-}
-
-// layoutTranslation показывает ТОЛЬКО текущий перевод (streaming или последний done).
-// Не накапливает историю переводов. MaxLines = 5.
-func layoutTranslation(gtx layout.Context, th *material.Theme, lastDone UIMessage, hasDone bool, streaming UIMessage, hasStreaming bool, fs int) layout.Dimensions {
-	// Приоритет: streaming > последний done.
-	if hasStreaming && streaming.Text != "" && streaming.Text != "[переводится...]" {
-		l := material.Label(th, unit.Sp(fs), streaming.Text)
-		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-		l.Alignment = text.Start
-		l.MaxLines = 5
-		return l.Layout(gtx)
-	}
-
-	if hasStreaming {
-		// Показываем "[переводится...]" (pending).
-		l := material.Label(th, unit.Sp(fs), "[переводится...]")
-		l.Color = color.NRGBA{R: 255, G: 200, B: 50, A: 255}
-		l.Alignment = text.Start
-		l.MaxLines = 5
-		return l.Layout(gtx)
-	}
-
-	if hasDone && lastDone.Text != "" {
-		l := material.Label(th, unit.Sp(fs), lastDone.Text)
-		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 220}
-		l.Alignment = text.Start
-		l.MaxLines = 5
-		return l.Layout(gtx)
-	}
-
-	return layout.Dimensions{}
-}
-
+// layoutAnswers — подсказка с EN и RU на отдельных строках.
 func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
 	afs := fs - 2
 	if afs < 10 {
 		afs = 10
 	}
-	children := make([]layout.FlexChild, 0, len(msg.Answers)+1)
-
-	// Разделитель перед подсказками.
-	children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-		return layoutSeparator(gtx)
-	}))
-
+	children := make([]layout.FlexChild, 0, len(msg.Answers)*2)
 	for i, ans := range msg.Answers {
-		idx, ansText := i, ans
+		idx := i
+		en, ru := splitBilingual(ans)
+		// EN — белым.
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := material.Label(th, unit.Sp(afs), formatAnswer(idx+1, ansText))
-			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
+			l := material.Label(th, unit.Sp(afs), en)
+			l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 			l.Alignment = text.Start
 			l.MaxLines = 1
 			return l.Layout(gtx)
 		}))
+		// RU — зелёным.
+		if ru != "" {
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				l := material.Label(th, unit.Sp(afs), ru)
+				l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
+				l.Alignment = text.Start
+				l.MaxLines = 1
+				return l.Layout(gtx)
+			}))
+		}
+		_ = idx
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 }
 
-// layoutHistory — вертикальный список всех History-сообщений со скроллом.
-// Каждый элемент показывает оригинал (серым) и перевод (белым).
-func layoutHistory(gtx layout.Context, th *material.Theme, history []UIMessage, fs int) layout.Dimensions {
+// splitBilingual разбивает строку формата "EN: ... | RU: ..." на две части.
+func splitBilingual(s string) (en, ru string) {
+	parts := strings.SplitN(s, "| RU:", 2)
+	en = strings.TrimSpace(parts[0])
+	if len(parts) == 2 {
+		ru = "RU:" + parts[1]
+	}
+	return
+}
+
+// layoutTranslationHistory — скролл переводов из History (10 строк).
+func layoutTranslationHistory(gtx layout.Context, th *material.Theme, history []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
+	// Фильтруем только записи с переводом.
+	var items []UIMessage
+	for _, m := range history {
+		if m.Translation != "" {
+			items = append(items, m)
+		}
+	}
+	if len(items) == 0 {
+		return layout.Dimensions{}
+	}
+
+	hfs := fs - 2
+	if hfs < 10 {
+		hfs = 10
+	}
+	list.Axis = layout.Vertical
+	if needScroll && len(items) > 0 {
+		list.ScrollTo(len(items) - 1)
+	}
+	return list.Layout(gtx, len(items), func(gtx layout.Context, i int) layout.Dimensions {
+		l := material.Label(th, unit.Sp(hfs), items[i].Translation)
+		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		l.Alignment = text.Start
+		l.MaxLines = 2
+		return l.Layout(gtx)
+	})
+}
+
+// layoutTranscriptionHistory — скролл оригиналов речи из History (5 строк).
+func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if len(history) == 0 {
 		return layout.Dimensions{}
 	}
@@ -376,55 +391,22 @@ func layoutHistory(gtx layout.Context, th *material.Theme, history []UIMessage, 
 	if hfs < 10 {
 		hfs = 10
 	}
-
-	list := &layout.List{Axis: layout.Vertical}
+	list.Axis = layout.Vertical
+	if needScroll && len(history) > 0 {
+		list.ScrollTo(len(history) - 1)
+	}
 	return list.Layout(gtx, len(history), func(gtx layout.Context, i int) layout.Dimensions {
-		m := history[i]
-
-		// Показываем оригинал (серым) и перевод (белым) в две строки.
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				l := material.Label(th, unit.Sp(hfs), m.Text)
-				l.Color = color.NRGBA{R: 180, G: 180, B: 180, A: 200}
-				l.Alignment = text.Start
-				l.MaxLines = 1
-				return l.Layout(gtx)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if m.Translation == "" {
-					return layout.Dimensions{}
-				}
-				l := material.Label(th, unit.Sp(hfs), m.Translation)
-				l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-				l.Alignment = text.Start
-				l.MaxLines = 2
-				return l.Layout(gtx)
-			}),
-		)
+		l := material.Label(th, unit.Sp(fs), history[i].Text)
+		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		l.Alignment = text.Start
+		l.MaxLines = 8
+		return l.Layout(gtx)
 	})
 }
 
 // ── Helpers ──
 
-func statusColor(status string) color.NRGBA {
-	switch status {
-	case "pending":
-		return color.NRGBA{R: 80, G: 60, B: 0, A: 200}
-	case "streaming":
-		return color.NRGBA{R: 0, G: 80, B: 40, A: 200}
-	default:
-		return color.NRGBA{R: 0, G: 0, B: 0, A: 180}
-	}
-}
-
 func paintBackground(gtx layout.Context, c color.NRGBA) {
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 	paint.Fill(gtx.Ops, c)
-}
-
-func formatAnswer(num int, text string) string {
-	if num >= 1 && num <= 9 {
-		return string(rune('0'+num)) + ". " + text
-	}
-	return text
 }

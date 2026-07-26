@@ -1,5 +1,5 @@
 // Интеграционный тест LLM-подсказок (Answer Generation) с реальным API.
-// Перевод теперь выполняется Gladia Translation API, LLM — только для подсказок.
+// Проверяет что GenerateAnswers возвращает ровно 1 подсказку с русским переводом.
 // Usage: go run ./test/llm_test
 package main
 
@@ -36,59 +36,68 @@ func main() {
 	prov := translator.NewOpenAIProviderWithConfig(cfg.LLMBaseURL, apiKey, cfg.OpenAIModel)
 	prov.SetMaxTokens(maxTokens)
 
-	// ── 1. Answer Generation (batch) ──
-	fmt.Println("═══ 1. GenerateAnswers ═══")
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel1()
+	// Disable thinking for GLM models (enabled by default, consumes token budget).
+	// Safe to call for non-GLM models — it's a no-op when thinking isn't supported.
+	prov.DisableThinking()
 
-	q := "What is the difference between a mutex and a channel in Go?"
 	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
-	fmt.Printf("Q: %s\n", q)
 
-	start := time.Now()
-	answers, err := prov.GenerateAnswers(ctx1, q, cv)
-	elapsed := time.Since(start)
-	if err != nil {
-		fmt.Printf("FAIL (%s): %v\n", elapsed.Round(time.Millisecond), err)
-	} else {
-		for i, a := range answers {
-			fmt.Printf("  %d. %s\n", i+1, a)
-		}
-		fmt.Printf("OK  (%s)\n", elapsed.Round(time.Millisecond))
+	questions := []string{
+		"What is the difference between a mutex and a channel in Go?",
+		"Explain the CAP theorem in distributed systems.",
 	}
 
-	// ── 2. Answer Generation (streaming) ──
-	fmt.Println("\n═══ 2. GenerateAnswersStream ═══")
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel2()
+	passed := 0
+	failed := 0
 
-	q2 := "Explain the CAP theorem in distributed systems."
-	fmt.Printf("Q: %s\n", q2)
+	for i, q := range questions {
+		fmt.Printf("─── Test %d ───\n", i+1)
+		fmt.Printf("Q: %s\n", q)
 
-	tokenCh, err := prov.GenerateAnswersStream(ctx2, q2, cv)
-	if err != nil {
-		fmt.Printf("FAIL (create): %v\n", err)
-	} else {
-		fmt.Print("A: ")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 		start := time.Now()
-		var sb strings.Builder
-		tokenCount := 0
-		for token := range tokenCh {
-			if strings.HasPrefix(token, "[ERROR:") {
-				fmt.Print(token)
-				break
-			}
-			sb.WriteString(token)
-			fmt.Print(token)
-			tokenCount++
-		}
+		answers, err := prov.GenerateAnswers(ctx, q, cv)
 		elapsed := time.Since(start)
-		if sb.Len() > 0 {
-			fmt.Printf("\nOK  (%s, %d tokens)\n", elapsed.Round(time.Millisecond), tokenCount)
-		} else {
-			fmt.Printf("\nFAIL: no tokens\n")
+		cancel()
+
+		if err != nil {
+			fmt.Printf("FAIL (%s): API error: %v\n\n", elapsed.Round(time.Millisecond), err)
+			failed++
+			continue
 		}
+
+		// Validation 1: exactly 1 answer
+		if len(answers) != 1 {
+			fmt.Printf("FAIL (%s): expected 1 answer, got %d\n", elapsed.Round(time.Millisecond), len(answers))
+			for j, a := range answers {
+				fmt.Printf("  [%d] %s\n", j+1, a)
+			}
+			fmt.Println()
+			failed++
+			continue
+		}
+
+		answer := answers[0]
+
+		// Validation 2: must contain "| RU:"
+		if !strings.Contains(answer, "| RU:") {
+			fmt.Printf("FAIL (%s): answer missing '| RU:' separator\n", elapsed.Round(time.Millisecond))
+			fmt.Printf("  Got: %s\n", answer)
+			fmt.Println()
+			failed++
+			continue
+		}
+
+		fmt.Printf("  %s\n", answer)
+		fmt.Printf("PASS (%s) — 1 answer with RU: translation\n\n", elapsed.Round(time.Millisecond))
+		passed++
 	}
 
-	fmt.Println("\n═══ Done ═══")
+	fmt.Println("═══════════════════════════════")
+	fmt.Printf("Results: %d passed, %d failed, %d total\n", passed, failed, len(questions))
+
+	if failed > 0 {
+		os.Exit(1)
+	}
 }

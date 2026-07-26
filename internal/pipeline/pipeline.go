@@ -73,6 +73,7 @@ type Config struct {
 	LLMAPIKey  string
 	LLMModel   string
 	MaxTokens  int
+	CVContext  string // контекст резюме для подсказок
 
 	// Overlay
 	OverlayCfg ui.OverlayConfig
@@ -126,6 +127,9 @@ func New(cfg Config) (*Pipeline, error) {
 
 	// TranslationEngine.
 	engine := translator.NewEngine(llmProv)
+	if cfg.CVContext != "" {
+		engine.SetCVContext(cfg.CVContext)
+	}
 
 	// Overlay.
 	overlay := ui.NewOverlay(cfg.OverlayCfg)
@@ -438,6 +442,8 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 
 	// lastOriginal хранит последний финальный транскрипт для связки с переводом.
 	var lastOriginal common.STTEvent
+	// historySeen отслеживает уже добавленные оригиналы для дедупликации.
+	historySeen := map[string]bool{}
 
 	for {
 		select {
@@ -461,13 +467,16 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 					MsgStatus: "done",
 				})
 
-				// Добавляем оригинал + перевод в историю.
-				p.overlay.AddMessage(ui.UIMessage{
-					Type:        ui.History,
-					Text:        lastOriginal.Text,
-					Translation: event.Text,
-					Timestamp:   event.Timestamp,
-				})
+				// Добавляем оригинал + перевод в историю (без дублей).
+				if !historySeen[lastOriginal.Text] {
+					historySeen[lastOriginal.Text] = true
+					p.overlay.AddMessage(ui.UIMessage{
+						Type:        ui.History,
+						Text:        lastOriginal.Text,
+						Translation: event.Text,
+						Timestamp:   event.Timestamp,
+					})
+				}
 
 				slog.Info("перевод получен",
 					"original", lastOriginal.Text,
@@ -493,14 +502,8 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 
 			default:
 				// Финальный транскрипт: сохраняем для связки с переводом,
-				// добавляем оригинал в историю, проверяем вопрос.
+				// проверяем на вопрос. В историю НЕ добавляем — ждём перевод.
 				lastOriginal = event
-
-				p.overlay.AddMessage(ui.UIMessage{
-					Type:      ui.History,
-					Text:      event.Text,
-					Timestamp: event.Timestamp,
-				})
 
 				slog.Info("финальный транскрипт", "text", event.Text)
 
@@ -519,23 +522,11 @@ func (p *Pipeline) generateAnswersAsync(question string) {
 	ansCtx, ansCancel := context.WithTimeout(context.Background(), p.cfg.AnswerTimeout)
 	defer ansCancel()
 
-	tokenCh, err := p.engine.GenerateAnswersStream(ansCtx, question)
+	answers, err := p.engine.GenerateAnswers(ansCtx, question)
 	if err != nil {
 		slog.Error("генерация подсказок не удалась", "question", question, "error", err)
 		return
 	}
-
-	// Собираем все токены в полный ответ.
-	var fullText strings.Builder
-	for token := range tokenCh {
-		if strings.HasPrefix(token, "[ERROR:") {
-			slog.Error("ошибка в стриме подсказок", "question", question, "token_error", token)
-			return
-		}
-		fullText.WriteString(token)
-	}
-
-	answers := parseAnswerHints(fullText.String())
 	if len(answers) == 0 {
 		return
 	}

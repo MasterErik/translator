@@ -38,7 +38,7 @@ func TestSystemPromptTranslationNoMetaCommentary(t *testing.T) {
 func TestSystemPromptAnswerGenFormat(t *testing.T) {
 	// Verify the answer generation prompt specifies bullet format and language.
 	checks := []string{
-		"2-3",
+		"1",
 		"bullet",
 		"Russian",
 		"dash (-)",
@@ -117,7 +117,7 @@ func TestBuildAnswerPromptWithCV(t *testing.T) {
 	if !strings.Contains(result, cvContext) {
 		t.Errorf("BuildAnswerPrompt should contain CV context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "Generate 2-3 concise answer hints") {
+	if !strings.Contains(result, "Generate 1 concise answer hint") {
 		t.Error("BuildAnswerPrompt should contain the generation instruction")
 	}
 }

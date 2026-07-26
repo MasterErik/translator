@@ -3,6 +3,7 @@ package translator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,81 +14,44 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// maxRetries is the maximum number of retry attempts for rate-limited requests.
 const maxRetries = 3
 
-// OpenAIProvider implements LLMProvider using the OpenAI API (GPT-4o-mini).
-// It wraps the go-openai client and adds rate-limit retry logic with
-// exponential backoff.
-//
-// All exported methods are safe for concurrent use.
 type OpenAIProvider struct {
 	client          *openai.Client
+	baseURL         string
+	apiKey          string
 	model           string
 	maxTokens       int
 	disableThinking bool
 	mu              sync.Mutex
 }
 
-// thinkingTransport injects "thinking":{"type":"disabled"} into JSON request bodies.
-// GLM-4.7-Flash defaults to reasoning mode; this disables it for plain translation.
-type thinkingTransport struct {
-	base http.RoundTripper
-}
-
-func (t *thinkingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		body, err := io.ReadAll(req.Body)
-		req.Body.Close()
-		if err == nil && strings.Contains(req.URL.Host, "api.z.ai") {
-			// Inject "thinking":{"type":"disabled"} after the opening brace.
-			body = bytes.Replace(body, []byte(`{`), []byte(`{"thinking":{"type":"disabled"},`), 1)
-		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
-	}
-	return t.base.RoundTrip(req)
-}
-
-// DisableThinking disables reasoning/thinking mode for models that default to it
-// (e.g. GLM-4.7-Flash). This ensures all tokens go to content, not reasoning_content.
 func (p *OpenAIProvider) DisableThinking() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.disableThinking = true
 }
 
-// NewOpenAIProviderWithConfig creates a new LLM provider with a custom
-// base URL and API key. Supports any OpenAI-compatible API.
-//
-// baseURL — e.g. "https://api.openai.com/v1" or "https://api.deepinfra.com/v1/openai".
-// apiKey  — the API key for the provider.
-// model   — model name; defaults to "gpt-4o-mini" if empty.
 func NewOpenAIProviderWithConfig(baseURL, apiKey, model string) *OpenAIProvider {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
-	// Inject thinking-disabled transport for Z.AI (GLM-4.7-Flash reasoning mode).
-	cfg.HTTPClient = &http.Client{
-		Transport: &thinkingTransport{base: http.DefaultTransport},
-	}
 	return &OpenAIProvider{
-		client: openai.NewClientWithConfig(cfg),
-		model:  model,
+		client:  openai.NewClientWithConfig(cfg),
+		baseURL: baseURL,
+		apiKey:  apiKey,
+		model:   model,
 	}
 }
 
-// SetMaxTokens sets the maximum number of output tokens for all requests.
-// 0 means provider default (unlimited).
 func (p *OpenAIProvider) SetMaxTokens(n int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.maxTokens = n
 }
 
-// maxTokensOrZero returns MaxTokens only if > 0 (0 means "not set" in API).
 func (p *OpenAIProvider) maxTokensOrZero() int {
 	if p.maxTokens > 0 {
 		return p.maxTokens
@@ -95,86 +59,159 @@ func (p *OpenAIProvider) maxTokensOrZero() int {
 	return 0
 }
 
-// GenerateAnswers sends the detected question and CV context to the OpenAI
-// API and returns 2-3 candidate answer hints parsed from the response.
-// It uses temperature 0.3 for slightly varied output.
-//
-// The response is split by newlines and bullet markers are stripped.
-// The call respects context deadlines and retries on HTTP 429
-// with exponential backoff (1s, 2s, 4s).
 func (p *OpenAIProvider) GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	userPrompt := BuildAnswerPrompt(question, cvContext)
 
+	if p.disableThinking {
+		return p.generateAnswersWithoutThinking(ctx, userPrompt)
+	}
+
 	req := openai.ChatCompletionRequest{
 		Model: p.model,
 		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: SystemPromptAnswerGen,
-			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: userPrompt,
-			},
+			{Role: openai.ChatMessageRoleSystem, Content: SystemPromptAnswerGen},
+			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
 		},
 		Temperature: 0.3,
 		MaxTokens:   p.maxTokens,
+		N:           1, // explicit: exactly 1 completion choice
 	}
 
 	resp, err := p.createChatCompletionWithRetry(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("generate answers: %w", err)
 	}
-
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("generate answers: no choices in response")
 	}
-
 	return parseAnswerHints(resp.Choices[0].Message.Content), nil
 }
 
-// createChatCompletionWithRetry sends the request to OpenAI and retries
-// on HTTP 429 (Too Many Requests) with exponential backoff: 1s, 2s, 4s.
-// Other errors are returned immediately.
+// generateAnswersWithoutThinking builds and sends a raw HTTP request with
+// thinking disabled for GLM models (GLM-4.7-Flash etc.) where thinking is
+// enabled by default and consumes the token budget.
+func (p *OpenAIProvider) generateAnswersWithoutThinking(ctx context.Context, userPrompt string) ([]string, error) {
+	body := map[string]any{
+		"model": p.model,
+		"messages": []map[string]string{
+			{"role": "system", "content": SystemPromptAnswerGen},
+			{"role": "user", "content": userPrompt},
+		},
+		"temperature": 0.3,
+		"n":           1,
+		"thinking": map[string]string{
+			"type": "disabled",
+		},
+	}
+	if p.maxTokens > 0 {
+		body["max_tokens"] = p.maxTokens
+	}
+
+	resp, err := p.rawChatCompletionWithRetry(ctx, body)
+	if err != nil {
+		return nil, fmt.Errorf("generate answers (no thinking): %w", err)
+	}
+	return parseAnswerHints(resp), nil
+}
+
+// rawChatCompletionWithRetry sends a raw JSON body to the chat completions
+// endpoint with retry logic. Returns the content field from the first choice.
+func (p *OpenAIProvider) rawChatCompletionWithRetry(ctx context.Context, body map[string]any) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		content, err := p.rawChatCompletion(ctx, body)
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+		if !isRateLimitError(err) {
+			return "", err
+		}
+		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("retry cancelled: %w", ctx.Err())
+		case <-time.After(backoff):
+		}
+	}
+	return "", fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// rawChatCompletion sends a raw JSON body to the chat completions endpoint
+// and returns the content of the first choice's message.
+func (p *OpenAIProvider) rawChatCompletion(ctx context.Context, body map[string]any) (string, error) {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := strings.TrimRight(p.baseURL, "/") + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return "", fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+
+	return result.Choices[0].Message.Content, nil
+}
+
 func (p *OpenAIProvider) createChatCompletionWithRetry(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
 	var lastErr error
-
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		resp, err := p.client.CreateChatCompletion(ctx, req)
 		if err == nil {
 			return resp, nil
 		}
-
 		lastErr = err
-
-		// Check if the error is a rate-limit error (429).
 		if !isRateLimitError(err) {
 			return openai.ChatCompletionResponse{}, err
 		}
-
-		// Exponential backoff: 1s, 2s, 4s.
 		backoff := time.Duration(1<<uint(attempt)) * time.Second
-
 		select {
 		case <-ctx.Done():
 			return openai.ChatCompletionResponse{}, fmt.Errorf("retry cancelled: %w", ctx.Err())
 		case <-time.After(backoff):
-			// Continue to next retry attempt.
 		}
 	}
-
 	return openai.ChatCompletionResponse{}, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
-// GenerateAnswersStream генерирует подсказки потоково через SSE.
-// Токены доставляются по одному через возвращаемый канал.
-// Канал закрывается по завершении генерации или при ошибке.
 func (p *OpenAIProvider) GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error) {
 	tokenCh := make(chan string, 64)
-
 	userPrompt := BuildAnswerPrompt(question, cvContext)
 
 	p.mu.Lock()
@@ -184,14 +221,8 @@ func (p *OpenAIProvider) GenerateAnswersStream(ctx context.Context, question str
 	req := openai.ChatCompletionRequest{
 		Model: p.model,
 		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: SystemPromptAnswerGen,
-			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: userPrompt,
-			},
+			{Role: openai.ChatMessageRoleSystem, Content: SystemPromptAnswerGen},
+			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
 		},
 		Temperature: 0.3,
 		MaxTokens:   maxTok,
@@ -207,7 +238,6 @@ func (p *OpenAIProvider) GenerateAnswersStream(ctx context.Context, question str
 	go func() {
 		defer close(tokenCh)
 		defer stream.Close()
-
 		for {
 			response, recvErr := stream.Recv()
 			if recvErr != nil {
@@ -223,7 +253,6 @@ func (p *OpenAIProvider) GenerateAnswersStream(ctx context.Context, question str
 				}
 				return
 			}
-
 			if len(response.Choices) > 0 {
 				delta := response.Choices[0].Delta.Content
 				if delta != "" {
@@ -240,8 +269,6 @@ func (p *OpenAIProvider) GenerateAnswersStream(ctx context.Context, question str
 	return tokenCh, nil
 }
 
-// isRateLimitError checks if the error message indicates an HTTP 429
-// rate-limit response from the OpenAI API.
 func isRateLimitError(err error) bool {
 	if err == nil {
 		return false
@@ -252,34 +279,22 @@ func isRateLimitError(err error) bool {
 		strings.Contains(errStr, "too many requests")
 }
 
-// parseAnswerHints splits the raw LLM response into individual answer
-// hints. It strips leading numbering (e.g., "1. " or "- ") and filters
-// out empty lines.
 func parseAnswerHints(raw string) []string {
 	lines := strings.Split(raw, "\n")
 	var hints []string
-
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
-
 		clean := stripBulletPrefix(trimmed)
 		if clean != "" {
 			hints = append(hints, clean)
 		}
 	}
-
-	if len(hints) > 3 {
-		hints = hints[:3]
-	}
-
 	return hints
 }
 
-// stripBulletPrefix removes common list markers from the beginning of a line.
-// Supported formats: "1. ", "1) ", "- ", "* ", "• ".
 func stripBulletPrefix(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] >= '0' && s[i] <= '9' {
@@ -293,7 +308,6 @@ func stripBulletPrefix(s string) string {
 		}
 		break
 	}
-
 	if len(s) >= 2 && s[1] == ' ' {
 		switch s[0] {
 		case '-', '*':
@@ -303,17 +317,14 @@ func stripBulletPrefix(s string) string {
 	if len(s) == 1 && (s[0] == '-' || s[0] == '*') {
 		return ""
 	}
-
 	if strings.HasPrefix(s, "• ") {
 		return strings.TrimSpace(s[3:])
 	}
 	if s == "•" {
 		return ""
 	}
-
 	return s
 }
 
-// Compile-time interface check.
 var _ LLMProvider = (*OpenAIProvider)(nil)
 var _ StreamingAnswersProvider = (*OpenAIProvider)(nil)

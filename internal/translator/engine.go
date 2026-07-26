@@ -57,15 +57,21 @@ var questionWords = []string{
 //
 // All methods are safe for concurrent use.
 type TranslationEngine struct {
-	llm LLMProvider
-	mu  sync.RWMutex
+	llm       LLMProvider
+	cvContext string
+	mu        sync.RWMutex
 }
 
 // NewEngine creates a new TranslationEngine with the given LLM provider.
 func NewEngine(llm LLMProvider) *TranslationEngine {
-	return &TranslationEngine{
-		llm: llm,
-	}
+	return &TranslationEngine{llm: llm}
+}
+
+// SetCVContext задаёт контекст резюме для генерации подсказок.
+func (e *TranslationEngine) SetCVContext(ctx string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cvContext = ctx
 }
 
 // ProcessQuestion processes a question text:
@@ -140,17 +146,23 @@ func IsQuestion(text string) bool {
 
 // GenerateAnswers делегирует генерацию подсказок LLM-провайдеру.
 func (e *TranslationEngine) GenerateAnswers(ctx context.Context, question string) ([]string, error) {
-	return e.llm.GenerateAnswers(ctx, question, "")
+	e.mu.RLock()
+	cvCtx := e.cvContext
+	e.mu.RUnlock()
+	return e.llm.GenerateAnswers(ctx, question, cvCtx)
 }
 
 // GenerateAnswersStream делегирует потоковую генерацию подсказок LLM-провайдеру.
 // Токены доставляются по одному через возвращаемый канал.
 // Канал закрывается по завершении генерации или при ошибке.
 func (e *TranslationEngine) GenerateAnswersStream(ctx context.Context, question string) (<-chan string, error) {
+	e.mu.RLock()
+	cvCtx := e.cvContext
+	e.mu.RUnlock()
+
 	streamer, ok := e.llm.(StreamingAnswersProvider)
 	if !ok {
-		// Fallback: синхронная генерация через канал из N элементов.
-		answers, err := e.llm.GenerateAnswers(ctx, question, "")
+		answers, err := e.llm.GenerateAnswers(ctx, question, cvCtx)
 		if err != nil {
 			return nil, fmt.Errorf("generate answers stream: %w", err)
 		}
@@ -161,5 +173,5 @@ func (e *TranslationEngine) GenerateAnswersStream(ctx context.Context, question 
 		close(ch)
 		return ch, nil
 	}
-	return streamer.GenerateAnswersStream(ctx, question, "")
+	return streamer.GenerateAnswersStream(ctx, question, cvCtx)
 }

@@ -1,0 +1,43 @@
+// Debug: проверяем raw ответ от GLM-4.7-Flash
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/translator"
+)
+
+func main() {
+	cfg := common.LoadConfig()
+	apiKey := cfg.LLMAPIKey
+	if apiKey == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: no API key")
+		os.Exit(1)
+	}
+
+	prov := translator.NewOpenAIProviderWithConfig(cfg.LLMBaseURL, apiKey, cfg.OpenAIModel)
+	prov.SetMaxTokens(cfg.MaxTokens)
+
+	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
+	q := "What is the difference between a mutex and a channel in Go?"
+
+	fmt.Printf("Model: %s\nBase URL: %s\nMaxTokens: %d\n\n", cfg.OpenAIModel, cfg.LLMBaseURL, cfg.MaxTokens)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	answers, err := prov.GenerateAnswers(ctx, q, cv)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Got %d answers:\n", len(answers))
+	for i, a := range answers {
+		fmt.Printf("  [%d] %q\n", i+1, a)
+	}
+}

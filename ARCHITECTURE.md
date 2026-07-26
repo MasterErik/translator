@@ -133,16 +133,18 @@ dispatch: IsQuestion(transcript.Text) == true
               └─► SSE-токены → parseAnswerHints → UI AnswerCandidates
 ```
 
-### UI — три зоны
+### UI — четыре зоны
 ```
 ┌──────────────────────────┐
-│ I have five years of...  │ ← Interim (речь, 2 строки, серый текст)
+│ I have five years of...  │ ← Interim (речь, 2 строки, белый текст)
 ├──────────────────────────┤
-│ У меня пять лет опыта... │ ← Перевод (скролл 10 строк, от Gladia)
-│ Мы используем Redis...    │
+│ История перевода...      │ ← История перевода (скролл размер 10 строк, от Gladia)
+│ Мы используем Redis...   │
 ├──────────────────────────┤
-│ 1. Подсказка один        │ ← AnswerCandidates (только для вопросов)
-│ 2. Подсказка два         │
+│История транслитерации    │ ← Речь (скрол размер 5 строк)
+│на ангилйском             │
+├──────────────────────────┤
+│ 1. Подсказка              │ ← AnswerCandidates (только для вопросов, 1 шт.)
 └──────────────────────────┘
 ```
 
@@ -189,14 +191,16 @@ PCM (mic) → логгер → audio/speaker.mp3
 |---|---|
 | Endpoint | `https://api.z.ai/api/paas/v4/chat/completions` |
 | Модель | `glm-4.7-flash` |
-| thinking | **disabled** (транспортный слой `thinkingTransport`) |
+| Вызов | **синхронный** `GenerateAnswers` (без стриминга) |
 | max_tokens | `LLM_MAX_TOKENS` (default 1024) |
 | temperature | 0.3 (answers) |
-| Стриминг | SSE, `stream: true` (`GenerateAnswersStream`) |
+| Подсказок | **1** (промпт `SystemPromptAnswerGen` → "EXACTLY 1 bullet point") |
+| Формат | `EN: <English> \| RU: <Russian>` — UI разделяет на две строки |
+| Контекст | `CVContext` из `config.yaml` → `Pipeline.Config.CVContext` → `engine.SetCVContext()` → `BuildAnswerPrompt(question, cvContext)` |
 
 **LLM используется ТОЛЬКО для генерации подсказок.** Перевод выполняется Gladia (встроенный, модель `enhanced`).
 
-**thinkingTransport** — `http.RoundTripper` в `openai.go`, инжектит `{"thinking":{"type":"disabled"}}` в тело запроса к `api.z.ai`. Без этого все токены уходят в `reasoning_content`, а `content` остаётся пустым.
+**thinkingTransport удалён** — стриминг не используется, синхронный вызов работает без инжекции `thinking`.
 
 ---
 
