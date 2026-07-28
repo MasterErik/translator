@@ -24,6 +24,12 @@
 
 Причины миграции: встроенный перевод в Gladia исключает сетевой round-trip до LLM, снижает задержку перевода с ~1.5s до ~200ms, упрощает архитектуру и уменьшает стоимость (один API вместо двух).
 
+### Процесс архитектурных решений
+
+- Многопоточная схема, выбор библиотек и значительные изменения — сначала план на утверждение пользователю, потом реализация
+- Схемы сохраняются в `.hermes/plans/`
+- Конфигурация: `.env` в приоритете над `config.yaml`
+
 ---
 
 ## Аудио-архитектура: VB-Cable
@@ -133,20 +139,40 @@ dispatch: IsQuestion(transcript.Text) == true
               └─► SSE-токены → parseAnswerHints → UI AnswerCandidates
 ```
 
-### UI — четыре зоны
+### UI — четыре зоны (GioUI v0.10.1)
+
 ```
 ┌──────────────────────────┐
-│ I have five years of...  │ ← Interim (речь, 2 строки, белый текст)
-├──────────────────────────┤
-│ История перевода...      │ ← История перевода (скролл размер 10 строк, от Gladia)
-│ Мы используем Redis...   │
-├──────────────────────────┤
-│История транслитерации    │ ← Речь (скрол размер 5 строк)
-│на ангилйском             │
-├──────────────────────────┤
-│ 1. Подсказка              │ ← AnswerCandidates (только для вопросов, 1 шт.)
+│ I have five years of...  │ ← Зона 1: Interim (речь, 2 строки, белый текст)
+├──────────────────────────┤ separator 3px
+│ EN: We use Redis for...  │ ← Зона 2: TranslationHistory (скролл, макс 10 строк)
+│ RU: Мы используем Redis  │           оригинал + перевод от Gladia
+├──────────────────────────┤ separator 3px
+│ We use Redis for caching │ ← Зона 3: TranscriptionHistory (скролл, макс 5 строк)
+│ and message brokering    │           оригинал речи на английском
+├──────────────────────────┤ separator 3px
+│ EN: Redis is...          │ ← Зона 4: AnswerCandidates (1 подсказка, только вопросы)
+│ RU: Redis — это...       │           формат: EN: ... | RU: ...
 └──────────────────────────┘
 ```
+
+**Параметры окна:**
+- Размер: 800×650 (из `.env`: `OVERLAY_WIDTH`, `OVERLAY_HEIGHT`)
+- Заголовок: пустой (screen sharing privacy)
+- Заголовки зон: **отсутствуют** — только разделители 3px между зонами
+- Позиционирование: `app.TopMost(true)` — поверх других окон
+- Стили: **без** `WS_EX_LAYERED`/`WS_EX_TRANSPARENT` (ломают рендеринг Gio)
+- Win32: `WS_EX_NOACTIVATE` через `findWindowByPID`
+- Принцип: минимальные решения, без лишних HWND-стилей — `TopMost(true)` достаточно
+
+**Автоскролл:**
+- `prevHistLen` — сохраняется предыдущая длина списка
+- `layout.List` — персистентный, не пересоздаётся
+- При добавлении элемента: `ScrollTo(n-1)` — прокрутка к последнему
+
+**Запуск:** `app.Main()` **не используется** — вместо него кастомный event loop.
+
+**Тест:** `TestWindowStarts` — 40 строк, проверка первого и последнего элемента списка.
 
 ### Сохранение аудио (SAVE_AUDIO=true)
 ```
@@ -191,16 +217,17 @@ PCM (mic) → логгер → audio/speaker.mp3
 |---|---|
 | Endpoint | `https://api.z.ai/api/paas/v4/chat/completions` |
 | Модель | `glm-4.7-flash` |
-| Вызов | **синхронный** `GenerateAnswers` (без стриминга) |
+| Вызов | `GenerateAnswers` (синхронный) + `GenerateAnswersStream` (SSE-стриминг) |
 | max_tokens | `LLM_MAX_TOKENS` (default 1024) |
 | temperature | 0.3 (answers) |
 | Подсказок | **1** (промпт `SystemPromptAnswerGen` → "EXACTLY 1 bullet point") |
 | Формат | `EN: <English> \| RU: <Russian>` — UI разделяет на две строки |
 | Контекст | `CVContext` из `config.yaml` → `Pipeline.Config.CVContext` → `engine.SetCVContext()` → `BuildAnswerPrompt(question, cvContext)` |
+| Thinking | **включён по умолчанию** (GLM-4.7-Flash включает thinking автоматически). `DisableThinking()` посылает `"thinking": {"type": "disabled"}` в raw HTTP-запросе |
 
 **LLM используется ТОЛЬКО для генерации подсказок.** Перевод выполняется Gladia (встроенный, модель `enhanced`).
 
-**thinkingTransport удалён** — стриминг не используется, синхронный вызов работает без инжекции `thinking`.
+**thinkingTransport удалён из стриминг-пути** — управление thinking теперь через флаг `disableThinking` в `OpenAIProvider`, без инжекции в тело запроса на уровне транспорта.
 
 ---
 
@@ -290,7 +317,7 @@ SAVE_AUDIO=false
 | STT + Перевод | Gladia Solaria-1 `/v2/live` | Turn-aware streaming + встроенный перевод |
 | WebSocket | `gorilla/websocket` | Gladia WebSocket клиент |
 | LLM | `go-openai` → GLM-4.7-Flash | Генерация подсказок (стриминг) |
-| UI | `gioui.org` v0.10.1 | Прозрачный трёхзонный overlay |
+| UI | `gioui.org` v0.10.1 | Прозрачный четырёхзонный overlay |
 | Win32 | `golang.org/x/sys/windows` | WS_EX_TOPMOST/LAYERED |
 | Config | `joho/godotenv` + `gopkg.in/yaml.v3` | .env + config.yaml |
 
@@ -380,9 +407,9 @@ go run ./test/cable_test
 |-----------|--------|------------|
 | Gladia STT (Solaria-1) | ✅ | Двухфазный коннект, стриминг PCM |
 | Gladia Translation (enhanced) | ✅ | Встроенный, EN→RU, ~200ms |
-| LLM (GLM-4.7-Flash) | ✅ | Только подсказки, thinking disabled |
+| LLM (GLM-4.7-Flash) | ✅ | Только подсказки, thinking enabled (default) |
 | Pipeline | ✅ | 9 горутин, синхронный dispatch |
-| GioUI | ✅ | Три зоны: interim / перевод / подсказки |
+| GioUI | ✅ | Четыре зоны: interim / перевод / речь / подсказки |
 | VB-Cable | ✅ | Loopback (собеседник) + Mic (свой голос) |
 | Graceful shutdown | ✅ | ctx cancel → drain channels → flush logs |
 | go vet | ✅ | Чисто |
