@@ -154,6 +154,7 @@ func (fsl *FileSessionLogger) backgroundWorker() {
 			fsl.writer.Write([]string{fmtTS(job.event.Timestamp), ch(job.event.ChannelID), job.event.Event, job.event.Text, "", ""})
 		case "translation":
 			fsl.writer.Write([]string{fmtTS(job.event.Timestamp), ch(job.event.ChannelID), job.event.Event, job.event.Text, job.translation, strings.Join(job.answers, ";")})
+			fsl.writer.Flush()
 		case "debug":
 			fsl.writer.Write([]string{time.Now().Format("2006-01-02T15:04:05.000"), "-", "DEBUG", job.debugMsg, "", ""})
 		case "audio":
