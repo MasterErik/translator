@@ -86,7 +86,7 @@ func (e *TranslationEngine) ProcessQuestion(text string) (*TranslationResult, er
 	// 1. Classify.
 	isQuestion := IsQuestion(text)
 
-	slog.Info("вопрос обработан",
+	slog.Debug("вопрос обработан",
 		"text", text,
 		"is_question", isQuestion,
 	)
@@ -100,7 +100,7 @@ func (e *TranslationEngine) ProcessQuestion(text string) (*TranslationResult, er
 		// Copy values for the goroutine to avoid data races.
 		question := text
 		go func() {
-			slog.Info("генерация подсказок запущена", "question", question)
+			slog.Debug("генерация подсказок запущена", "question", question)
 
 			// Use a background context so answer generation is not
 			// tied to the request's lifecycle.
@@ -110,7 +110,7 @@ func (e *TranslationEngine) ProcessQuestion(text string) (*TranslationResult, er
 				slog.Error("генерация подсказок не удалась", "question", question, "error", genErr)
 				return
 			}
-			slog.Info("подсказки сгенерированы", "question", question, "count", len(answers))
+			slog.Debug("подсказки сгенерированы", "question", question, "count", len(answers))
 			result.SetAnswers(answers)
 		}()
 	}

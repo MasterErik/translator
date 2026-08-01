@@ -4,9 +4,11 @@ package common
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -33,9 +35,9 @@ type Config struct {
 	// Read from LLM_API_KEY environment variable. Falls back to OPENAI_API_KEY.
 	LLMAPIKey string
 
-	// OpenAIModel specifies the OpenAI model to use for translation and answer generation.
-	// Default: "gpt-4o-mini".
-	OpenAIModel string `yaml:"openai_model"`
+	// LLMModel specifies the LLM model to use for translation and answer generation.
+	// Default: "llama-3.3-70b-versatile".
+	LLMModel string `yaml:"llm_model"`
 
 	// TargetLang is the language code for Gladia translation (ISO 639-1).
 	// Default: "ru".
@@ -90,19 +92,13 @@ type Config struct {
 	// Read from OVERLAY_HEIGHT env.
 	OverlayHeight int
 
-	// OverlayMaxLines is the maximum number of translation history lines.
-	// Default: 5. Read from OVERLAY_MAX_LINES env.
-	OverlayMaxLines int
+	// LogLevel sets the minimum log level for slog (debug, info, warn, error).
+	// Default: "info". Read from LOG_LEVEL environment variable.
+	LogLevel string
 }
 
 // applyDefaults sets reasonable default values for any unconfigured fields.
 func (c *Config) applyDefaults() {
-	if c.LLMBaseURL == "" {
-		c.LLMBaseURL = "https://api.openai.com/v1"
-	}
-	if c.OpenAIModel == "" {
-		c.OpenAIModel = "gpt-4o-mini"
-	}
 	if c.TargetLang == "" {
 		c.TargetLang = "ru"
 	}
@@ -127,8 +123,8 @@ func (c *Config) applyDefaults() {
 	if c.OverlayHeight == 0 {
 		c.OverlayHeight = 650
 	}
-	if c.OverlayMaxLines == 0 {
-		c.OverlayMaxLines = 10
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
 	}
 }
 
@@ -155,8 +151,8 @@ func (c *Config) loadFromEnv() {
 	if c.LLMAPIKey == "" {
 		c.LLMAPIKey = c.OpenAIAPIKey
 	}
-	if v := os.Getenv("OPENAI_MODEL"); v != "" {
-		c.OpenAIModel = v
+	if v := os.Getenv("LLM_MODEL"); v != "" {
+		c.LLMModel = v
 	}
 	if v := os.Getenv("TARGET_LANG"); v != "" {
 		c.TargetLang = v
@@ -209,10 +205,25 @@ func (c *Config) loadFromEnv() {
 			c.OverlayHeight = n
 		}
 	}
-	if v := os.Getenv("OVERLAY_MAX_LINES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.OverlayMaxLines = n
-		}
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		c.LogLevel = strings.ToLower(v)
+	}
+}
+
+// SlogLevel converts the LogLevel string to slog.Level.
+// Defaults to slog.LevelInfo for unrecognized values.
+func (c *Config) SlogLevel() slog.Level {
+	switch c.LogLevel {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 
@@ -233,7 +244,7 @@ func isTruthy(v string) bool {
 // Example:
 //
 //	cfg := common.LoadConfig()
-//	fmt.Println(cfg.OpenAIModel) // "gpt-4o-mini" unless overridden
+//	fmt.Println(cfg.LLMModel) // "llama-3.3-70b-versatile" unless overridden
 func LoadConfig() *Config {
 	cfg := &Config{}
 	cfg.applyDefaults()

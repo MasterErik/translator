@@ -3,11 +3,17 @@ package stt
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/logger"
 )
 
 // makeTranscriptJSON создаёт JSON события transcript для тестов.
@@ -90,6 +96,7 @@ func TestGladiaProvider_ParseTranscript(t *testing.T) {
 				apiKey:  "test-key",
 				audioCh: make(chan []byte, 8),
 				textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 			}
 			provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -127,6 +134,7 @@ func TestGladiaProvider_ParseTranslation(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -158,6 +166,7 @@ func TestGladiaProvider_ParseTranscriptEmpty(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -181,6 +190,7 @@ func TestGladiaProvider_ParseUnknownType(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -200,7 +210,7 @@ func TestGladiaProvider_ParseUnknownType(t *testing.T) {
 
 // TestGladiaProvider_StopIdempotent проверяет, что двойной вызов Stop не вызывает панику.
 func TestGladiaProvider_StopIdempotent(t *testing.T) {
-	provider := NewGladiaProvider("test-key", "ru")
+	provider := NewGladiaProvider("test-key", "ru", logger.NewNopSessionLogger())
 
 	// Первый Stop без Start — без паники.
 	if err := provider.Stop(); err != nil {
@@ -227,6 +237,7 @@ func TestGladiaProvider_DoubleStart(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 
 	// Устанавливаем ctx/cancel вручную (симуляция успешного Start).
@@ -248,6 +259,7 @@ func TestGladiaProvider_ParseBrokenJSON(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -272,6 +284,7 @@ func TestGladiaProvider_ParseTranslationEmpty(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -296,6 +309,7 @@ func TestGladiaProvider_ParseTranscriptBadData(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -323,6 +337,7 @@ func TestGladiaProvider_ParseTranslationBadData(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -350,6 +365,7 @@ func TestGladiaProvider_EmitFullChannel(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent), // unbuffered → always full unless reader
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -373,6 +389,7 @@ func TestGladiaProvider_EmitContextCancelled(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent), // никто не читает
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -387,7 +404,7 @@ func TestGladiaProvider_EmitContextCancelled(t *testing.T) {
 
 // TestGladiaProvider_NewDefaultTargetLang проверяет язык по умолчанию.
 func TestGladiaProvider_NewDefaultTargetLang(t *testing.T) {
-	provider := NewGladiaProvider("test-key", "")
+	provider := NewGladiaProvider("test-key", "", logger.NewNopSessionLogger())
 	if provider.targetLang != "ru" {
 		t.Errorf("ожидался targetLang=ru, получен %q", provider.targetLang)
 	}
@@ -401,6 +418,7 @@ func TestGladiaProvider_ConcurrentStopAndEmit(t *testing.T) {
 		apiKey:  "test-key",
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 32),
+		sessLog: logger.NewNopSessionLogger(),
 	}
 	provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -441,4 +459,180 @@ func TestGladiaProvider_ConcurrentStopAndEmit(t *testing.T) {
 	close(stopCh)
 	cancel()
 	wg.Wait()
+}
+
+// =========================================================================
+// TestGladiaProvider_StopWaitsForPumps
+// =========================================================================
+
+// mockWSServer создаёт тестовый WebSocket-сервер, который принимает соединения
+// и держит их открытыми до отмены контекста.
+func mockWSServer(t *testing.T, ctx context.Context) *httptest.Server {
+	t.Helper()
+
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Logf("mock ws upgrade error: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		// Читаем до закрытия или отмены контекста.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+		}
+	}))
+	return srv
+}
+
+// TestGladiaProvider_StopWaitsForPumps проверяет, что Stop() дожидается
+// завершения writePump и readPump перед возвратом.
+func TestGladiaProvider_StopWaitsForPumps(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	srv := mockWSServer(t, ctx)
+	defer srv.Close()
+
+	// Преобразуем http:// в ws://
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	provider := &GladiaProvider{
+		apiKey:  "test-key",
+		audioCh: make(chan []byte, 64),
+		textCh:  make(chan common.STTEvent, 32),
+		sessLog: logger.NewNopSessionLogger(),
+	}
+
+	// Ручная инициализация (без initSession) — выставляем wsConn.
+	provider.ctx, provider.cancel = context.WithCancel(ctx)
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("не удалось подключиться к mock WS: %v", err)
+	}
+	provider.wsConn = conn
+
+	// Запускаем горутины как в Start().
+	provider.pumpWg.Add(2)
+	go func() { defer provider.pumpWg.Done(); provider.writePump() }()
+	go func() { defer provider.pumpWg.Done(); provider.readPump() }()
+
+	// Даём горутинам немного поработать.
+	time.Sleep(50 * time.Millisecond)
+
+	// Вызываем Stop — он должен дождаться завершения pump'ов.
+	stopDone := make(chan struct{})
+	go func() {
+		_ = provider.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// OK — Stop завершился.
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop() не завершился за 3 секунды — вероятно, завис на pumpWg.Wait()")
+	}
+
+	// Проверяем, что pumpWg обнулён (все горутины вышли).
+	// Если Wait() вернулся, значит счётчик = 0.
+}
+
+// =========================================================================
+// TestGladiaProvider_DoubleCloseWsConn
+// =========================================================================
+
+// TestGladiaProvider_DoubleCloseWsConn проверяет, что при одновременном
+// завершении writePump и readPump не происходит паники из-за двойного
+// закрытия wsConn (CAS-защита).
+func TestGladiaProvider_DoubleCloseWsConn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	srv := mockWSServer(t, ctx)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	provider := &GladiaProvider{
+		apiKey:  "test-key",
+		audioCh: make(chan []byte, 64),
+		textCh:  make(chan common.STTEvent, 32),
+		sessLog: logger.NewNopSessionLogger(),
+	}
+
+	provider.ctx, provider.cancel = context.WithCancel(ctx)
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("не удалось подключиться к mock WS: %v", err)
+	}
+	provider.wsConn = conn
+
+	// Сигнальные каналы для отслеживания выхода горутин.
+	writeDone := make(chan struct{})
+	readDone := make(chan struct{})
+
+	// Запускаем writePump.
+	provider.pumpWg.Add(1)
+	go func() {
+		defer provider.pumpWg.Done()
+		defer close(writeDone)
+		provider.writePump()
+	}()
+
+	// Запускаем readPump.
+	provider.pumpWg.Add(1)
+	go func() {
+		defer provider.pumpWg.Done()
+		defer close(readDone)
+		provider.readPump()
+	}()
+
+	// Даём горутинам стартовать.
+	time.Sleep(50 * time.Millisecond)
+
+	// Симулируем ошибку writePump: закрываем audioCh, чтобы writePump вышел.
+	close(provider.audioCh)
+
+	// Ждём выхода writePump.
+	select {
+	case <-writeDone:
+		// OK — writePump завершился.
+	case <-time.After(2 * time.Second):
+		t.Fatal("writePump не завершился после закрытия audioCh")
+	}
+
+	// Теперь отменяем контекст — readPump должен выйти.
+	cancel()
+
+	// Ждём выхода readPump.
+	select {
+	case <-readDone:
+		// OK — readPump завершился.
+	case <-time.After(2 * time.Second):
+		t.Fatal("readPump не завершился после отмены контекста")
+	}
+
+	// Обе горутины вышли. Проверяем, что паники не было.
+	// Если бы closeWsConn не был защищён CAS, вторая горутина
+	// вызвала бы панику при повторном Close().
+	provider.pumpWg.Wait()
+
+	// Проверяем, что wsConn всё ещё можно безопасно закрыть через Stop.
+	// (closeWsConn в Stop тоже пройдёт через CAS и не запаникует.)
+	if err := provider.Stop(); err != nil {
+		t.Errorf("неожиданная ошибка Stop после завершения pump'ов: %v", err)
+	}
 }

@@ -334,35 +334,6 @@ func TestSaveAudioChunk_CreatesAudioFile(t *testing.T) {
 	t.Logf("audio file: %s (%d bytes)", filepath.Base(audioPath), info.Size())
 }
 
-func TestSaveAudioChunk_MultipleChannels(t *testing.T) {
-	l, dir := newTestLoggerAudio(t)
-
-	loudPCM := generatePCM(1280)
-	for i := 0; i < 5; i++ {
-		if err := l.SaveAudioChunk("speaker", loudPCM); err != nil {
-			t.Fatalf("SaveAudioChunk(speaker): %v", err)
-		}
-	}
-	for i := 0; i < 5; i++ {
-		if err := l.SaveAudioChunk("mic", loudPCM); err != nil {
-			t.Fatalf("SaveAudioChunk(mic): %v", err)
-		}
-	}
-
-	if err := l.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	for _, ch := range []string{"speaker", "mic"} {
-		path := findAudioFile(t, dir, "session_") // все пишутся в один файл
-		if path == "" {
-			t.Errorf("expected audio file in %q", dir)
-		} else {
-			t.Logf("channel %s: %s", ch, filepath.Base(path))
-		}
-	}
-}
-
 // =========================================================================
 // Тесты Close
 // =========================================================================
@@ -411,7 +382,7 @@ func TestSaveAudioChunk_AfterCloseReturnsError(t *testing.T) {
 func TestMP3Encoding(t *testing.T) {
 	l, dir := newTestLoggerAudio(t)
 
-	pcm := generatePCM(16000) // 1 секунда 16kHz mono
+	pcm := generatePCM(16000) // 1 секунда 16kHz mono, 32000 байт raw
 
 	chunkSize := 640 // 20ms at 16kHz
 	for offset := 0; offset < len(pcm); offset += chunkSize {
@@ -442,65 +413,39 @@ func TestMP3Encoding(t *testing.T) {
 		t.Error("audio file is empty — encoding failed")
 	}
 
-	t.Logf("Audio file: %s, size: %d bytes (raw PCM was %d bytes)",
-		filepath.Base(audioPath), info.Size(), len(pcm))
-}
-
-func TestMP3FileSize(t *testing.T) {
-	l, dir := newTestLoggerAudio(t)
-
-	pcm := generatePCM(16000) // 1 секунда, 32000 байт raw
-	// Разбиваем на чанки чтобы VAD-светофор включился (>=3 фрейма).
-	chunkBytes := 1280 * 2
-	for offset := 0; offset < len(pcm); offset += chunkBytes {
-		end := offset + chunkBytes
-		if end > len(pcm) {
-			end = len(pcm)
-		}
-		if err := l.SaveAudioChunk("speaker", pcm[offset:end]); err != nil {
-			t.Fatalf("SaveAudioChunk at offset %d: %v", offset, err)
-		}
-	}
-	if err := l.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	audioPath := findAudioFile(t, dir, "session_")
-	if audioPath == "" {
-		t.Fatal("no audio file found")
-	}
-
-	info, err := os.Stat(audioPath)
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-
 	rawSize := int64(len(pcm))
 	fileSize := info.Size()
 
-	t.Logf("Raw PCM: %d bytes, encoded: %d bytes (%.1f%%)",
-		rawSize, fileSize, float64(fileSize)/float64(rawSize)*100)
+	t.Logf("Audio file: %s, size: %d bytes (raw PCM was %d bytes, %.1f%%)",
+		filepath.Base(audioPath), fileSize, rawSize, float64(fileSize)/float64(rawSize)*100)
 
+	// Проверяем разумный размер закодированного файла.
 	ext := filepath.Ext(audioPath)
 	if ext == ".mp3" {
-		maxSize := rawSize / 5 // 20%
+		// MP3 должен сильно сжимать: < 20% от raw PCM для 1 секунды тонового сигнала.
+		maxSize := rawSize / 5
 		if fileSize > maxSize {
 			t.Errorf("MP3 file too large: %d > %d (20%% of raw PCM)", fileSize, maxSize)
 		}
 	} else if ext == ".wav" {
+		// WAV = raw PCM + заголовок, должен быть не меньше raw.
 		if fileSize < rawSize {
 			t.Errorf("WAV file too small: %d < raw PCM %d", fileSize, rawSize)
 		}
 	}
 }
 
+// TestAudioConcurrentWrites проверяет отсутствие гонок (data races) при конкурентной
+// записи аудио-чанков и CSV-событий из нескольких каналов одновременно.
+// Запускается с флагом -race: go test -race -run TestAudioConcurrentWrites ./internal/logger/...
 func TestAudioConcurrentWrites(t *testing.T) {
 	l, dir := newTestLoggerAudio(t)
 
 	const numChunks = 100
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(4)
 
+	// Конкурентная запись аудио — speaker.
 	go func() {
 		defer wg.Done()
 		loudPCM := generatePCM(1280)
@@ -509,11 +454,28 @@ func TestAudioConcurrentWrites(t *testing.T) {
 		}
 	}()
 
+	// Конкурентная запись аудио — mic.
 	go func() {
 		defer wg.Done()
 		loudPCM := generatePCM(1280)
 		for i := 0; i < numChunks; i++ {
 			_ = l.SaveAudioChunk("mic", loudPCM)
+		}
+	}()
+
+	// Конкурентная запись в CSV — LogDebug.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numChunks; i++ {
+			_ = l.LogDebug("concurrent debug")
+		}
+	}()
+
+	// Конкурентная запись в CSV — LogText.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numChunks; i++ {
+			_ = l.LogText(common.STTEvent{Text: "hello", Event: common.EventEndOfTurn, ChannelID: "speaker"})
 		}
 	}()
 
@@ -538,6 +500,7 @@ func TestAudioConcurrentWrites(t *testing.T) {
 func TestAudioGracefulClose(t *testing.T) {
 	l, dir := newTestLoggerAudio(t)
 
+	startCh := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -548,11 +511,14 @@ func TestAudioGracefulClose(t *testing.T) {
 			if err := l.SaveAudioChunk("speaker", loudPCM); err != nil {
 				return
 			}
+			if i == 9 {
+				close(startCh) // сигнал: достаточно чанков для VAD (>3 громких фрейма)
+			}
 		}
 	}()
 
-	time.Sleep(10 * time.Millisecond)
-
+	// Ждём пока горутина запишет минимум 10 чанков, затем Close во время активной записи.
+	<-startCh
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

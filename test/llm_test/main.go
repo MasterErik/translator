@@ -28,17 +28,13 @@ func main() {
 	}
 
 	fmt.Printf("LLM Base URL: %s\n", cfg.LLMBaseURL)
-	fmt.Printf("Model:        %s\n", cfg.OpenAIModel)
+	fmt.Printf("Model:        %s\n", cfg.LLMModel)
 	fmt.Printf("Max Tokens:   %d\n", maxTokens)
 	fmt.Printf("API Key:      %s...%s\n", apiKey[:8], apiKey[len(apiKey)-4:])
 	fmt.Println()
 
-	prov := translator.NewOpenAIProviderWithConfig(cfg.LLMBaseURL, apiKey, cfg.OpenAIModel)
+	prov := translator.NewChatProvider(cfg.LLMBaseURL, apiKey, cfg.LLMModel)
 	prov.SetMaxTokens(maxTokens)
-
-	// Disable thinking for GLM models (enabled by default, consumes token budget).
-	// Safe to call for non-GLM models — it's a no-op when thinking isn't supported.
-	prov.DisableThinking()
 
 	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
 

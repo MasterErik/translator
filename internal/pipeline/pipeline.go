@@ -5,7 +5,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/dispatcher"
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/stt"
 	"github.com/mastererik/translator/internal/translator"
@@ -53,7 +53,8 @@ type Pipeline struct {
 	sessLog  logger.SessionLogger
 
 	textStream   chan common.STTEvent
-	dispatchDone chan struct{} // Сигнал завершения runDispatch (буфер 1)
+	dispatchDone chan struct{}      // Сигнал завершения dispatcher (буфер 1)
+	dispatch     *dispatcher.Dispatcher
 }
 
 // Config — все настройки пайплайна (без магических чисел).
@@ -104,25 +105,48 @@ func New(cfg Config) (*Pipeline, error) {
 		cfg.AnswerTimeout = 10 * time.Second
 	}
 
+	// Логгер сессии — создаётся первым, чтобы все компоненты могли писать в него.
+	sessLog := logger.SessionLogger(logger.NewNopSessionLogger())
+	if cfg.LogDir != "" {
+		var err error
+		sessLog, err = logger.NewFileSessionLogger(cfg.LogDir, cfg.SaveAudio)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: создание логгера сессии: %w", err)
+		}
+	}
+	// Гарантируем закрытие логгера и запись ошибки при сбое.
+	var ok bool
+	var newErr error
+	defer func() {
+		if !ok {
+			if newErr != nil {
+				_ = sessLog.LogDebug(fmt.Sprintf("FATAL: ошибка создания pipeline: %v", newErr))
+			}
+			_ = sessLog.Close()
+		}
+	}()
+
 	// STT-провайдер (Gladia).
-	sttProv := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang)
+	sttProv := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang, sessLog)
 
 	// LLM-провайдер.
 	llmAPIKey := cfg.LLMAPIKey
 	if llmAPIKey == "" {
-		return nil, fmt.Errorf("pipeline: LLMAPIKey обязателен")
+		newErr = fmt.Errorf("pipeline: LLMAPIKey обязателен")
+		return nil, newErr
 	}
 	llmBaseURL := cfg.LLMBaseURL
 	if llmBaseURL == "" {
-		llmBaseURL = "https://api.openai.com/v1"
+		newErr = fmt.Errorf("pipeline: LLMBaseURL обязателен (например https://api.groq.com/openai/v1)")
+		return nil, newErr
 	}
 	llmModel := cfg.LLMModel
 	if llmModel == "" {
-		llmModel = "gpt-4o-mini"
+		newErr = fmt.Errorf("pipeline: LLMModel обязателен (например llama-3.3-70b-versatile)")
+		return nil, newErr
 	}
 
-	llmProv := translator.NewOpenAIProviderWithConfig(llmBaseURL, llmAPIKey, llmModel)
-	llmProv.DisableThinking()
+	llmProv := translator.NewChatProvider(llmBaseURL, llmAPIKey, llmModel)
 	llmProv.SetMaxTokens(cfg.MaxTokens)
 
 	// TranslationEngine.
@@ -132,17 +156,7 @@ func New(cfg Config) (*Pipeline, error) {
 	}
 
 	// Overlay.
-	overlay := ui.NewOverlay(cfg.OverlayCfg)
-
-	// Логгер сессии: NopLogger если LogDir пуст.
-	sessLog := logger.SessionLogger(logger.NewNopSessionLogger())
-	if cfg.LogDir != "" {
-		var err error
-		sessLog, err = logger.NewFileSessionLogger(cfg.LogDir, cfg.SaveAudio)
-		if err != nil {
-			return nil, fmt.Errorf("pipeline: создание логгера сессии: %w", err)
-		}
-	}
+	overlay := ui.NewOverlay(cfg.OverlayCfg, sessLog)
 
 	// Валидация аудиоустройств (опционально).
 	if cfg.ValidateAudio && cfg.Capturer != nil {
@@ -151,7 +165,9 @@ func New(cfg Config) (*Pipeline, error) {
 		validateCancel()
 		_, _, err := cfg.Capturer.Start(validateCtx)
 		if err != nil {
-			return nil, fmt.Errorf("pipeline: валидация захвата аудио: %w", err)
+			sessLog.LogDebug(fmt.Sprintf("ERROR: валидация аудио: %v", err))
+			newErr = fmt.Errorf("pipeline: валидация захвата аудио: %w", err)
+			return nil, newErr
 		}
 	}
 
@@ -164,8 +180,15 @@ func New(cfg Config) (*Pipeline, error) {
 		sessLog:      sessLog,
 		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
 		dispatchDone: make(chan struct{}, 1),
+		dispatch: dispatcher.New(
+			overlay,
+			engine,
+			sessLog,
+			dispatcher.Config{AnswerTimeout: cfg.AnswerTimeout},
+		),
 	}
 
+	ok = true
 	return p, nil
 }
 
@@ -177,25 +200,40 @@ func New(cfg Config) (*Pipeline, error) {
 // горутины захвата, STT, dispatch и UI-оверлея, ожидает сигнала завершения
 // (SIGINT/SIGTERM) и выполняет корректный shutdown.
 func (p *Pipeline) Run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := p.sttProv.Start(ctx); err != nil {
+	// runCtx — отменяется при SIGINT/SIGTERM (через sigCtx) или при закрытии окна.
+	runCtx, runCancel := context.WithCancel(sigCtx)
+	defer runCancel()
+
+	if err := p.sttProv.Start(runCtx); err != nil {
 		return fmt.Errorf("pipeline: запуск STT: %w", err)
 	}
 	p.sessLog.LogDebug("STT запущен")
 
-	go p.runCapture(ctx)
-	go p.runSTT(ctx)
-	go p.runDispatch(ctx)
-	go p.runUI(ctx)
+	go p.runCapture(runCtx)
+	go p.runSTT(runCtx)
+	go p.dispatch.Run(runCtx, p.textStream, p.dispatchDone)
+	go p.runUI(runCtx)
+
+	// Ждём закрытия UI-окна или SIGINT/SIGTERM.
+	overlayDone := make(chan struct{})
+	go func() {
+		p.overlay.WaitShutdown()
+		close(overlayDone)
+	}()
 
 	p.sessLog.LogDebug("все горутины запущены")
-	slog.Info("pipeline запущен, ожидание сигнала")
+	p.sessLog.LogDebug("pipeline запущен, ожидание сигнала или закрытия окна")
 
-	<-ctx.Done()
-	slog.Info("получен сигнал завершения, запускается shutdown")
-	p.sessLog.LogDebug("получен сигнал завершения")
+	select {
+	case <-sigCtx.Done():
+		p.sessLog.LogDebug("получен сигнал завершения (SIGINT/SIGTERM)")
+	case <-overlayDone:
+		p.sessLog.LogDebug("UI-окно закрыто, запускается shutdown")
+		runCancel() // отменяем runCtx → все горутины завершаются
+	}
 	p.shutdown()
 	return nil
 }
@@ -213,7 +251,7 @@ func (p *Pipeline) shutdown() {
 	// 1. STT-провайдер — закрывает WebSocket,
 	//    runSTT закрывает textStream → runDispatch завершается.
 	if err := p.sttProv.Stop(); err != nil {
-		slog.Warn("ошибка остановки STT", "err", err)
+		p.sessLog.LogDebug(fmt.Sprintf("ошибка остановки STT: err=%v", err))
 	}
 
 	// 2. Дождаться завершения runDispatch — все стриминг-горутины
@@ -228,11 +266,11 @@ func (p *Pipeline) shutdown() {
 	// 4. Логгер сессии — только после того, как все переводы записаны.
 	if p.sessLog != nil {
 		if err := p.sessLog.Close(); err != nil {
-			slog.Warn("ошибка закрытия логгера", "err", err)
+			p.sessLog.LogDebug(fmt.Sprintf("ошибка закрытия логгера: err=%v", err))
 		}
 	}
 
-	slog.Info("shutdown завершён")
+	p.sessLog.LogDebug("shutdown завершён")
 }
 
 // --------------------------------------------------------------------------
@@ -243,13 +281,13 @@ func (p *Pipeline) shutdown() {
 // в аудиопоток STT-провайдера и (опционально) логгер сессии.
 func (p *Pipeline) runCapture(ctx context.Context) {
 	if p.capturer == nil {
-		slog.Warn("capturer не задан, захват аудио пропущен")
+		p.sessLog.LogDebug("capturer не задан, захват аудио пропущен")
 		return
 	}
 
 	loopbackCh, micCh, err := p.capturer.Start(ctx)
 	if err != nil {
-		slog.Error("не удалось запустить захват аудио", "error", err)
+		p.sessLog.LogDebug(fmt.Sprintf("не удалось запустить захват аудио: error=%v", err))
 		return
 	}
 
@@ -262,9 +300,9 @@ func (p *Pipeline) runCapture(ctx context.Context) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
 
 	// Микрофон → fan-out → STT + логгер.
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for {
@@ -305,6 +343,7 @@ func (p *Pipeline) runCapture(ctx context.Context) {
 	}
 
 	// Направляем loopback (собеседник).
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		p.routeAudioChannel(ctx, loopbackCh, audioStream)
@@ -312,7 +351,7 @@ func (p *Pipeline) runCapture(ctx context.Context) {
 
 	<-ctx.Done()
 	wg.Wait()
-	slog.Info("пайплайн захвата остановлен")
+	p.sessLog.LogDebug("пайплайн захвата остановлен")
 }
 
 // routeAudioChannel читает PCM-фрагменты из src и пересылает в dst (STT).
@@ -347,7 +386,7 @@ func (p *Pipeline) routeRawMic(ctx context.Context, src <-chan []byte) {
 				return
 			}
 			if err := p.sessLog.SaveAudioChunk("mic", chunk); err != nil {
-				slog.Warn("не удалось сохранить аудио-фрагмент", "error", err)
+				p.sessLog.LogDebug(fmt.Sprintf("не удалось сохранить аудио-фрагмент: error=%v", err))
 			}
 		}
 	}
@@ -377,17 +416,15 @@ func (p *Pipeline) runSTT(ctx context.Context) {
 			}
 
 			if event.Error != nil {
-				slog.Warn("ошибка STT-события", "err", event.Error)
+				p.sessLog.LogDebug(fmt.Sprintf("ошибка STT-события: err=%v", event.Error))
 				continue
 			}
 
-			// Логирование — асинхронно, best-effort.
+			// Логирование — синхронно (LogText неблокирующий, пишет в буферизованный writeCh).
 			if p.sessLog != nil {
-				go func(ev common.STTEvent) {
-					if err := p.sessLog.LogText(ev); err != nil {
-						slog.Warn("ошибка логирования STT", "err", err)
-					}
-				}(event)
+				if err := p.sessLog.LogText(event); err != nil {
+					p.sessLog.LogDebug(fmt.Sprintf("ошибка логирования STT: err=%v", err))
+				}
 			}
 
 			// Маршрутизация.
@@ -397,13 +434,16 @@ func (p *Pipeline) runSTT(ctx context.Context) {
 }
 
 // routeSTTEvent маршрутизирует STT-событие в textStream:
-//   - Final (EventEndOfTurn) — блокирующая отправка.
+//   - Final (EventEndOfTurn) — блокирующая отправка с таймаутом 5s.
 //   - Interim — неблокирующая отправка.
 func (p *Pipeline) routeSTTEvent(ctx context.Context, event common.STTEvent) {
 	if event.Event == common.EventEndOfTurn {
-		// Final: блокирующая отправка — перевод не теряется.
+		// Final: блокирующая отправка с таймаутом — перевод не теряется,
+		// но и не блокирует весь пайплайн при переполнении textStream.
 		select {
 		case p.textStream <- event:
+		case <-time.After(5 * time.Second):
+			p.sessLog.LogDebug("textStream backpressure: final event dropped after 5s")
 		case <-ctx.Done():
 		}
 	} else {
@@ -416,129 +456,31 @@ func (p *Pipeline) routeSTTEvent(ctx context.Context, event common.STTEvent) {
 	}
 }
 
-// --------------------------------------------------------------------------
-// runDispatch — центральный dispatch-узел
-// --------------------------------------------------------------------------
+// ── Методы-делегаты для обратной совместимости тестов ─────────────────
 
-// runDispatch — центральный dispatch-узел, обрабатывающий поток STT-событий.
-//
-// Новая логика (Gladia):
-//   - transcript is_final=false → UI Interim (серый текст, предпросмотр).
-//   - transcript is_final=true  → UI History (оригинал) + проверка IsQuestion.
-//     Если вопрос — асинхронная генерация подсказок.
-//   - translation (ChannelID="translation") → UI Translation + UI History
-//     (перевод добавляется к последнему оригиналу).
-//
-// Gladia шлёт translation ПОСЛЕ transcript. Связываем через lastOriginal.
+// runDispatch делегирует маршрутизацию в dispatcher.Dispatcher.
+// Оставлен для совместимости с существующими тестами.
+// Если dispatcher не задан (тесты, создающие Pipeline вручную), создаётся
+// экземпляр по умолчанию.
 func (p *Pipeline) runDispatch(ctx context.Context) {
-	slog.Info("dispatch-узел запущен (Gladia)")
-
-	// Гарантируем сигнал завершения при любом выходе из runDispatch.
-	defer func() {
-		if p.dispatchDone != nil {
-			p.dispatchDone <- struct{}{}
-		}
-	}()
-
-	// lastOriginal хранит последний финальный транскрипт для связки с переводом.
-	var lastOriginal common.STTEvent
-	// historySeen отслеживает уже добавленные оригиналы для дедупликации.
-	historySeen := map[string]bool{}
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("dispatch: контекст отменён, завершение")
-			return
-
-		case event, ok := <-p.textStream:
-			if !ok {
-				slog.Info("textStream закрыт, dispatch завершает работу")
-				return
-			}
-
-			switch {
-			case event.ChannelID == "translation":
-				// Событие перевода от Gladia — показываем в UI Translation (белый текст).
-				p.overlay.AddMessage(ui.UIMessage{
-					Type:      ui.Translation,
-					Text:      event.Text,
-					Timestamp: event.Timestamp,
-					MsgStatus: "done",
-				})
-
-				// Добавляем оригинал + перевод в историю (без дублей).
-				if !historySeen[lastOriginal.Text] {
-					historySeen[lastOriginal.Text] = true
-					p.overlay.AddMessage(ui.UIMessage{
-						Type:        ui.History,
-						Text:        lastOriginal.Text,
-						Translation: event.Text,
-						Timestamp:   event.Timestamp,
-					})
-				}
-
-				slog.Info("перевод получен",
-					"original", lastOriginal.Text,
-					"translation", event.Text,
-				)
-
-				// Логируем перевод.
-				if p.sessLog != nil {
-					logEvent := lastOriginal
-					logEvent.Timestamp = time.Now()
-					if err := p.sessLog.LogTranslation(logEvent, event.Text, nil); err != nil {
-						slog.Warn("не удалось записать перевод в лог", "error", err)
-					}
-				}
-
-			case event.Event != common.EventEndOfTurn:
-				// Промежуточный результат: показываем серым в верхней зоне.
-				p.overlay.AddMessage(ui.UIMessage{
-					Type:      ui.Interim,
-					Text:      event.Text,
-					Timestamp: event.Timestamp,
-				})
-
-			default:
-				// Финальный транскрипт: сохраняем для связки с переводом,
-				// проверяем на вопрос. В историю НЕ добавляем — ждём перевод.
-				lastOriginal = event
-
-				slog.Info("финальный транскрипт", "text", event.Text)
-
-				if translator.IsQuestion(event.Text) {
-					slog.Info("обнаружен вопрос, запуск генерации подсказок", "text", event.Text)
-					go p.generateAnswersAsync(event.Text)
-				}
-			}
+	if p.dispatch == nil {
+		p.dispatch = dispatcher.New(p.overlay, p.engine, p.sessLog,
+			dispatcher.Config{AnswerTimeout: p.cfg.AnswerTimeout})
+		if p.dispatchDone == nil {
+			p.dispatchDone = make(chan struct{}, 1)
 		}
 	}
+	p.dispatch.Run(ctx, p.textStream, p.dispatchDone)
 }
 
-// generateAnswersAsync запускает генерацию подсказок в фоне.
-// Принимает только текст вопроса, вызывает engine.GenerateAnswersStream.
+// generateAnswersAsync делегирует генерацию подсказок в dispatcher.
+// Оставлен для совместимости с существующими тестами.
 func (p *Pipeline) generateAnswersAsync(question string) {
-	ansCtx, ansCancel := context.WithTimeout(context.Background(), p.cfg.AnswerTimeout)
-	defer ansCancel()
-
-	answers, err := p.engine.GenerateAnswers(ansCtx, question)
-	if err != nil {
-		slog.Error("генерация подсказок не удалась", "question", question, "error", err)
-		return
+	if p.dispatch == nil {
+		p.dispatch = dispatcher.New(p.overlay, p.engine, p.sessLog,
+			dispatcher.Config{AnswerTimeout: p.cfg.AnswerTimeout})
 	}
-	if len(answers) == 0 {
-		return
-	}
-
-	p.overlay.AddMessage(ui.UIMessage{
-		Type:      ui.AnswerCandidates,
-		Text:      question,
-		Answers:   answers,
-		Timestamp: time.Now(),
-	})
-
-	slog.Info("подсказки сгенерированы", "question", question, "count", len(answers))
+	p.dispatch.GenerateAnswers(question)
 }
 
 // parseAnswerHints разбирает сырой ответ LLM на отдельные подсказки.
@@ -572,8 +514,8 @@ func parseAnswerHints(raw string) []string {
 // runUI запускает цикл событий оверлея и блокируется до отмены контекста
 // или закрытия окна оверлея.
 func (p *Pipeline) runUI(ctx context.Context) {
-	slog.Info("UI-оверлей запущен")
+	p.sessLog.LogDebug("UI-оверлей запущен")
 	if err := p.overlay.Run(ctx); err != nil {
-		slog.Error("UI-оверлей упал", "err", err)
+		p.sessLog.LogDebug(fmt.Sprintf("UI-оверлей упал: err=%v", err))
 	}
 }

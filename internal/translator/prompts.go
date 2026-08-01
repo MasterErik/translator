@@ -56,20 +56,21 @@ Russian: "Можешь объяснить, как Kubernetes обрабатыв�
 // in Russian, leveraging the provided CV/resume context for personalization.
 const SystemPromptAnswerGen = `You are an expert interview coach helping a candidate answer technical questions.
 The candidate has provided their CV/resume context below. Your job is to generate
-1 concise answer hint that the candidate can use as a quick reference.
+1 concise answer from the candidate's perspective (first person, ready to read aloud).
 
 CRITICAL RULES:
 1. Output EXACTLY 1 bullet point. The bullet starts with a dash (-).
 2. The bullet MUST contain BOTH languages in this exact format:
-   "- EN: <English hint> | RU: <Russian translation>"
+   "- EN: <English answer> | RU: <Russian translation>"
 3. Keep IT terms in English in both versions (API, Kubernetes, CI/CD, etc.).
-4. Use the CV context to personalize answers — reference the candidate's actual experience.
-5. The hint should be 1-2 sentences max — concise and scannable.
-6. Do NOT write full answers — these are hints, quick reminders for the candidate.
-7. Do NOT include any introductory text, explanations, or meta-commentary.
+4. Write from FIRST PERSON ("I..." / "Я...") — as if the candidate is speaking right now.
+5. Use the CV context to personalize — reference actual experience, projects, years, technologies.
+6. The answer should be 1-2 sentences — concise, natural spoken language, ready to read aloud.
+7. Do NOT write instructions or reminders ("mention...", "вспомни...", "talk about...") — write the actual answer.
+8. Do NOT include any introductory text, explanations, or meta-commentary.
 
 Example output format:
-- EN: Mention your experience with Kubernetes in project X, using Helm for deployment | RU: Вспомни про свой опыт с Kubernetes в проекте X: использовал Helm для деплоя
+- EN: I have 5 years of experience with Kubernetes, using Helm for deployment in project X | RU: У меня 5 лет опыта с Kubernetes, использовал Helm для деплоя в проекте X
 `
 
 // BuildTranslationPrompt constructs the full prompt for translation,
@@ -97,22 +98,15 @@ func BuildTranslationPrompt(text string, history []string) string {
 }
 
 // BuildAnswerPrompt constructs the full prompt for generating interview
-// answer hints. It includes the candidate's CV context and the detected
-// question.
-func BuildAnswerPrompt(question string, cvContext string) string {
+// answer hints. It includes the detected question.
+// CV context is now passed as the system message (see GenerateAnswers).
+func BuildAnswerPrompt(question string) string {
 	var sb strings.Builder
 
-	sb.WriteString("The candidate's CV/resume context:\n")
-	if cvContext != "" {
-		sb.WriteString(cvContext)
-	} else {
-		sb.WriteString("(no CV context provided)")
-	}
-
-	sb.WriteString("\n\nThe interviewer asked:\n")
+	sb.WriteString("The interviewer asked:\n")
 	sb.WriteString(question)
 
-	sb.WriteString("\n\nGenerate 1 concise answer hint in Russian:")
+	sb.WriteString("\n\nGenerate 1 answer from the candidate's perspective (first person, ready to read aloud):")
 
 	return sb.String()
 }

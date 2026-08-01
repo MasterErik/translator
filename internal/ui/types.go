@@ -9,7 +9,6 @@ type OverlayConfig struct {
 	Width    int // Default: 1200
 	Height   int // Default: 650
 	FontSize int // Default: 18
-	MaxLines int // строк перевода в истории. Default: 10.
 }
 
 // UIMessageType classifies the kind of message sent to the overlay.

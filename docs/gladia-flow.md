@@ -176,6 +176,16 @@ transcript is_final=true → lastOriginal = event
 translation → UI Translation + UI History(lastOriginal.Text, translation.Text)
 ```
 
+## PCM-фреймы
+
+| Параметр | Значение |
+|---|---|
+| Длительность | **80ms** (`defaultBufferSizeMs = 80` в `internal/capture/types.go`) |
+| Размер | 2560 байт (1280 сэмплов × 2 байта int16) |
+| Частота | 16000 Hz, mono, 16-bit |
+| Буфер audioCh | 64 фрейма (~5 сек) |
+| При переполнении | Дроп старых фреймов + rate-limited Warn (1 раз в 10s) |
+
 ## Характеристики
 
 | Параметр | Значение |
@@ -197,3 +207,30 @@ translation → UI Translation + UI History(lastOriginal.Text, translation.Text)
 | `writePump` | audioCh → WebSocket (BinaryMessage, PCM) |
 | `readPump` | WebSocket → parseAndEmit → textCh (JSON-события) |
 | `runSTT` (routeSTTEvent) | textCh → textStream с разделением interim/final/translation |
+
+## Reconnect (exponential backoff)
+
+При обрыве WebSocket соединения Gladia **сохраняет сессию** — можно переподключиться на тот же URL без нового POST.
+
+```
+Состояния:  CONNECTED → RECONNECTING → CONNECTED
+                                    → NEW_SESSION → CONNECTED
+                                    → FAILED → shutdown
+
+Попытка 1: сразу (0s)           — dial на сохранённый wsURL
+Попытка 2: 1s + jitter (±25%)   — dial
+Попытка 3: 2s + jitter          — dial
+Попытка 4: 4s + jitter          — dial
+...
+Попытка 8: 64s + jitter         — сессия истекла → новый POST /v2/live
+...
+Попытка 10: 64s + jitter        — исчерпаны → graceful shutdown
+```
+
+| Параметр | Значение |
+|---|---|
+| Базовый интервал | `min(2^(n-2), 64)` секунд |
+| Jitter | `delay * (1 + rand.Float64() * 0.25)` |
+| Макс. попыток | 10 |
+| Действие при успехе | Буфер audioCh (до 5 сек) вычитывается в WS |
+| Действие при провале | Graceful shutdown |

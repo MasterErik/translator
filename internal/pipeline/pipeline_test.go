@@ -3,12 +3,15 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/dispatcher"
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/translator"
 	"github.com/mastererik/translator/internal/ui"
@@ -279,13 +282,19 @@ func newTestPipeline(sttProv *mockSTT, capt *mockCapturer, ovl *mockOverlay, llm
 		MaxTokens:        256,
 	}
 	return &Pipeline{
-		cfg:        cfg,
-		capturer:   capt,
-		sttProv:    sttProv,
-		engine:     engine,
-		overlay:    ovl,
-		sessLog:    sessLog,
-		textStream: make(chan common.STTEvent, cfg.TextStreamBuffer),
+		cfg:          cfg,
+		capturer:     capt,
+		sttProv:      sttProv,
+		engine:       engine,
+		overlay:      ovl,
+		sessLog:      sessLog,
+		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
+		dispatch: dispatcher.New(
+			ovl,
+			engine,
+			sessLog,
+			dispatcher.Config{AnswerTimeout: 3 * time.Second},
+		),
 	}
 }
 
@@ -299,7 +308,7 @@ func TestPipelineGracefulShutdown(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	p := newTestPipeline(stt, capt, ovl, llm, nil)
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
 
 	if err := stt.Start(context.Background()); err != nil {
 		t.Fatalf("mock STT Start: %v", err)
@@ -353,7 +362,7 @@ func TestPipelineFinalEventNotLost(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	p := newTestPipeline(stt, capt, ovl, llm, nil)
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
 
 	// Заполняем textStream до ёмкости (буфер = 4).
 	bufSize := p.cfg.TextStreamBuffer
@@ -433,7 +442,7 @@ func TestPipelineInterimEventDropped(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	p := newTestPipeline(stt, capt, ovl, llm, nil)
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
 
 	// Заполняем textStream до ёмкости (буфер = 4).
 	bufSize := p.cfg.TextStreamBuffer
@@ -548,12 +557,8 @@ func TestPipelineNoSessLog(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	// Создаём Pipeline с sessLog = nil.
-	p := newTestPipeline(stt, capt, ovl, llm, nil)
-
-	if p.sessLog != nil {
-		t.Fatal("sessLog должен быть nil")
-	}
+	// Создаём Pipeline с NopSessionLogger (без файлового логгера).
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
 
 	if err := stt.Start(context.Background()); err != nil {
 		t.Fatalf("mock STT Start: %v", err)
@@ -660,7 +665,7 @@ func TestPipelineDispatch_TranslationWithoutOriginal(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	p := newTestPipeline(stt, nil, ovl, llm, nil)
+	p := newTestPipeline(stt, nil, ovl, llm, logger.NewNopSessionLogger())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -699,7 +704,7 @@ func TestPipelineDispatch_TwoTranslationsInRow(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	p := newTestPipeline(stt, nil, ovl, llm, nil)
+	p := newTestPipeline(stt, nil, ovl, llm, logger.NewNopSessionLogger())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -752,7 +757,7 @@ func TestPipelineDispatch_ErrorEvent(t *testing.T) {
 	ovl := newMockOverlay()
 	llm := &mockLLM{}
 
-	p := newTestPipeline(stt, nil, ovl, llm, nil)
+	p := newTestPipeline(stt, nil, ovl, llm, logger.NewNopSessionLogger())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -821,10 +826,17 @@ func TestGenerateAnswersAsync_LLMError(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	msgs := ovl.GetMessages()
+	found := false
 	for _, m := range msgs {
 		if m.Type == ui.AnswerCandidates {
-			t.Error("AnswerCandidates не должны появляться при ошибке LLM")
+			found = true
+			if len(m.Answers) == 0 || m.Answers[0] == "" {
+				t.Error("AnswerCandidates при ошибке должны содержать сообщение об ошибке")
+			}
 		}
+	}
+	if !found {
+		t.Error("ожидались AnswerCandidates с ошибкой при сбое LLM")
 	}
 }
 
@@ -863,7 +875,8 @@ func TestParseAnswerHints_Pipeline(t *testing.T) {
 
 func TestPipelineNew_EmptyLLMAPIKey(t *testing.T) {
 	cfg := Config{
-		LLMAPIKey: "",
+		LLMAPIKey:  "",
+		LLMBaseURL: "https://api.z.ai/api/paas/v4/",
 	}
 	_, err := New(cfg)
 	if err == nil {
@@ -887,8 +900,14 @@ var _ translator.LLMProvider = (*errorLLM)(nil)
 // =========================================================================
 
 func TestPipelineNew_ValidConfig_Minimal(t *testing.T) {
+	commonCfg, err := common.LoadConfigFromYAML(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfigFromYAML: %v", err)
+	}
 	cfg := Config{
-		LLMAPIKey: "sk-test",
+		LLMAPIKey:  "sk-test-key",
+		LLMBaseURL: commonCfg.LLMBaseURL,
+		LLMModel:   commonCfg.LLMModel,
 	}
 	p, err := New(cfg)
 	if err != nil {
@@ -924,9 +943,15 @@ func TestPipelineNew_ValidConfig_Minimal(t *testing.T) {
 func TestPipelineNew_ValidConfig_WithLogDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	commonCfg, err := common.LoadConfigFromYAML(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfigFromYAML: %v", err)
+	}
 	cfg := Config{
-		LLMAPIKey: "sk-test",
-		LogDir:    tmpDir,
+		LLMAPIKey:  "sk-test-key",
+		LLMBaseURL: commonCfg.LLMBaseURL,
+		LLMModel:   commonCfg.LLMModel,
+		LogDir:     tmpDir,
 	}
 	p, err := New(cfg)
 	if err != nil {
@@ -1151,3 +1176,242 @@ func TestPipelineHistoryDedup(t *testing.T) {
 }
 
 var _ translator.StreamingAnswersProvider = (*localStreamingMockLLM)(nil)
+
+// =========================================================================
+// TestPipeline_TextStreamBackpressure — проверяет, что final-событие
+// не блокирует пайплайн навечно при переполненном textStream.
+// После таймаута 5s событие дропается с логом.
+// =========================================================================
+
+func TestPipeline_TextStreamBackpressure(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+	sessLog := &mockSessionLogger{}
+
+	p := newTestPipeline(stt, capt, ovl, llm, sessLog)
+
+	// Заполняем textStream до ёмкости.
+	bufSize := p.cfg.TextStreamBuffer
+	for i := 0; i < bufSize; i++ {
+		p.textStream <- common.STTEvent{
+			Text:      fmt.Sprintf("interim %d", i),
+			Event:     common.EventUpdate,
+			ChannelID: "speaker",
+			Timestamp: time.Now(),
+		}
+	}
+
+	// Отправляем final-событие через routeSTTEvent с context.Background().
+	// Канал полон → таймаут 5s → дроп с логом.
+	ctx := context.Background()
+	done := make(chan struct{})
+	go func() {
+		p.routeSTTEvent(ctx, common.STTEvent{
+			Text:      "final under backpressure",
+			Event:     common.EventEndOfTurn,
+			ChannelID: "speaker",
+			Timestamp: time.Now(),
+		})
+		close(done)
+	}()
+
+	// Ждём: либо событие проходит (если канал дренирован), либо таймаут 5s.
+	select {
+	case <-done:
+		t.Log("backpressure: routeSTTEvent завершился (событие прошло или дропнуто по таймауту)")
+	case <-time.After(6 * time.Second):
+		t.Fatal("backpressure deadlock: routeSTTEvent завис >6s при заполненном textStream")
+	}
+}
+
+// =========================================================================
+// TestPipeline_LogTextSync — проверяет, что LogText вызывается синхронно
+// (не в отдельной горутине), и runSTT блокируется до возврата LogText.
+// =========================================================================
+
+// blockingLogTextLogger — логгер, который блокируется в LogText до сигнала.
+type blockingLogTextLogger struct {
+	mockSessionLogger
+	blockCh   chan struct{} // блокирует LogText до закрытия
+	callCount atomic.Int32
+}
+
+func (m *blockingLogTextLogger) LogText(event common.STTEvent) error {
+	m.callCount.Add(1)
+	<-m.blockCh // блокируемся до сигнала
+	return nil
+}
+
+func TestPipeline_LogTextSync(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+
+	blocker := &blockingLogTextLogger{
+		blockCh: make(chan struct{}),
+	}
+
+	p := newTestPipeline(stt, capt, ovl, llm, blocker)
+
+	if err := stt.Start(context.Background()); err != nil {
+		t.Fatalf("mock STT Start: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Запускаем runSTT.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.runSTT(ctx)
+	}()
+
+	// Отправляем первое событие — runSTT должен заблокироваться на LogText.
+	stt.textCh <- common.STTEvent{
+		Text:      "hello",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "speaker",
+		Timestamp: time.Now(),
+	}
+
+	// Даём время runSTT дойти до вызова LogText.
+	time.Sleep(100 * time.Millisecond)
+
+	// Отправляем второе событие — оно НЕ должно быть обработано,
+	// потому что runSTT всё ещё заблокирован на первом LogText.
+	stt.textCh <- common.STTEvent{
+		Text:      "world",
+		Event:     common.EventEndOfTurn,
+		ChannelID: "speaker",
+		Timestamp: time.Now(),
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// LogText должен быть вызван ровно 1 раз (только для первого события).
+	if c := blocker.callCount.Load(); c != 1 {
+		t.Errorf("LogText callCount = %d, want 1 (синхронный вызов блокирует обработку второго события)", c)
+	}
+
+	// Разблокируем LogText — runSTT обработает второе событие.
+	close(blocker.blockCh)
+
+	// Ждём, что второе событие тоже обработается.
+	time.Sleep(200 * time.Millisecond)
+
+	if c := blocker.callCount.Load(); c < 2 {
+		t.Errorf("LogText callCount = %d, want >=2 после разблокировки", c)
+	}
+
+	cancel()
+	wg.Wait()
+
+	t.Log("LogText вызывается синхронно: runSTT блокируется до возврата LogText")
+}
+
+// =========================================================================
+// TestPipeline_RunCaptureWaitGroup — проверяет, что все горутины runCapture
+// завершаются корректно при отмене контекста с новой арифметикой WaitGroup.
+// =========================================================================
+
+func TestPipeline_RunCaptureWaitGroup(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Запускаем runCapture и сразу отменяем контекст.
+	done := make(chan struct{})
+	go func() {
+		p.runCapture(ctx)
+		close(done)
+	}()
+
+	// Даём горутинам внутри runCapture запуститься.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	// Проверяем, что runCapture не завис.
+	select {
+	case <-done:
+		t.Log("runCapture: все горутины завершились без ошибок")
+	case <-time.After(5 * time.Second):
+		t.Fatal("runCapture завис при отмене контекста — возможна ошибка в арифметике WaitGroup")
+	}
+
+	// Дополнительно: проверяем что пайплайн без логгера тоже не зависает.
+	p2 := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+	// Второй вызов с новым контекстом — проверка идемпотентности.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	cancel2() // отменяем сразу
+
+	done2 := make(chan struct{})
+	go func() {
+		p2.runCapture(ctx2)
+		close(done2)
+	}()
+
+	select {
+	case <-done2:
+		t.Log("runCapture с отменённым контекстом: завершился мгновенно")
+	case <-time.After(5 * time.Second):
+		t.Fatal("runCapture с отменённым контекстом завис")
+	}
+}
+
+// =========================================================================
+// TestPipeline_ShutdownGoroutineLeak — проверка отсутствия утечек горутин после shutdown.
+// =========================================================================
+
+func TestPipeline_ShutdownGoroutineLeak(t *testing.T) {
+	// Считаем горутины до создания пайплайна.
+	initialGoroutines := runtime.NumGoroutine()
+
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	// mockOverlay с runBlocker: Run() вернётся сразу, что запустит каскад shutdown.
+	ovl := newMockOverlay()
+	runDone := make(chan struct{})
+	close(runDone)
+	ovl.runBlocker = runDone
+	llm := &mockLLM{}
+	sessLog := &mockSessionLogger{}
+
+	p := newTestPipeline(stt, capt, ovl, llm, sessLog)
+
+	// Запускаем Run() в горутине — overlayDone сработает сразу,
+	// запустив shutdown() и освободив все ресурсы.
+	done := make(chan struct{})
+	go func() {
+		_ = p.Run()
+		close(done)
+	}()
+
+	// Ждём завершения Run() с таймаутом.
+	select {
+	case <-done:
+		t.Log("Run() завершился без ошибок")
+	case <-time.After(10 * time.Second):
+		t.Fatal("таймаут: Run() не завершился — возможна блокировка")
+	}
+
+	// Даём GC немного времени на финализацию горутин.
+	time.Sleep(100 * time.Millisecond)
+
+	finalGoroutines := runtime.NumGoroutine()
+	delta := finalGoroutines - initialGoroutines
+
+	t.Logf("Горутины: до=%d, после=%d, delta=%d (допуск ±2)", initialGoroutines, finalGoroutines, delta)
+	if delta > 2 || delta < -2 {
+		t.Errorf("возможна утечка горутин: delta=%d (допуск ±2)", delta)
+	}
+}

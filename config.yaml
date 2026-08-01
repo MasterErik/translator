@@ -4,12 +4,14 @@
 # LLM base URL — supports any OpenAI-compatible provider.
 # OpenAI:      https://api.openai.com/v1
 # Z.AI GLM:    https://api.z.ai/api/paas/v4/
-llm_base_url: "https://api.openai.com/v1"
+# Groq Cloud:  https://api.groq.com/openai/v1
+llm_base_url: "https://api.groq.com/openai/v1"
 
 # LLM model — supports any model on the configured base_url.
 # OpenAI:      gpt-4o-mini (default)
 # Z.AI GLM:    glm-4.7-flash (бесплатный, ~0.4s latency, 2-3x быстрее GPT-4o-mini)
-openai_model: "gpt-4o-mini"
+# Groq:        llama-3.1-8b-instant (208ms), llama-3.3-70b-versatile (431ms)
+llm_model: "llama-3.3-70b-versatile"
 
 # Gladia model for speech-to-text and translation
 gladia_model: "solaria-1"
@@ -38,12 +40,17 @@ mic_device: ""
 # Default false — set true to enable for debugging or post-session review.
 save_audio: false
 
-# Sliding window size for translation context (number of recent sentences)
-window_size: 5
-
-# CV / resume context for answer generation — edit this with your own details
+# Системный промпт для генерации подсказок (используется как system message LLM).
+# Пиши от первого лица, как готовый ответ кандидата.
 cv_context: |
-  Senior Go developer with 5+ years experience.
-  Expert in distributed systems, microservices, Kubernetes.
-  Built high-load real-time processing pipelines.
-  Experience with audio processing and WebSocket APIs.
+  You are an expert interview coach helping a candidate answer technical questions.
+  The candidate is a Senior Go developer.
+  Generate 1 concise answer from the candidate's perspective (first person, ready to read aloud).
+
+  CRITICAL RULES:
+  1. Output EXACTLY 1 bullet point starting with a dash (-).
+  2. Format: "- EN: <English answer> | RU: <Russian translation>"
+  3. Keep IT terms in English: API, Kubernetes, CI/CD, Docker, microservices, etc.
+  4. Write from FIRST PERSON ("I am Erik Ivanov" / "Я Эрик Иванов") — as if the candidate is speaking right now.
+  5. The answer should be 1-2 sentences — concise, natural spoken language, ready to read aloud.
+  6. Do NOT write instructions or reminders — write the actual answer.

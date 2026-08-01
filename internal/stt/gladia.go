@@ -5,14 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/logger"
 )
 
 // gladiaBaseURL — базовый URL Gladia Live API v2.
@@ -109,9 +110,13 @@ type GladiaProvider struct {
 	audioCh chan []byte
 	textCh  chan common.STTEvent
 
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wsClosed atomic.Bool
+	pumpWg   sync.WaitGroup
+
+	sessLog logger.SessionLogger
 }
 
 // NewGladiaProvider создаёт новый GladiaProvider.
@@ -119,7 +124,8 @@ type GladiaProvider struct {
 // Параметры:
 //   - apiKey: ключ Gladia API (x-gladia-key)
 //   - targetLang: целевой язык перевода, по умолчанию "ru"
-func NewGladiaProvider(apiKey, targetLang string) *GladiaProvider {
+//   - sessLog: логгер сессии для operational-логов
+func NewGladiaProvider(apiKey, targetLang string, sessLog logger.SessionLogger) *GladiaProvider {
 	if targetLang == "" {
 		targetLang = "ru"
 	}
@@ -128,6 +134,7 @@ func NewGladiaProvider(apiKey, targetLang string) *GladiaProvider {
 		targetLang: targetLang,
 		audioCh:    make(chan []byte, 64),
 		textCh:     make(chan common.STTEvent, 32),
+		sessLog:    sessLog,
 	}
 }
 
@@ -166,32 +173,47 @@ func (g *GladiaProvider) Start(ctx context.Context) error {
 	}
 	g.wsConn = conn
 
-	slog.Info("gladia: сессия запущена", "wsURL", wsURL)
+	g.sessLog.LogDebug(fmt.Sprintf("gladia: сессия запущена: wsURL=%s", wsURL))
 
-	go g.writePump()
-	go g.readPump()
+	g.pumpWg.Add(2)
+	go func() { defer g.pumpWg.Done(); g.writePump() }()
+	go func() { defer g.pumpWg.Done(); g.readPump() }()
 
 	return nil
 }
 
-// Stop останавливает провайдера: отменяет контекст и закрывает WebSocket.
-// Идемпотентен — повторные вызовы безопасны.
+// Stop останавливает провайдера: отменяет контекст, ждёт завершения горутин
+// и закрывает WebSocket. Идемпотентен — повторные вызовы безопасны.
 func (g *GladiaProvider) Stop() error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	if g.cancel == nil {
+		g.mu.Unlock()
 		return nil
 	}
 
 	g.cancel()
 
+	g.mu.Unlock()
+	g.pumpWg.Wait()
+	g.mu.Lock()
+
+	g.closeWsConn()
+	g.mu.Unlock()
+
+	return nil
+}
+
+// closeWsConn закрывает WebSocket-соединение через CAS — только первый вызов
+// выполняет реальное закрытие, остальные игнорируются.
+func (g *GladiaProvider) closeWsConn() {
+	if !g.wsClosed.CompareAndSwap(false, true) {
+		return
+	}
 	if g.wsConn != nil {
 		_ = g.wsConn.Close()
 		g.wsConn = nil
 	}
-
-	return nil
 }
 
 // AudioStream возвращает канал для отправки PCM-аудио (16 кГц, mono, 16-bit).
@@ -270,14 +292,7 @@ func (g *GladiaProvider) initSession(ctx context.Context) (string, error) {
 // writePump читает PCM-фреймы из audioCh и отправляет их в WebSocket.
 // Завершается при отмене контекста или закрытии audioCh.
 func (g *GladiaProvider) writePump() {
-	defer func() {
-		g.mu.Lock()
-		if g.wsConn != nil {
-			_ = g.wsConn.Close()
-			g.wsConn = nil
-		}
-		g.mu.Unlock()
-	}()
+	defer g.closeWsConn()
 
 	for {
 		select {
@@ -297,12 +312,12 @@ func (g *GladiaProvider) writePump() {
 			}
 
 			if err := conn.SetWriteDeadline(time.Now().Add(gladiaWriteTimeout)); err != nil {
-				slog.Warn("gladia: set write deadline", "error", err)
+				g.sessLog.LogDebug(fmt.Sprintf("gladia: set write deadline: error=%v", err))
 				return
 			}
 
 			if err := conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
-				slog.Warn("gladia: ошибка записи в WebSocket", "error", err)
+				g.sessLog.LogDebug(fmt.Sprintf("gladia: ошибка записи в WebSocket: error=%v", err))
 				return
 			}
 		}
@@ -312,14 +327,7 @@ func (g *GladiaProvider) writePump() {
 // readPump читает JSON-сообщения из WebSocket и передаёт их в parseAndEmit.
 // Завершается при отмене контекста или ошибке чтения.
 func (g *GladiaProvider) readPump() {
-	defer func() {
-		g.mu.Lock()
-		if g.wsConn != nil {
-			_ = g.wsConn.Close()
-			g.wsConn = nil
-		}
-		g.mu.Unlock()
-	}()
+	defer g.closeWsConn()
 
 	for {
 		select {
@@ -339,9 +347,9 @@ func (g *GladiaProvider) readPump() {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				slog.Debug("gladia: WebSocket закрыт", "error", err)
+				g.sessLog.LogDebug(fmt.Sprintf("gladia: WebSocket закрыт: error=%v", err))
 			} else {
-				slog.Warn("gladia: ошибка чтения из WebSocket", "error", err)
+				g.sessLog.LogDebug(fmt.Sprintf("gladia: ошибка чтения из WebSocket: error=%v", err))
 			}
 			return
 		}
@@ -359,7 +367,7 @@ func (g *GladiaProvider) readPump() {
 func (g *GladiaProvider) parseAndEmit(message []byte) {
 	var msg gladiaMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
-		slog.Warn("gladia: не удалось разобрать сообщение", "error", err, "raw", string(message))
+		g.sessLog.LogDebug(fmt.Sprintf("gladia: не удалось разобрать сообщение: error=%v, raw=%s", err, string(message)))
 		return
 	}
 
@@ -367,7 +375,7 @@ func (g *GladiaProvider) parseAndEmit(message []byte) {
 	case "transcript":
 		var data gladiaTranscriptData
 		if err := json.Unmarshal(msg.Data, &data); err != nil {
-			slog.Warn("gladia: не удалось разобрать transcript", "error", err)
+			g.sessLog.LogDebug(fmt.Sprintf("gladia: не удалось разобрать transcript: error=%v", err))
 			return
 		}
 
@@ -391,7 +399,7 @@ func (g *GladiaProvider) parseAndEmit(message []byte) {
 	case "translation":
 		var data gladiaTranslationData
 		if err := json.Unmarshal(msg.Data, &data); err != nil {
-			slog.Warn("gladia: не удалось разобрать translation", "error", err)
+			g.sessLog.LogDebug(fmt.Sprintf("gladia: не удалось разобрать translation: error=%v", err))
 			return
 		}
 
@@ -418,9 +426,9 @@ func (g *GladiaProvider) emit(evt common.STTEvent) {
 	select {
 	case g.textCh <- evt:
 	case <-g.ctx.Done():
-		slog.Warn("gladia: контекст отменён, событие не отправлено", "event", evt.Event)
+		g.sessLog.LogDebug(fmt.Sprintf("gladia: контекст отменён, событие не отправлено: event=%s", evt.Event))
 	default:
-		slog.Warn("gladia: канал textCh заполнен, событие отброшено", "event", evt.Event)
+		g.sessLog.LogDebug(fmt.Sprintf("gladia: канал textCh заполнен, событие отброшено: event=%s", evt.Event))
 	}
 }
 

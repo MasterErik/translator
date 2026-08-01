@@ -1,15 +1,35 @@
 """
 Generate a test WAV file with English speech for Translator manual testing.
 Uses Edge TTS (built into Windows) or falls back to a simple tone.
+
+Also generates test_speech.json with known text/translation for the
+tail-latency emulator test.
 """
+import json
 import subprocess
 import struct
 import math
 import os
 
 OUTPUT = "test_speech.wav"
+JSON_OUTPUT = "test_speech.json"
 SAMPLE_RATE = 16000
 DURATION = 3.0  # seconds
+
+# Known text and translation for the tail-latency emulator test.
+TEST_DATA = {
+    "text": "Hello, could you explain what a deadlock is and how to avoid it in Go?",
+    "translation": "Привет, не могли бы вы объяснить, что такое взаимоблокировка и как её избежать в Go?",
+    "is_question": True,
+}
+
+
+def generate_json(path):
+    """Write test_speech.json with known text and translation."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(TEST_DATA, f, ensure_ascii=False, indent=2)
+    print(f"Generated test data: {path}")
+
 
 def generate_tone_wav(path):
     """Generate a 440Hz sine tone as fallback test audio."""
@@ -85,3 +105,4 @@ Write-Host "OK"
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     generate_speech_wav(OUTPUT)
+    generate_json(JSON_OUTPUT)

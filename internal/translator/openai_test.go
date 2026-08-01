@@ -13,21 +13,9 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// newTestOpenAIProvider creates an OpenAIProvider pointed at a mock server.
-func newTestOpenAIProvider(server *httptest.Server, model string) *OpenAIProvider {
-	cfg := openai.DefaultConfig("sk-test-key")
-	cfg.BaseURL = server.URL + "/v1"
-	return &OpenAIProvider{
-		client: openai.NewClientWithConfig(cfg),
-		model:  modelOrDefault(model),
-	}
-}
-
-func modelOrDefault(model string) string {
-	if model == "" {
-		return "gpt-4o-mini"
-	}
-	return model
+// newTestChatProvider creates an ChatProvider pointed at a mock server.
+func newTestChatProvider(server *httptest.Server, model string) *ChatProvider {
+	return NewChatProvider(server.URL+"/v1", "sk-test-key", model)
 }
 
 func setupMockServer(handler http.HandlerFunc) *httptest.Server {
@@ -41,7 +29,7 @@ func setupMockServer(handler http.HandlerFunc) *httptest.Server {
 	}))
 }
 
-func TestOpenAIProvider_GenerateAnswers_Success(t *testing.T) {
+func TestChatProvider_GenerateAnswers_Success(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		resp := openai.ChatCompletionResponse{
 			Choices: []openai.ChatCompletionChoice{
@@ -57,7 +45,7 @@ func TestOpenAIProvider_GenerateAnswers_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	answers, err := provider.GenerateAnswers(ctx, "What is your DevOps experience?", "DevOps engineer, 5 years")
@@ -75,7 +63,7 @@ func TestOpenAIProvider_GenerateAnswers_Success(t *testing.T) {
 	}
 }
 
-func TestOpenAIProvider_GenerateAnswers_EmptyCV(t *testing.T) {
+func TestChatProvider_GenerateAnswers_EmptyCV(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		resp := openai.ChatCompletionResponse{
 			Choices: []openai.ChatCompletionChoice{
@@ -91,7 +79,7 @@ func TestOpenAIProvider_GenerateAnswers_EmptyCV(t *testing.T) {
 	})
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	answers, err := provider.GenerateAnswers(ctx, "What is TDD?", "")
@@ -104,7 +92,7 @@ func TestOpenAIProvider_GenerateAnswers_EmptyCV(t *testing.T) {
 	}
 }
 
-func TestOpenAIProvider_RetryOnRateLimit(t *testing.T) {
+func TestChatProvider_RetryOnRateLimit(t *testing.T) {
 	callCount := 0
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -127,7 +115,7 @@ func TestOpenAIProvider_RetryOnRateLimit(t *testing.T) {
 	})
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	_, err := provider.GenerateAnswers(ctx, "Question?", "")
@@ -140,14 +128,14 @@ func TestOpenAIProvider_RetryOnRateLimit(t *testing.T) {
 	}
 }
 
-func TestOpenAIProvider_RetryExhausted(t *testing.T) {
+func TestChatProvider_RetryExhausted(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"error": {"message": "rate limit exceeded"}}`))
 	})
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	_, err := provider.GenerateAnswers(ctx, "Question?", "")
@@ -160,14 +148,14 @@ func TestOpenAIProvider_RetryExhausted(t *testing.T) {
 	}
 }
 
-func TestOpenAIProvider_ContextCancellation(t *testing.T) {
+func TestChatProvider_ContextCancellation(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		// Simulate a slow response.
 		time.Sleep(2 * time.Second)
 	})
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
@@ -177,7 +165,7 @@ func TestOpenAIProvider_ContextCancellation(t *testing.T) {
 	}
 }
 
-func TestOpenAIProvider_NoChoices(t *testing.T) {
+func TestChatProvider_NoChoices(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		resp := openai.ChatCompletionResponse{
 			Choices: []openai.ChatCompletionChoice{},
@@ -187,22 +175,12 @@ func TestOpenAIProvider_NoChoices(t *testing.T) {
 	})
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	_, err := provider.GenerateAnswers(ctx, "Question?", "")
 	if err == nil {
 		t.Error("GenerateAnswers() should return error when response has no choices")
-	}
-}
-
-func TestNewOpenAIProvider_DefaultModel(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer server.Close()
-
-	provider := newTestOpenAIProvider(server, "")
-	if provider.model != "gpt-4o-mini" {
-		t.Errorf("Default model = %q, want %q", provider.model, "gpt-4o-mini")
 	}
 }
 
@@ -290,9 +268,9 @@ func TestStripBulletPrefix(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIProviderWithConfig_CustomBaseURL проверяет создание провайдера
+// TestNewChatProvider_CustomBaseURL проверяет создание провайдера
 // с кастомным base_url (например, для Z.AI GLM).
-func TestNewOpenAIProviderWithConfig_CustomBaseURL(t *testing.T) {
+func TestNewChatProvider_CustomBaseURL(t *testing.T) {
 	server := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
 		resp := openai.ChatCompletionResponse{
 			Choices: []openai.ChatCompletionChoice{
@@ -309,7 +287,7 @@ func TestNewOpenAIProviderWithConfig_CustomBaseURL(t *testing.T) {
 	defer server.Close()
 
 	// Создаём провайдер с кастомным base_url (симулируем GLM API).
-	provider := NewOpenAIProviderWithConfig(server.URL+"/v1", "sk-test-key", "glm-4-flash")
+	provider := NewChatProvider(server.URL+"/v1", "sk-test-key", "glm-4-flash")
 	ctx := context.Background()
 
 	if provider.model != "glm-4-flash" {
@@ -326,15 +304,15 @@ func TestNewOpenAIProviderWithConfig_CustomBaseURL(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIProviderWithConfig_DefaultModel проверяет, что пустая модель
-// даёт значение по умолчанию.
-func TestNewOpenAIProviderWithConfig_DefaultModel(t *testing.T) {
+// TestNewChatProvider_DefaultModel проверяет, что модель берётся из конфигурации
+// (без хардкода — пустая модель остаётся пустой).
+func TestNewChatProvider_DefaultModel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	provider := NewOpenAIProviderWithConfig(server.URL+"/v1", "sk-key", "")
-	if provider.model != "gpt-4o-mini" {
-		t.Errorf("Default model = %q, want %q", provider.model, "gpt-4o-mini")
+	provider := NewChatProvider(server.URL+"/v1", "sk-key", "")
+	if provider.model != "" {
+		t.Errorf("model should be empty when not provided, got %q", provider.model)
 	}
 }
 
@@ -370,7 +348,7 @@ func TestStreamingGenerateAnswers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	tokenCh, err := provider.GenerateAnswersStream(ctx, "Question?", "")
@@ -399,7 +377,7 @@ func TestStreamingGenerateAnswers_EmptyResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	tokenCh, err := provider.GenerateAnswersStream(ctx, "Hello", "")
@@ -432,7 +410,7 @@ func TestStreamingGenerateAnswers_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -451,13 +429,13 @@ func TestStreamingGenerateAnswers_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestOpenAIProvider_ImplementsStreaming проверяет, что OpenAIProvider
+// TestChatProvider_ImplementsStreaming проверяет, что ChatProvider
 // реализует интерфейс StreamingAnswersProvider.
-func TestOpenAIProvider_ImplementsStreaming(t *testing.T) {
+func TestChatProvider_ImplementsStreaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 
 	// Compile-time check: provider satisfies StreamingAnswersProvider.
 	var _ StreamingAnswersProvider = provider
@@ -473,7 +451,7 @@ func TestStreamingGenerateAnswers_StreamError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
 	tokenCh, err := provider.GenerateAnswersStream(ctx, "Question?", "")
@@ -494,46 +472,27 @@ func TestStreamingGenerateAnswers_StreamError(t *testing.T) {
 	}
 }
 
-// TestOpenAIProvider_DisableThinking проверяет включение флага disableThinking.
-func TestOpenAIProvider_DisableThinking(t *testing.T) {
+// TestChatProvider_SetMaxTokens проверяет установку и чтение maxTokens.
+func TestChatProvider_SetMaxTokens(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
+	provider := newTestChatProvider(server, "gpt-4o-mini")
 
-	// До вызова.
-	if provider.disableThinking {
-		t.Error("disableThinking должен быть false по умолчанию")
-	}
-
-	provider.DisableThinking()
-
-	if !provider.disableThinking {
-		t.Error("disableThinking должен быть true после вызова DisableThinking()")
-	}
-}
-
-// TestOpenAIProvider_SetMaxTokens проверяет установку и чтение maxTokens.
-func TestOpenAIProvider_SetMaxTokens(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer server.Close()
-
-	provider := newTestOpenAIProvider(server, "gpt-4o-mini")
-
-	if provider.maxTokensOrZero() != 0 {
-		t.Error("maxTokensOrZero должен возвращать 0 по умолчанию")
+	if provider.maxTokens != 0 {
+		t.Error("maxTokens должен быть 0 по умолчанию")
 	}
 
 	provider.SetMaxTokens(256)
 	if provider.maxTokens != 256 {
 		t.Errorf("maxTokens = %d, want 256", provider.maxTokens)
 	}
-	if provider.maxTokensOrZero() != 256 {
-		t.Errorf("maxTokensOrZero = %d, want 256", provider.maxTokensOrZero())
+	if provider.maxTokens != 256 {
+		t.Errorf("maxTokens = %d, want 256", provider.maxTokens)
 	}
 
 	provider.SetMaxTokens(0)
-	if provider.maxTokensOrZero() != 0 {
-		t.Error("maxTokensOrZero должен возвращать 0 после установки в 0")
+	if provider.maxTokens != 0 {
+		t.Error("maxTokens должен быть 0 после установки в 0")
 	}
 }

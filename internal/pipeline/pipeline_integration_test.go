@@ -12,10 +12,18 @@ import (
 
 	"github.com/mastererik/translator/internal/capture"
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/dispatcher"
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/translator"
 	"github.com/mastererik/translator/internal/ui"
 )
+
+// skipIfShort пропускает интеграционный тест при -short.
+func skipIfShort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("интеграционный тест пропущен в short-режиме")
+	}
+}
 
 // =========================================================================
 // Дополнительные моки для интеграционных тестов
@@ -143,13 +151,19 @@ func buildTestPipeline(sttProv *mockSTT, capt capturer, ovl Overlay, llm transla
 		SaveAudio:        true,
 	}
 	return &Pipeline{
-		cfg:        cfg,
-		capturer:   capt,
-		sttProv:    sttProv,
-		engine:     engine,
-		overlay:    ovl,
-		sessLog:    sessLog,
-		textStream: make(chan common.STTEvent, txtBufSize),
+		cfg:          cfg,
+		capturer:     capt,
+		sttProv:      sttProv,
+		engine:       engine,
+		overlay:      ovl,
+		sessLog:      sessLog,
+		textStream:   make(chan common.STTEvent, txtBufSize),
+		dispatch: dispatcher.New(
+			ovl,
+			engine,
+			sessLog,
+			dispatcher.Config{AnswerTimeout: 10 * time.Second},
+		),
 	}
 }
 
@@ -158,6 +172,7 @@ func buildTestPipeline(sttProv *mockSTT, capt capturer, ovl Overlay, llm transla
 // =========================================================================
 
 func TestPipelineFullFlow(t *testing.T) {
+	skipIfShort(t)
 	tmpDir, err := os.MkdirTemp("", "pipeline-fullflow-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -299,6 +314,7 @@ func TestPipelineFullFlow(t *testing.T) {
 // =========================================================================
 
 func TestPipelineSaveAudioDisabled(t *testing.T) {
+	skipIfShort(t)
 	tmpDir, err := os.MkdirTemp("", "pipeline-nosave-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -362,6 +378,7 @@ func TestPipelineSaveAudioDisabled(t *testing.T) {
 // TestPipelineInterimDuringLongTranslation — проверка, что interim-события
 // обрабатываются даже когда в очереди есть final и translation события.
 func TestPipelineInterimDuringLongTranslation(t *testing.T) {
+	skipIfShort(t)
 	llm := &mockLLM{}
 
 	ovl := newCountingOverlay()
@@ -439,6 +456,7 @@ func TestPipelineInterimDuringLongTranslation(t *testing.T) {
 // =========================================================================
 
 func TestPipelineDispatchGracefulShutdown(t *testing.T) {
+	skipIfShort(t)
 	// slowLLM не реализует StreamingAnswersProvider — проверяем, что
 	// dispatch завершается чисто даже с медленным LLM (Gladia flow).
 	llm := newSlowLLM(100 * time.Millisecond)
@@ -512,6 +530,7 @@ func TestPipelineDispatchGracefulShutdown(t *testing.T) {
 // В новом Gladia flow: финальный транскрипт-вопрос → generateAnswersAsync →
 // токены собираются → AnswerCandidates в оверлее.
 func TestPipelineStreamingTokensArrive(t *testing.T) {
+	skipIfShort(t)
 	llm := &streamingMockLLM{
 		tokens: []string{"mock hint 1", "mock hint 2"},
 		delay:  10 * time.Millisecond,
@@ -570,6 +589,7 @@ func TestPipelineStreamingTokensArrive(t *testing.T) {
 // =========================================================================
 
 func TestPipelineStreamCancellation(t *testing.T) {
+	skipIfShort(t)
 	llm := &streamingMockLLM{
 		tokens: []string{"очень", "длинный", "перевод"},
 		delay:  500 * time.Millisecond,
@@ -617,6 +637,7 @@ func TestPipelineStreamCancellation(t *testing.T) {
 // Отправляем 3 вопроса одновременно → каждый запускает generateAnswersAsync →
 // все должны сгенерировать AnswerCandidates.
 func TestPipelineConcurrentStreams(t *testing.T) {
+	skipIfShort(t)
 	llm := &streamingMockLLM{
 		tokens: []string{"hint A", "hint B"},
 		delay:  50 * time.Millisecond,
@@ -686,6 +707,7 @@ func TestPipelineConcurrentStreams(t *testing.T) {
 // =========================================================================
 
 func TestPipelineInterimNotBlockedInStream(t *testing.T) {
+	skipIfShort(t)
 	llm := &streamingMockLLM{
 		tokens: []string{"X", "Y", "Z"},
 		delay:  300 * time.Millisecond,
@@ -749,6 +771,7 @@ func TestPipelineInterimNotBlockedInStream(t *testing.T) {
 // использует синхронный GenerateAnswers и возвращает результаты через канал.
 // Проверяем, что подсказки доходят до UI AnswerCandidates.
 func TestPipelineFallbackToSync(t *testing.T) {
+	skipIfShort(t)
 	// slowLLM does NOT implement StreamingAnswersProvider — should fall back.
 	llm := newSlowLLM(50 * time.Millisecond)
 
@@ -797,6 +820,7 @@ func TestPipelineFallbackToSync(t *testing.T) {
 // =========================================================================
 
 func TestPipelineWithStubCapture(t *testing.T) {
+	skipIfShort(t)
 	stt := newMockSTT()
 
 	// StubCapture emits silent 16kHz frames.
@@ -828,7 +852,7 @@ func TestPipelineWithStubCapture(t *testing.T) {
 		sttProv:    stt,
 		engine:     engine,
 		overlay:    ovl,
-		sessLog:    nil,
+		sessLog:    logger.NewNopSessionLogger(),
 		textStream: make(chan common.STTEvent, 16),
 	}
 
@@ -877,6 +901,7 @@ func (a *stubCapturerAdapter) Start(ctx context.Context) (<-chan []byte, <-chan 
 // =========================================================================
 
 func TestEndOfTurnCycle(t *testing.T) {
+	skipIfShort(t)
 	sttProv := newMockSTT()
 	llm := &mockLLM{}
 	ovl := newMockOverlay()
@@ -953,13 +978,14 @@ func TestEndOfTurnCycle(t *testing.T) {
 // =========================================================================
 
 func TestTranslationLoggedToCSV(t *testing.T) {
+	skipIfShort(t)
 	tmpDir, err := os.MkdirTemp("", "pipeline-csv-log-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Стриминг-мок LLM (как OpenAIProvider).
+	// Стриминг-мок LLM (как ChatProvider).
 	llm := &streamingMockLLM{
 		tokens: []string{"При", "вет", ", ", "м", "ир"},
 		delay:  5 * time.Millisecond,

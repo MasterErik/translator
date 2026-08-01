@@ -6,8 +6,12 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"syscall"
+	"unsafe"
 
 	"github.com/mastererik/translator/internal/capture"
 	"github.com/mastererik/translator/internal/common"
@@ -16,8 +20,12 @@ import (
 )
 
 func main() {
-	cfg := common.LoadConfig()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	cfg, err := common.LoadConfigFromYAML("config.yaml")
+	if err != nil {
+		fatalError("не удалось загрузить config.yaml", err)
+	}
+	// В Windows GUI-режиме консоль отсутствует — логи только в CSV сессии.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: cfg.SlogLevel()})))
 
 	p, err := pipeline.New(pipeline.Config{
 		Capturer: capture.NewCapture(capture.CaptureConfig{
@@ -32,24 +40,37 @@ func main() {
 		TargetLang:    cfg.TargetLang,
 		LLMBaseURL:    cfg.LLMBaseURL,
 		LLMAPIKey:     cfg.LLMAPIKey,
-		LLMModel:      cfg.OpenAIModel,
+		LLMModel:      cfg.LLMModel,
 		MaxTokens:     cfg.MaxTokens,
 		OverlayCfg: ui.OverlayConfig{
 			Width:    cfg.OverlayWidth,
 			Height:   cfg.OverlayHeight,
 			FontSize: 18,
-			MaxLines: cfg.OverlayMaxLines,
 		},
 		LogDir:    cfg.LogDir,
 		SaveAudio: cfg.SaveAudio,
 	})
 	if err != nil {
-		slog.Error("не удалось создать pipeline", "err", err)
-		os.Exit(1)
+		fatalError("не удалось создать pipeline", err)
 	}
 
 	if err := p.Run(); err != nil {
-		slog.Error("pipeline завершился с ошибкой", "err", err)
-		os.Exit(1)
+		fatalError("pipeline завершился с ошибкой", err)
 	}
+}
+
+// fatalError показывает MessageBox в GUI-режиме и завершает процесс.
+// В GUI-режиме (windowsgui) нет консоли — os.Stderr недоступен.
+func fatalError(context string, err error) {
+	msg := fmt.Sprintf("%s: %v", context, err)
+	slog.Error(context, "err", err)
+
+	// MessageBoxW — единственный способ показать ошибку в GUI-режиме.
+	user32 := syscall.NewLazyDLL("user32.dll")
+	msgBox := user32.NewProc("MessageBoxW")
+	title, _ := syscall.UTF16PtrFromString("Translator — фатальная ошибка")
+	body, _ := syscall.UTF16PtrFromString(msg)
+	msgBox.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), 0x10) // MB_ICONERROR
+
+	os.Exit(1)
 }

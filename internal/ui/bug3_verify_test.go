@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/mastererik/translator/internal/logger"
 	"fmt"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ func TestBug3_TranslationInHistory(t *testing.T) {
 	t.Log("✓ Translation field works")
 
 	// 2. Overlay: History-сообщения с переводом.
-	ov := NewOverlay(OverlayConfig{Width: 800, Height: 400, FontSize: 14, MaxLines: 10})
+	ov := NewOverlay(OverlayConfig{Width: 800, Height: 400, FontSize: 14}, logger.NewNopSessionLogger())
 	ov.AddMessage(UIMessage{
 		Type:        History,
 		Text:        "Hello world",
@@ -56,7 +57,7 @@ func TestBug3_TranslationInHistory(t *testing.T) {
 	t.Log("✓ Old-style History (no Translation) — backward compat")
 
 	// 4. Translation done + History — не конфликтуют.
-	ov2 := NewOverlay(OverlayConfig{Width: 800, Height: 400, FontSize: 14, MaxLines: 10})
+	ov2 := NewOverlay(OverlayConfig{Width: 800, Height: 400, FontSize: 14}, logger.NewNopSessionLogger())
 	ov2.AddMessage(UIMessage{
 		Type:      Translation,
 		Text:      "Привет мир",

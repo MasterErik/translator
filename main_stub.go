@@ -6,6 +6,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -16,8 +18,18 @@ import (
 )
 
 func main() {
-	cfg := common.LoadConfig()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	cfg, err := common.LoadConfigFromYAML("config.yaml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: не удалось загрузить config.yaml: %v\n", err)
+		slog.Error("не удалось загрузить config.yaml", "err", err)
+		os.Exit(1)
+	}
+	// Консольный вывод только при LOG_LEVEL=debug (для отладки).
+	slogW := io.Discard
+	if cfg.LogLevel == "debug" {
+		slogW = os.Stderr
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(slogW, &slog.HandlerOptions{Level: cfg.SlogLevel()})))
 
 	// Тихий PCM-фрейм: 80ms @ 16kHz mono s16le = 2560 байт.
 	silentFrame := make([]byte, 2560)
@@ -36,23 +48,24 @@ func main() {
 		TargetLang:    cfg.TargetLang,
 		LLMBaseURL:    cfg.LLMBaseURL,
 		LLMAPIKey:     cfg.LLMAPIKey,
-		LLMModel:      cfg.OpenAIModel,
+		LLMModel:      cfg.LLMModel,
 		MaxTokens:     cfg.MaxTokens,
 		OverlayCfg: ui.OverlayConfig{
 			Width:    cfg.OverlayWidth,
 			Height:   cfg.OverlayHeight,
 			FontSize: 18,
-			MaxLines: cfg.OverlayMaxLines,
 		},
 		LogDir:    cfg.LogDir,
 		SaveAudio: cfg.SaveAudio,
 	})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: не удалось создать pipeline: %v\n", err)
 		slog.Error("не удалось создать pipeline", "err", err)
 		os.Exit(1)
 	}
 
 	if err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: pipeline завершился с ошибкой: %v\n", err)
 		slog.Error("pipeline завершился с ошибкой", "err", err)
 		os.Exit(1)
 	}

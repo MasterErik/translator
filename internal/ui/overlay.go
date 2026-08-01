@@ -2,11 +2,12 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/color"
-	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/io/system"
@@ -17,6 +18,8 @@ import (
 	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
+
+	"github.com/mastererik/translator/internal/logger"
 )
 
 // Overlay — прозрачное окно с четырьмя зонами.
@@ -26,19 +29,22 @@ type Overlay struct {
 	mu       sync.RWMutex
 	shutdown chan struct{}
 
-	invalidate   func()
-	prevHistLen  int // для автоскролла в конец
+	invalidate  func()
+	prevHistLen int // для автоскролла в конец
 
 	// Персистентные списки — хранят позицию скролла между кадрами.
 	translationList   layout.List
 	transcriptionList layout.List
+	answersList       layout.List
 
 	// Для тестов: позиция скролла после последнего кадра.
-	TranslationAtEnd bool
+	TranslationAtEnd   bool
 	TranscriptionAtEnd bool
+
+	sessLog logger.SessionLogger
 }
 
-func NewOverlay(cfg OverlayConfig) *Overlay {
+func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 	if cfg.Width <= 0 {
 		cfg.Width = 1200
 	}
@@ -48,15 +54,14 @@ func NewOverlay(cfg OverlayConfig) *Overlay {
 	if cfg.FontSize <= 0 {
 		cfg.FontSize = 18
 	}
-	if cfg.MaxLines <= 0 {
-		cfg.MaxLines = 10
-	}
 	return &Overlay{
 		cfg:               cfg,
 		messages:          make([]UIMessage, 0),
 		shutdown:          make(chan struct{}),
 		translationList:   layout.List{Axis: layout.Vertical},
 		transcriptionList: layout.List{Axis: layout.Vertical},
+		answersList:       layout.List{Axis: layout.Vertical},
+		sessLog:           sessLog,
 	}
 }
 
@@ -155,7 +160,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 	go o.applyWindowStyles()
 	defer close(o.shutdown)
 
-	slog.Info("UI-оверлей запущен", "width", o.cfg.Width, "height", o.cfg.Height)
+	o.sessLog.LogDebug(fmt.Sprintf("UI-оверлей запущен: width=%d, height=%d", o.cfg.Width, o.cfg.Height))
 
 	for {
 		select {
@@ -182,18 +187,42 @@ func (o *Overlay) Run(ctx context.Context) error {
 	}
 }
 
-func (o *Overlay) WaitShutdown()      { <-o.shutdown }
+func (o *Overlay) WaitShutdown() { <-o.shutdown }
+
 func (o *Overlay) applyWindowStyles() {
-	hwnd, err := findWindowByPID()
-	if err != nil {
-		slog.Warn("applyWindowStyles: не удалось найти HWND", "error", err)
+	// Gio создаёт нативное окно асинхронно — ждём до 3 секунд с экспоненциальной задержкой.
+	if !tryApplyStyles(findWindowByPID, 3*time.Second, 50*time.Millisecond) {
+		o.sessLog.LogDebug("applyWindowStyles: окно не появилось за 3 секунды")
 		return
 	}
-	if err := setNoActivate(hwnd); err != nil {
-		slog.Warn("applyWindowStyles: не удалось применить стили", "error", err)
+	if err := setNoActivate(lastFoundHwnd); err != nil {
+		o.sessLog.LogDebug(fmt.Sprintf("applyWindowStyles: не удалось применить стили: error=%v", err))
 	} else {
-		slog.Info("applyWindowStyles: NOACTIVATE+TRANSPARENT применены", "hwnd", hwnd)
+		o.sessLog.LogDebug(fmt.Sprintf("applyWindowStyles: NOACTIVATE+TRANSPARENT применены: hwnd=%v", lastFoundHwnd))
 	}
+}
+
+// lastFoundHwnd — результат findWindowByPID после успешного поиска.
+var lastFoundHwnd uintptr
+
+// tryApplyStyles вызывает finder с экспоненциальной задержкой до deadline.
+// Возвращает true если окно найдено, сохраняет HWND в lastFoundHwnd.
+func tryApplyStyles(finder func() (uintptr, error), deadline time.Duration, initialDelay time.Duration) bool {
+	dl := time.Now().Add(deadline)
+	delay := initialDelay
+	for time.Now().Before(dl) {
+		hwnd, err := finder()
+		if err == nil {
+			lastFoundHwnd = hwnd
+			return true
+		}
+		time.Sleep(delay)
+		delay *= 2
+		if delay > 500*time.Millisecond {
+			delay = 500 * time.Millisecond
+		}
+	}
+	return false
 }
 
 // ── Rendering: четыре зоны ──
@@ -212,15 +241,6 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	}
 	o.TranslationAtEnd = len(history) > 0
 	o.TranscriptionAtEnd = len(history) > 0
-
-	// Лог состояния зон для отладки.
-	transN, origN := 0, len(history)
-	for _, m := range history {
-		if m.Translation != "" {
-			transN++
-		}
-	}
-	slog.Info("зоны", "interim", interim.Text, "trans", transN, "orig", origN, "answers", len(answers.Answers), "scrollEnd", o.TranslationAtEnd)
 
 	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
 	paintBackground(gtx, bg)
@@ -246,12 +266,12 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 		}),
 		layout.Rigid(layoutZoneSeparator),
 
-		// 4. AnswerCandidates — только для вопросов.
+		// 4. AnswerCandidates — скролл, подсказки (EN+RU).
 		layout.Flexed(0.20, func(gtx layout.Context) layout.Dimensions {
 			if !hasAnswers {
 				return layout.Dimensions{}
 			}
-			return layoutAnswers(gtx, th, answers, fs)
+			return layoutAnswers(gtx, th, answers, fs, &o.answersList)
 		}),
 	)
 
@@ -308,37 +328,40 @@ func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 	return label.Layout(gtx)
 }
 
-// layoutAnswers — подсказка с EN и RU на отдельных строках.
-func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
+// answerLine — одна строка в скролле подсказок: EN или RU.
+type answerLine struct {
+	text string
+	isRU bool
+}
+
+// layoutAnswers — подсказки с EN и RU на отдельных строках, с вертикальным скроллом.
+func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List) layout.Dimensions {
 	afs := fs - 2
 	if afs < 10 {
 		afs = 10
 	}
-	children := make([]layout.FlexChild, 0, len(msg.Answers)*2)
-	for i, ans := range msg.Answers {
-		idx := i
+
+	// Собираем плоский список: EN (белый), RU (зелёный).
+	items := make([]answerLine, 0, len(msg.Answers)*2)
+	for _, ans := range msg.Answers {
 		en, ru := splitBilingual(ans)
-		// EN — белым.
-		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := material.Label(th, unit.Sp(afs), en)
-			l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-			l.Alignment = text.Start
-			l.MaxLines = 1
-			return l.Layout(gtx)
-		}))
-		// RU — зелёным.
+		items = append(items, answerLine{text: en, isRU: false})
 		if ru != "" {
-			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				l := material.Label(th, unit.Sp(afs), ru)
-				l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
-				l.Alignment = text.Start
-				l.MaxLines = 1
-				return l.Layout(gtx)
-			}))
+			items = append(items, answerLine{text: ru, isRU: true})
 		}
-		_ = idx
 	}
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+
+	return list.Layout(gtx, len(items), func(gtx layout.Context, idx int) layout.Dimensions {
+		line := items[idx]
+		l := material.Label(th, unit.Sp(afs), line.text)
+		if line.isRU {
+			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
+		} else {
+			l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		}
+		l.Alignment = text.Start
+		return l.Layout(gtx)
+	})
 }
 
 // splitBilingual разбивает строку формата "EN: ... | RU: ..." на две части.

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/mastererik/translator/internal/logger"
 	"context"
 	"fmt"
 	"sync"
@@ -15,7 +16,6 @@ func TestNewOverlay(t *testing.T) {
 		wantWidth    int
 		wantHeight   int
 		wantFontSize int
-		wantMaxLines int
 	}{
 		{
 			name: "all fields set",
@@ -23,12 +23,10 @@ func TestNewOverlay(t *testing.T) {
 				Width:    1024,
 				Height:   300,
 				FontSize: 24,
-				MaxLines: 10,
 			},
 			wantWidth:    1024,
 			wantHeight:   300,
 			wantFontSize: 24,
-			wantMaxLines: 10,
 		},
 		{
 			name:         "zero-value defaults",
@@ -36,7 +34,6 @@ func TestNewOverlay(t *testing.T) {
 			wantWidth:    1200,
 			wantHeight:   650,
 			wantFontSize: 18,
-			wantMaxLines: 10,
 		},
 		{
 			name: "negative font size defaults",
@@ -47,13 +44,12 @@ func TestNewOverlay(t *testing.T) {
 			wantWidth:    1200,
 			wantHeight:   650,
 			wantFontSize: 18,
-			wantMaxLines: 10,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			o := NewOverlay(tt.cfg)
+			o := NewOverlay(tt.cfg, logger.NewNopSessionLogger())
 			if o.cfg.Width != tt.wantWidth {
 				t.Errorf("Width = %d, want %d", o.cfg.Width, tt.wantWidth)
 			}
@@ -62,9 +58,6 @@ func TestNewOverlay(t *testing.T) {
 			}
 			if o.cfg.FontSize != tt.wantFontSize {
 				t.Errorf("FontSize = %d, want %d", o.cfg.FontSize, tt.wantFontSize)
-			}
-			if o.cfg.MaxLines != tt.wantMaxLines {
-				t.Errorf("MaxLines = %d, want %d", o.cfg.MaxLines, tt.wantMaxLines)
 			}
 			if o.messages == nil {
 				t.Error("messages slice should be initialized")
@@ -80,7 +73,7 @@ func TestNewOverlay(t *testing.T) {
 }
 
 func TestAddMessageGetMessages(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	// Статус и подсказки добавляются (append).
 	msg1 := UIMessage{Type: Status, Text: "Connected", Timestamp: time.Now()}
@@ -101,7 +94,7 @@ func TestAddMessageGetMessages(t *testing.T) {
 }
 
 func TestTranslationReplacement(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	// Translation-сообщения заменяются, а не копятся.
 	o.AddMessage(UIMessage{Type: Translation, Text: "first", MsgStatus: "pending"})
@@ -118,7 +111,7 @@ func TestTranslationReplacement(t *testing.T) {
 }
 
 func TestMessageOrdering(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	baseTime := time.Now()
 	for i := 0; i < 10; i++ {
@@ -141,7 +134,7 @@ func TestMessageOrdering(t *testing.T) {
 }
 
 func TestEmptyMessages(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 	msgs := o.GetMessages()
 	if len(msgs) != 0 {
 		t.Errorf("expected 0 messages, got %d", len(msgs))
@@ -152,7 +145,7 @@ func TestEmptyMessages(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	var wg sync.WaitGroup
 	numWriters := 10
@@ -194,7 +187,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestGetMessagesReturnsCopy(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 	o.AddMessage(UIMessage{Type: Status, Text: "original", Timestamp: time.Now()})
 
 	msgs := o.GetMessages()
@@ -215,7 +208,7 @@ func TestGetMessagesReturnsCopy(t *testing.T) {
 // ── Тесты вспомогательных функций ──
 
 func TestLastInterim(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	// Пустой overlay.
 	if m := o.lastInterim(); m.Type != "" {
@@ -247,7 +240,7 @@ func TestLastInterim(t *testing.T) {
 }
 
 func TestLastAnswers(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	// Пустой.
 	msg, ok := o.lastAnswers()
@@ -278,7 +271,7 @@ func TestLastAnswers(t *testing.T) {
 }
 
 func TestHistoryMessages(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	// Пустой.
 	if h := o.historyMessages(); len(h) != 0 {
@@ -303,7 +296,7 @@ func TestHistoryMessages(t *testing.T) {
 // ── Тесты замены и накопления сообщений ──
 
 func TestInterimReplacement(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	o.AddMessage(UIMessage{Type: Interim, Text: "first"})
 	o.AddMessage(UIMessage{Type: Interim, Text: "second"})
@@ -328,7 +321,7 @@ func TestInterimReplacement(t *testing.T) {
 }
 
 func TestAnswerCandidatesReplacement(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"A1", "A2"}})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"B1"}})
@@ -353,7 +346,7 @@ func TestAnswerCandidatesReplacement(t *testing.T) {
 }
 
 func TestHistoryAppendOnly(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200})
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	o.AddMessage(UIMessage{Type: History, Text: "msg1", Translation: "tr1"})
 	o.AddMessage(UIMessage{Type: History, Text: "msg2", Translation: "tr2"})
@@ -389,8 +382,7 @@ func TestWindowStarts(t *testing.T) {
 		Width:    1200,
 		Height:   650,
 		FontSize: 18,
-		MaxLines: 10,
-	})
+	}, logger.NewNopSessionLogger())
 
 	// Добавляем сообщения во все 4 зоны.
 	o.AddMessage(UIMessage{Type: Interim, Text: "I have five years of..."})
@@ -473,9 +465,6 @@ func TestWindowStarts(t *testing.T) {
 	}
 	if o.cfg.Height != 650 {
 		t.Errorf("Height = %d, want 650", o.cfg.Height)
-	}
-	if o.cfg.MaxLines != 10 {
-		t.Errorf("MaxLines = %d, want 10", o.cfg.MaxLines)
 	}
 
 	// Проверяем пропорции зон согласно ARCHITECTURE.md:

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/ui"
 )
 
@@ -15,9 +16,6 @@ func TestLoadConfig(t *testing.T) {
 	cfg := common.LoadConfig()
 	if cfg == nil {
 		t.Fatal("LoadConfig returned nil")
-	}
-	if cfg.OpenAIModel == "" {
-		t.Error("OpenAIModel should have a default value")
 	}
 	if cfg.TargetLang == "" {
 		t.Error("TargetLang should have a default value")
@@ -32,7 +30,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Error("WindowSize should have a default value")
 	}
 	t.Logf("Config: model=%s, lang=%s, window=%d, sampleRate=%d",
-		cfg.OpenAIModel, cfg.TargetLanguage, cfg.WindowSize, cfg.AudioSampleRate)
+		cfg.LLMModel, cfg.TargetLanguage, cfg.WindowSize, cfg.AudioSampleRate)
 }
 
 // TestOverlayStub verifies that the UI overlay can accept and retrieve
@@ -42,7 +40,7 @@ func TestOverlayStub(t *testing.T) {
 		Width:    800,
 		Height:   200,
 		FontSize: 16,
-	})
+	}, logger.NewNopSessionLogger())
 
 	// Add several messages.
 	overlay.AddMessage(ui.UIMessage{

@@ -64,12 +64,19 @@ func (c *Capture) Start(ctx context.Context) (<-chan []byte, <-chan []byte, erro
 
 // startLoopback initializes and starts the WASAPI loopback capture device.
 func (c *Capture) startLoopback(ctx context.Context, ch chan []byte) error {
+	// Ищем сначала среди Loopback, затем среди Capture — пользователь
+	// может указать любое устройство (микрофон, стереомикс, виртуальный кабель).
+	kind := malgo.Loopback
 	deviceID, err := c.findDevice(malgo.Loopback, c.config.LoopbackDeviceName)
 	if err != nil {
-		return fmt.Errorf("find loopback device: %w", err)
+		deviceID, err = c.findDevice(malgo.Capture, c.config.LoopbackDeviceName)
+		if err != nil {
+			return fmt.Errorf("find loopback device: %w", err)
+		}
+		kind = malgo.Capture
 	}
 
-	deviceConfig := malgo.DefaultDeviceConfig(malgo.Loopback)
+	deviceConfig := malgo.DefaultDeviceConfig(kind)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = 2
 	deviceConfig.SampleRate = 48000

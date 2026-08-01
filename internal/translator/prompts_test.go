@@ -42,7 +42,7 @@ func TestSystemPromptAnswerGenFormat(t *testing.T) {
 		"bullet",
 		"Russian",
 		"dash (-)",
-		"hints",
+		"first person",
 	}
 
 	for _, check := range checks {
@@ -109,27 +109,30 @@ func TestBuildAnswerPromptWithCV(t *testing.T) {
 	question := "How did you handle database migrations?"
 	cvContext := "5 years as backend developer, PostgreSQL, MongoDB, Kubernetes."
 
-	result := BuildAnswerPrompt(question, cvContext)
+	// CV context now goes to system message, NOT user prompt.
+	result := BuildAnswerPrompt(question)
 
 	if !strings.Contains(result, question) {
 		t.Errorf("BuildAnswerPrompt should contain the question, got:\n%s", result)
 	}
-	if !strings.Contains(result, cvContext) {
-		t.Errorf("BuildAnswerPrompt should contain CV context, got:\n%s", result)
+	// CV context should NOT be in user prompt anymore (it's the system message).
+	if strings.Contains(result, cvContext) {
+		t.Errorf("BuildAnswerPrompt should NOT contain CV context (it's the system message now):\n%s", result)
 	}
-	if !strings.Contains(result, "Generate 1 concise answer hint") {
+	if !strings.Contains(result, "Generate 1 answer from the candidate's perspective") {
 		t.Error("BuildAnswerPrompt should contain the generation instruction")
 	}
 }
 
 func TestBuildAnswerPromptEmptyCV(t *testing.T) {
 	question := "What is TDD?"
-	result := BuildAnswerPrompt(question, "")
+	result := BuildAnswerPrompt(question)
 
 	if !strings.Contains(result, question) {
 		t.Errorf("BuildAnswerPrompt should contain the question, got:\n%s", result)
 	}
-	if !strings.Contains(result, "(no CV context provided)") {
-		t.Error("BuildAnswerPrompt should indicate empty CV context")
+	// No CV context — no "(no CV context provided)" placeholder needed anymore.
+	if !strings.Contains(result, "Generate 1 answer from the candidate's perspective") {
+		t.Error("BuildAnswerPrompt should contain the generation instruction")
 	}
 }

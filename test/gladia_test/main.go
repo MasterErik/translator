@@ -5,6 +5,7 @@
 package main
 
 import (
+	"github.com/mastererik/translator/internal/logger"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -42,7 +43,7 @@ func main() {
 }
 
 func testSTT(ctx context.Context, cfg *common.Config) {
-	prov := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang)
+	prov := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang, logger.NewNopSessionLogger())
 
 	if err := prov.Start(ctx); err != nil {
 		fmt.Printf("  FAIL: Gladia connect: %v\n", err)
@@ -119,7 +120,7 @@ loop:
 }
 
 func testAnswerGeneration(ctx context.Context, cfg *common.Config) {
-	prov := translator.NewOpenAIProviderWithConfig(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.OpenAIModel)
+	prov := translator.NewChatProvider(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
 
 	// Test answer generation.
 	fmt.Println("  --- Answer Generation ---")

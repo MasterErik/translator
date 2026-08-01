@@ -19,13 +19,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	prov := translator.NewOpenAIProviderWithConfig(cfg.LLMBaseURL, apiKey, cfg.OpenAIModel)
+	prov := translator.NewChatProvider(cfg.LLMBaseURL, apiKey, cfg.LLMModel)
 	prov.SetMaxTokens(cfg.MaxTokens)
 
 	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
 	q := "What is the difference between a mutex and a channel in Go?"
 
-	fmt.Printf("Model: %s\nBase URL: %s\nMaxTokens: %d\n\n", cfg.OpenAIModel, cfg.LLMBaseURL, cfg.MaxTokens)
+	fmt.Printf("Model: %s\nBase URL: %s\nMaxTokens: %d\n\n", cfg.LLMModel, cfg.LLMBaseURL, cfg.MaxTokens)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

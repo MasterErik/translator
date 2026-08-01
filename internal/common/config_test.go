@@ -9,18 +9,16 @@ import (
 func TestLoadConfigDefaults(t *testing.T) {
 	// Clear relevant env vars to isolate defaults.
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
 	}
 
 	cfg := LoadConfig()
 
-	if cfg.OpenAIModel != "gpt-4o-mini" {
-		t.Errorf("OpenAIModel default: got %q, want %q", cfg.OpenAIModel, "gpt-4o-mini")
-	}
 	if cfg.TargetLang != "ru" {
 		t.Errorf("TargetLang default: got %q, want %q", cfg.TargetLang, "ru")
 	}
@@ -44,22 +42,23 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestLoadConfigEnvOverride(t *testing.T) {
 	// Clear relevant env vars first.
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
 	}
 
-	os.Setenv("OPENAI_MODEL", "gpt-4")
+	os.Setenv("LLM_MODEL", "gpt-4")
 	os.Setenv("TARGET_LANGUAGE", "fr")
 	os.Setenv("AUDIO_SAMPLE_RATE", "48000")
 	os.Setenv("CV_CONTEXT", "Senior Go Developer")
 
 	cfg := LoadConfig()
 
-	if cfg.OpenAIModel != "gpt-4" {
-		t.Errorf("OpenAIModel env override: got %q, want %q", cfg.OpenAIModel, "gpt-4")
+	if cfg.LLMModel != "gpt-4" {
+		t.Errorf("LLMModel env override: got %q, want %q", cfg.LLMModel, "gpt-4")
 	}
 	if cfg.TargetLanguage != "fr" {
 		t.Errorf("TargetLanguage env override: got %q, want %q", cfg.TargetLanguage, "fr")
@@ -79,9 +78,10 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 func TestLoadConfigFromYAML(t *testing.T) {
 	// Clear relevant env vars.
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
 	}
@@ -89,7 +89,7 @@ func TestLoadConfigFromYAML(t *testing.T) {
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 	content := `
-openai_model: "gpt-4"
+llm_model: "gpt-4"
 target_language: "de"
 window_size: 10
 cv_context: "Backend Engineer"
@@ -103,8 +103,8 @@ cv_context: "Backend Engineer"
 		t.Fatal(err)
 	}
 
-	if cfg.OpenAIModel != "gpt-4" {
-		t.Errorf("OpenAIModel from YAML: got %q, want %q", cfg.OpenAIModel, "gpt-4")
+	if cfg.LLMModel != "gpt-4" {
+		t.Errorf("LLMModel from YAML: got %q, want %q", cfg.LLMModel, "gpt-4")
 	}
 	if cfg.TargetLanguage != "de" {
 		t.Errorf("TargetLanguage from YAML: got %q, want %q", cfg.TargetLanguage, "de")
@@ -123,9 +123,10 @@ cv_context: "Backend Engineer"
 
 func TestLoadConfigFromYAMLEnvOverride(t *testing.T) {
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
 	}
@@ -133,7 +134,7 @@ func TestLoadConfigFromYAMLEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 	content := `
-openai_model: "gpt-4"
+llm_model: "gpt-4"
 target_language: "de"
 `
 	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
@@ -141,7 +142,7 @@ target_language: "de"
 	}
 
 	// Env vars should override YAML.
-	os.Setenv("OPENAI_MODEL", "gpt-4o")
+	os.Setenv("LLM_MODEL", "gpt-4o")
 	os.Setenv("TARGET_LANGUAGE", "es")
 
 	cfg, err := LoadConfigFromYAML(yamlPath)
@@ -149,8 +150,8 @@ target_language: "de"
 		t.Fatal(err)
 	}
 
-	if cfg.OpenAIModel != "gpt-4o" {
-		t.Errorf("Env should override YAML: got %q, want %q", cfg.OpenAIModel, "gpt-4o")
+	if cfg.LLMModel != "gpt-4o" {
+		t.Errorf("Env should override YAML: got %q, want %q", cfg.LLMModel, "gpt-4o")
 	}
 	if cfg.TargetLanguage != "es" {
 		t.Errorf("Env should override YAML: got %q, want %q", cfg.TargetLanguage, "es")
@@ -221,7 +222,7 @@ func TestSaveAudioYAML(t *testing.T) {
 	// save_audio: true в YAML.
 	content := `
 save_audio: true
-openai_model: "gpt-4"
+llm_model: "gpt-4"
 `
 	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -244,17 +245,6 @@ openai_model: "gpt-4"
 	}
 	if cfg.SaveAudio != false {
 		t.Errorf("SAVE_AUDIO env should override YAML true: got %v, want false", cfg.SaveAudio)
-	}
-}
-
-// TestLLMBaseURLDefault проверяет значение по умолчанию для LLMBaseURL.
-func TestLLMBaseURLDefault(t *testing.T) {
-	os.Unsetenv("LLM_BASE_URL")
-
-	cfg := LoadConfig()
-
-	if cfg.LLMBaseURL != "https://api.openai.com/v1" {
-		t.Errorf("LLMBaseURL default: got %q, want %q", cfg.LLMBaseURL, "https://api.openai.com/v1")
 	}
 }
 
@@ -308,13 +298,13 @@ func TestLLMAPIKeyOverride(t *testing.T) {
 // TestLLMBaseURLFromYAML проверяет чтение llm_base_url из YAML.
 func TestLLMBaseURLFromYAML(t *testing.T) {
 	os.Unsetenv("LLM_BASE_URL")
-	os.Unsetenv("OPENAI_MODEL")
+	os.Unsetenv("LLM_MODEL")
 
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 	content := `
 llm_base_url: "https://api.z.ai/api/paas/v4/"
-openai_model: "glm-4-flash"
+llm_model: "glm-4-flash"
 `
 	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -328,8 +318,8 @@ openai_model: "glm-4-flash"
 	if cfg.LLMBaseURL != "https://api.z.ai/api/paas/v4/" {
 		t.Errorf("LLMBaseURL from YAML: got %q, want %q", cfg.LLMBaseURL, "https://api.z.ai/api/paas/v4/")
 	}
-	if cfg.OpenAIModel != "glm-4-flash" {
-		t.Errorf("OpenAIModel from YAML: got %q, want %q", cfg.OpenAIModel, "glm-4-flash")
+	if cfg.LLMModel != "glm-4-flash" {
+		t.Errorf("LLMModel from YAML: got %q, want %q", cfg.LLMModel, "glm-4-flash")
 	}
 }
 
@@ -387,6 +377,55 @@ func TestGladiaAPIKeyEnv(t *testing.T) {
 	cfg := LoadConfig()
 
 	if cfg.GladiaAPIKey != "gladia-test-key" {
-		t.Errorf("GladiaAPIKey: got %q, want %q", cfg.GladiaAPIKey, "gladia-test-key")
+		t.Errorf("GladiaAPIKey: *** %q, want %q", cfg.GladiaAPIKey, "gladia-test-key")
+	}
+}
+
+// TestApplyDefaults_NumericAndString проверяет стандартные defaults (TargetLang, LogDir, etc.).
+// LLMBaseURL/LLMModel НЕ имеют defaults — должны настраиваться через .env/config.
+func TestApplyDefaults_NumericAndString(t *testing.T) {
+	cfg := Config{}
+	cfg.applyDefaults()
+
+	if cfg.TargetLang != "ru" {
+		t.Errorf("TargetLang: got %q, want %q", cfg.TargetLang, "ru")
+	}
+	if cfg.LogDir != "./logs" {
+		t.Errorf("LogDir: got %q, want %q", cfg.LogDir, "./logs")
+	}
+}
+
+// TestApplyDefaults_PreservesExistingValues проверяет, что applyDefaults()
+// НЕ перезаписывает уже установленные значения.
+func TestApplyDefaults_PreservesExistingValues(t *testing.T) {
+	cfg := Config{
+		LLMBaseURL:  "https://custom.api.com",
+		LLMModel: "custom-model",
+	}
+	cfg.applyDefaults()
+
+	if cfg.LLMBaseURL != "https://custom.api.com" {
+		t.Errorf("LLMBaseURL was overwritten: got %q, want %q", cfg.LLMBaseURL, "https://custom.api.com")
+	}
+	if cfg.LLMModel != "custom-model" {
+		t.Errorf("LLMModel was overwritten: got %q, want %q", cfg.LLMModel, "custom-model")
+	}
+}
+
+// TestLoadConfig_LLMFieldsEmptyWithoutEnv проверяет, что без .env LLMBaseURL/LLMModel
+// остаются пустыми — пользователь должен настроить их явно.
+func TestLoadConfig_LLMFieldsEmptyWithoutEnv(t *testing.T) {
+	os.Unsetenv("LLM_BASE_URL")
+	os.Unsetenv("LLM_MODEL")
+	os.Unsetenv("LLM_API_KEY")
+	os.Unsetenv("OPENAI_API_KEY")
+
+	cfg := LoadConfig()
+
+	if cfg.LLMBaseURL != "" {
+		t.Errorf("LLMBaseURL should be empty without env, got %q", cfg.LLMBaseURL)
+	}
+	if cfg.LLMModel != "" {
+		t.Errorf("LLMModel should be empty without env, got %q", cfg.LLMModel)
 	}
 }
