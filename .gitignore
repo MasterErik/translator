@@ -1,28 +1,10 @@
-# Secrets
-.env
+# Test artifacts
+tail_latency_report.csv
+tail_latency_report.json
+test_speech.json
 
-# Build output
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Dev
+dev/
 
-# Test and logs
-test_speech.wav
-logs/
-*.log
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Go
-vendor/
+# Gemini
+.gemini/
