@@ -126,7 +126,6 @@ func (d *Dispatcher) Run(ctx context.Context, textStream <-chan common.STTEvent,
 	}()
 
 	var lastOriginal common.STTEvent
-	historySeen := map[string]bool{}
 
 	for {
 		select {
@@ -144,12 +143,12 @@ func (d *Dispatcher) Run(ctx context.Context, textStream <-chan common.STTEvent,
 				return
 			}
 
-			d.route(event, &lastOriginal, historySeen)
+			d.route(event, &lastOriginal)
 		}
 	}
 }
 
-func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent, historySeen map[string]bool) {
+func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent) {
 	switch {
 	case event.ChannelID == "translation":
 		// UI — мгновенно, не ждём логи.
@@ -159,16 +158,6 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent,
 			Timestamp: event.Timestamp,
 			MsgStatus: "done",
 		})
-
-		if !historySeen[lastOriginal.Text] {
-			historySeen[lastOriginal.Text] = true
-			d.overlay.AddMessage(ui.UIMessage{
-				Type:        ui.History,
-				Text:        lastOriginal.Text,
-				Translation: event.Text,
-				Timestamp:   event.Timestamp,
-			})
-		}
 
 		// Логирование — асинхронно, не блокирует dispatcher.
 		if d.sessLog != nil {
@@ -199,6 +188,12 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent,
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: финальный транскрипт: text=%v", event.Text))
 		}
+
+		d.overlay.AddMessage(ui.UIMessage{
+			Type:      ui.History,
+			Text:      event.Text,
+			Timestamp: event.Timestamp,
+		})
 
 		if translator.IsQuestion(event.Text) {
 			if d.sessLog != nil {

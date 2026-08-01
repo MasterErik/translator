@@ -1069,20 +1069,20 @@ func TestTranslationLoggedToCSV(t *testing.T) {
 	// Проверка 1: перевод в overlay.
 	msgs := ovl.GetMessages()
 	var foundTranslation bool
-	var historyWithTranslation bool
+	var foundHistory bool
 	for _, m := range msgs {
 		if m.Type == ui.Translation && strings.Contains(m.Text, "Привет, мир") {
 			foundTranslation = true
 		}
-		if m.Type == ui.History && m.Translation != "" {
-			historyWithTranslation = true
+		if m.Type == ui.History && m.Text == "Hello world" {
+			foundHistory = true
 		}
 	}
 	if !foundTranslation {
 		t.Error("BUG: translation not found in overlay messages!")
 	}
-	if !historyWithTranslation {
-		t.Error("BUG: history entry has no Translation field!")
+	if !foundHistory {
+		t.Error("BUG: history (original) not found in overlay messages!")
 	}
 
 	// Проверка 2: перевод в CSV-логе.
@@ -1112,17 +1112,26 @@ func TestTranslationLoggedToCSV(t *testing.T) {
 		t.Log("PASS: translation found in CSV ✅")
 	}
 
-	// Проверка 3: история содержит перевод.
-	var historyHasTranslation bool
+	// Проверка 3: история и перевод — отдельные сообщения.
+	var hasHistory, hasTranslation bool
 	for _, m := range msgs {
 		if m.Type == ui.History {
-			t.Logf("History: text=%q translation=%q", m.Text, m.Translation)
-			if m.Translation == "Привет, мир" {
-				historyHasTranslation = true
+			t.Logf("History: text=%q", m.Text)
+			if m.Text == "Hello world" {
+				hasHistory = true
+			}
+		}
+		if m.Type == ui.Translation {
+			t.Logf("Translation: text=%q", m.Text)
+			if m.Text == "Привет, мир" {
+				hasTranslation = true
 			}
 		}
 	}
-	if !historyHasTranslation {
-		t.Error("BUG: History entry missing Translation field!")
+	if !hasHistory {
+		t.Error("BUG: History (original) entry missing!")
+	}
+	if !hasTranslation {
+		t.Error("BUG: Translation entry missing!")
 	}
 }

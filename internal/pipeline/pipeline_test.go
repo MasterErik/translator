@@ -793,14 +793,20 @@ func TestPipelineDispatch_ErrorEvent(t *testing.T) {
 	cancel()
 
 	msgs := ovl.GetMessages()
-	var historyFound bool
+	var historyFound, translationFound bool
 	for _, m := range msgs {
-		if m.Type == ui.History && m.Text == "normal text" && m.Translation == "нормальный текст" {
+		if m.Type == ui.History && m.Text == "normal text" {
 			historyFound = true
+		}
+		if m.Type == ui.Translation && m.Text == "нормальный текст" {
+			translationFound = true
 		}
 	}
 	if !historyFound {
-		t.Error("dispatch должен добавлять History с переводом после транскрипта")
+		t.Error("dispatch должен добавлять History (оригинал) после транскрипта")
+	}
+	if !translationFound {
+		t.Error("dispatch должен добавлять Translation (перевод) после транскрипта")
 	}
 }
 
@@ -1091,19 +1097,29 @@ func TestPipelineNoHistoryDuplicates(t *testing.T) {
 
 	msgs := ovl.GetMessages()
 
-	// Считаем History записи.
+	// Считаем History и Translation записи.
 	var hist []ui.UIMessage
+	var translations []ui.UIMessage
 	for _, m := range msgs {
 		if m.Type == ui.History {
 			hist = append(hist, m)
 		}
+		if m.Type == ui.Translation {
+			translations = append(translations, m)
+		}
 	}
 
-	// Должно быть ровно 3 (по одной на каждую пару transcript+translation).
+	// Должно быть ровно 3 оригинала и 3 перевода.
 	if len(hist) != 3 {
 		t.Errorf("History count = %d, want 3 (no duplicates)", len(hist))
 		for i, m := range hist {
-			t.Logf("  [%d] text=%q translation=%q", i, m.Text, m.Translation)
+			t.Logf("  History[%d] text=%q", i, m.Text)
+		}
+	}
+	if len(translations) != 3 {
+		t.Errorf("Translation count = %d, want 3", len(translations))
+		for i, m := range translations {
+			t.Logf("  Translation[%d] text=%q", i, m.Text)
 		}
 	}
 
@@ -1116,11 +1132,13 @@ func TestPipelineNoHistoryDuplicates(t *testing.T) {
 		seenText[m.Text] = true
 	}
 
-	// Проверяем что у каждой записи есть перевод.
-	for i, m := range hist {
-		if m.Translation == "" {
-			t.Errorf("History[%d]: нет перевода (text=%q)", i, m.Text)
+	// Проверяем что нет дублей по переводу.
+	seenTrans := map[string]bool{}
+	for _, m := range translations {
+		if seenTrans[m.Text] {
+			t.Errorf("дубликат перевода в Translation: text=%q", m.Text)
 		}
+		seenTrans[m.Text] = true
 	}
 }
 // TestPipelineHistoryDedup — проверяет что повторные переводы не дублируются.

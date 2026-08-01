@@ -74,19 +74,18 @@
 Audio (80ms PCM)
     │
     ▼
-Gladia WS ──► transcript (is_final=false) ──► UI Interim (зона 1, серый)
+Gladia WS ──► transcript (is_final=false) ──► UI Interim (зона 1)
     │
-    ├───────► transcript (is_final=true)  ──► UI History (зона 3)
+    ├───────► transcript (is_final=true)  ──► UI TranscriptionHistory (зона 3, оригинал)
     │                                            │
-    │                                     lastOriginal = текст
-    │                                            │
-    └───────► translation (тот же utterance_id) ──┼──► UI Translation (зона 2)
-                                                  │
-                                           пара (оригинал + перевод)
-                                                  │
-                                           IsQuestion?
-                                            ├─ да → AnswerQueue → answerWorker → LLM → UI Answer (зона 4)
-                                            └─ нет → ничего
+    │                                     IsQuestion?
+    │                                      ├─ да → AnswerQueue → answerWorker → LLM → UI Answer (зона 4)
+    │                                      └─ нет → ничего
+    │
+    └───────► translation ────────────────────► UI TranslationHistory (зона 2, перевод)
+
+Зоны 2 и 3 — независимые потоки. History (оригинал) приходит из EndOfTurn, Translation — из translation-событий.
+lastOriginal сохраняется только для CSV-логирования.
 ```
 
 ---
@@ -291,21 +290,23 @@ func (d *Dispatcher) drainQueue(lastQuestion *string)
 func (d *Dispatcher) GenerateAnswers(question string)
 ```
 
-**Логика маршрутизации:**
+**Логика маршрутизации:** раздельные потоки — без `historySeen` и связки через `lastOriginal`.
+
 ```
 event.ChannelID == "translation"
-    → UI TranslationHistory (зона 2, пара lastOriginal + перевод)
+    → UI TranslationHistory (зона 2, перевод)
 
 event.Event == EventUpdate
     → UI Interim (зона 1)
 
 event.Event == EventEndOfTurn && ChannelID != "translation"
-    → lastOriginal = event.Text
-    → UI TranscriptionHistory (зона 3)
+    → UI TranscriptionHistory (зона 3, оригинал)
     → IsQuestion(event.Text)?
-         да → enqueueQuestion(question)  // неблокирующая отправка в очередь
+         да → enqueueQuestion(question)
          нет → ничего
 ```
+
+Зоны 2 и 3 питаются из разных типов сообщений: Translation и History. Дедупликация не требуется — каждый тип пишется из одного места.
 
 **Очередь подсказок (answerQueue):**
 

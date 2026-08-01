@@ -196,10 +196,16 @@ func TestDispatcherFinalTranscript(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Interim не должен создавать History — ждём перевод.
+	// После финального транскрипта сразу идёт History в overlay.
 	msgs := overlay.GetMessages()
-	if len(msgs) != 0 {
-		t.Errorf("до перевода не должно быть сообщений, получено %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("ожидалось 1 сообщение (History), получено %d", len(msgs))
+	}
+	if msgs[0].Type != ui.History {
+		t.Errorf("ожидался History, получен %v", msgs[0].Type)
+	}
+	if msgs[0].Text != "I have five years of experience" {
+		t.Errorf("текст: %q", msgs[0].Text)
 	}
 
 	cancel()
@@ -244,26 +250,26 @@ func TestDispatcherTranslationPaired(t *testing.T) {
 
 	msgs := overlay.GetMessages()
 	if len(msgs) != 2 {
-		t.Fatalf("ожидалось 2 сообщения (Translation + History), получено %d", len(msgs))
+		t.Fatalf("ожидалось 2 сообщения (History + Translation), получено %d", len(msgs))
 	}
 
-	// Первое — Translation.
-	if msgs[0].Type != ui.Translation {
-		t.Errorf("ожидался Translation, получен %v", msgs[0].Type)
+	// Первое — History (оригинал без перевода, сразу после финального транскрипта).
+	if msgs[0].Type != ui.History {
+		t.Errorf("ожидался History, получен %v", msgs[0].Type)
 	}
-	if msgs[0].Text != "У меня пять лет опыта" {
-		t.Errorf("текст перевода: %q", msgs[0].Text)
+	if msgs[0].Text != "I have five years of experience" {
+		t.Errorf("оригинал: %q", msgs[0].Text)
+	}
+	if msgs[0].Translation != "" {
+		t.Errorf("не должно быть перевода в первом History: %q", msgs[0].Translation)
 	}
 
-	// Второе — History (оригинал + перевод).
-	if msgs[1].Type != ui.History {
-		t.Errorf("ожидался History, получен %v", msgs[1].Type)
+	// Второе — Translation.
+	if msgs[1].Type != ui.Translation {
+		t.Errorf("ожидался Translation, получен %v", msgs[1].Type)
 	}
-	if msgs[1].Text != "I have five years of experience" {
-		t.Errorf("оригинал: %q", msgs[1].Text)
-	}
-	if msgs[1].Translation != "У меня пять лет опыта" {
-		t.Errorf("перевод: %q", msgs[1].Translation)
+	if msgs[1].Text != "У меня пять лет опыта" {
+		t.Errorf("текст перевода: %q", msgs[1].Text)
 	}
 }
 
@@ -355,7 +361,7 @@ func TestDispatcherHistoryDedup(t *testing.T) {
 	}
 	time.Sleep(20 * time.Millisecond)
 
-	// Второй перевод (дубль) — такого Gladia не шлёт, но защита должна быть.
+	// Второй перевод (дубль).
 	textStream <- common.STTEvent{
 		Event: common.EventEndOfTurn, ChannelID: "translation",
 		Text: "У меня пять лет опыта v2", Timestamp: time.Now(),
@@ -363,7 +369,8 @@ func TestDispatcherHistoryDedup(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	msgs := overlay.GetMessages()
-	// 3 сообщения: Translation1 + History + Translation2 (без второго History).
+	// 3 сообщения: History (от default) + Translation1 + Translation2.
+	// History приходит только из default-ветки, translation-ветка отправляет только Translation.
 	historyCount := 0
 	for _, m := range msgs {
 		if m.Type == ui.History {
@@ -884,7 +891,6 @@ func TestDispatcherLogTranslationError(t *testing.T) {
 		Text:      "Hello world",
 		Timestamp: time.Now(),
 	}
-	historySeen := map[string]bool{}
 
 	// Отправляем перевод — LogTranslation должен вернуть ошибку.
 	transEvent := common.STTEvent{
@@ -893,7 +899,7 @@ func TestDispatcherLogTranslationError(t *testing.T) {
 		Text:      "Привет мир",
 		Timestamp: time.Now(),
 	}
-	d.route(transEvent, &lastOriginal, historySeen)
+	d.route(transEvent, &lastOriginal)
 
 	// Логирование теперь асинхронное — ждём завершения горутины.
 	time.Sleep(50 * time.Millisecond)

@@ -30,7 +30,8 @@ type Overlay struct {
 	shutdown chan struct{}
 
 	invalidate  func()
-	prevHistLen int // для автоскролла в конец
+	prevTransLen  int // для автоскролла переводов
+	prevTranscLen int // для автоскролла транскрипций
 
 	// Персистентные списки — хранят позицию скролла между кадрами.
 	translationList   layout.List
@@ -231,15 +232,20 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	o.mu.RLock()
 	interim := o.lastInterim()
 	answers, hasAnswers := o.lastAnswers()
+	translations := o.translationMessages()
 	history := o.historyMessages()
 	o.mu.RUnlock()
 
-	// Автоскролл: запоминаем длину истории для следующего кадра.
-	needScroll := len(history) > o.prevHistLen
-	if needScroll {
-		o.prevHistLen = len(history)
+	// Автоскролл: раздельные счётчики для зоны 2 (переводы) и 3 (транскрипции).
+	needScrollTrans := len(translations) > o.prevTransLen
+	if needScrollTrans {
+		o.prevTransLen = len(translations)
 	}
-	o.TranslationAtEnd = len(history) > 0
+	needScrollHist := len(history) > o.prevTranscLen
+	if needScrollHist {
+		o.prevTranscLen = len(history)
+	}
+	o.TranslationAtEnd = len(translations) > 0
 	o.TranscriptionAtEnd = len(history) > 0
 
 	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
@@ -256,13 +262,13 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 
 		// 2. Translation History — скролл, 10 строк, переводы.
 		layout.Flexed(0.45, func(gtx layout.Context) layout.Dimensions {
-			return layoutTranslationHistory(gtx, th, history, fs, &o.translationList, needScroll)
+			return layoutTranslationHistory(gtx, th, translations, fs, &o.translationList, needScrollTrans)
 		}),
 		layout.Rigid(layoutZoneSeparator),
 
 		// 3. Transcription History — скролл, 8 строк, оригиналы.
 		layout.Flexed(0.35, func(gtx layout.Context) layout.Dimensions {
-			return layoutTranscriptionHistory(gtx, th, history, fs, &o.transcriptionList, needScroll)
+			return layoutTranscriptionHistory(gtx, th, history, fs, &o.transcriptionList, needScrollHist)
 		}),
 		layout.Rigid(layoutZoneSeparator),
 
@@ -300,6 +306,17 @@ func (o *Overlay) historyMessages() []UIMessage {
 	var out []UIMessage
 	for _, m := range o.messages {
 		if m.Type == History {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// translationMessages возвращает завершённые переводы (Type=Translation, MsgStatus="done").
+func (o *Overlay) translationMessages() []UIMessage {
+	var out []UIMessage
+	for _, m := range o.messages {
+		if m.Type == Translation && m.MsgStatus == "done" {
 			out = append(out, m)
 		}
 	}
@@ -374,16 +391,9 @@ func splitBilingual(s string) (en, ru string) {
 	return
 }
 
-// layoutTranslationHistory — скролл переводов из History (10 строк).
-func layoutTranslationHistory(gtx layout.Context, th *material.Theme, history []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
-	// Фильтруем только записи с переводом.
-	var items []UIMessage
-	for _, m := range history {
-		if m.Translation != "" {
-			items = append(items, m)
-		}
-	}
-	if len(items) == 0 {
+// layoutTranslationHistory — скролл переводов из Translation-сообщений (10 строк).
+func layoutTranslationHistory(gtx layout.Context, th *material.Theme, messages []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
+	if len(messages) == 0 {
 		return layout.Dimensions{}
 	}
 
@@ -392,11 +402,11 @@ func layoutTranslationHistory(gtx layout.Context, th *material.Theme, history []
 		hfs = 10
 	}
 	list.Axis = layout.Vertical
-	if needScroll && len(items) > 0 {
-		list.ScrollTo(len(items) - 1)
+	if needScroll && len(messages) > 0 {
+		list.ScrollTo(len(messages) - 1)
 	}
-	return list.Layout(gtx, len(items), func(gtx layout.Context, i int) layout.Dimensions {
-		l := material.Label(th, unit.Sp(hfs), items[i].Translation)
+	return list.Layout(gtx, len(messages), func(gtx layout.Context, i int) layout.Dimensions {
+		l := material.Label(th, unit.Sp(hfs), messages[i].Text)
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 2
@@ -419,7 +429,7 @@ func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history 
 		list.ScrollTo(len(history) - 1)
 	}
 	return list.Layout(gtx, len(history), func(gtx layout.Context, i int) layout.Dimensions {
-		l := material.Label(th, unit.Sp(fs), history[i].Text)
+		l := material.Label(th, unit.Sp(hfs), history[i].Text)
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 8

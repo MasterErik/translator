@@ -447,9 +447,9 @@ func TestWindowStarts(t *testing.T) {
 		t.Errorf("first translation = %q, want %q", hist[0].Translation, "Перевод строки 1")
 	}
 
-	// Проверяем скролл: prevHistLen должен обновиться = 40 строк.
-	if o.prevHistLen != 40 {
-		t.Errorf("prevHistLen = %d, want 40 — скролл не сработал (needScroll=false?)", o.prevHistLen)
+	// Проверяем скролл: prevTranscLen должен обновиться = 40 строк.
+	if o.prevTranscLen != 40 {
+		t.Errorf("prevTranscLen = %d, want 40 — скролл не сработал (needScrollHist=false?)", o.prevTranscLen)
 	}
 	// Флаги конца — производная проверка.
 	if !o.TranslationAtEnd {
