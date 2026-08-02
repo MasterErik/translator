@@ -40,7 +40,6 @@ type gladiaInitRequest struct {
 	LanguageCfg  gladiaLanguageConfig `json:"language_config"`
 	RealtimeProc      gladiaRealtimeConfig      `json:"realtime_processing"`
 	MessagesCfg       gladiaMessagesConfig       `json:"messages_config"`
-	ContextAdaptation *gladiaContextAdaptation   `json:"context_adaptation,omitempty"`
 }
 
 type gladiaLanguageConfig struct {
@@ -62,11 +61,6 @@ type gladiaMessagesConfig struct {
 	ReceivePartialTranscripts       bool `json:"receive_partial_transcripts"`
 	ReceiveFinalTranscripts         bool `json:"receive_final_transcripts"`
 	ReceiveRealtimeProcessingEvents bool `json:"receive_realtime_processing_events"`
-}
-
-type gladiaContextAdaptation struct {
-	SystemPrompt     string   `json:"system_prompt,omitempty"`
-	CustomVocabulary []string `json:"custom_vocabulary,omitempty"`
 }
 
 // gladiaInitResponse — ответ от POST /v2/live: id и url для WebSocket.
@@ -112,8 +106,6 @@ type GladiaConfig struct {
 	MaxDuration      float64  // макс. длительность без endpointing, default 8
 	CodeSwitching    bool     // code switching
 	TranslationModel string   // модель перевода, default "enhanced"
-	SystemPrompt     string   // системный промпт для context_adaptation (опционально)
-	CustomVocabulary []string // пользовательский словарь терминов (опционально)
 }
 
 // applyDefaults устанавливает значения по умолчанию для незаполненных полей.

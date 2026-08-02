@@ -7,7 +7,7 @@
 - **Go 1.22+**
 - **GCC (MinGW-w64)** — MSYS2 `C:\msys64\ucrt64\bin`
 - **VB-Cable** ([vb-audio.com/Cable](https://vb-audio.com/Cable/))
-- **API-ключи:** [Gladia](https://gladia.io) (STT + перевод) + [Z.AI](https://z.ai) (LLM-подсказки)
+- **API-ключи:** [Gladia](https://gladia.io) (STT + перевод) + [groq.com](https://api.groq.com/openai/v1) (LLM-подсказки)
 
 ## Быстрый старт
 

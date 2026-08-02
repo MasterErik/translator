@@ -667,9 +667,7 @@ func TestInitSession_NoContextAdaptation(t *testing.T) {
 	defer func() { gladiaBaseURL = origURL }()
 
 	cfg := GladiaConfig{
-		APIKey:           "test-key",
-		SystemPrompt:     "test system prompt",
-		CustomVocabulary: []string{"Kubernetes", "Docker"},
+		APIKey: "test-key",
 	}
 	cfg.applyDefaults()
 

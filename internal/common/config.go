@@ -8,7 +8,6 @@ import (
 	"os"
 	"reflect"
 	"strconv"
-	"strings"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -44,10 +43,6 @@ type Config struct {
 	OverlayWidth  int `yaml:"OVERLAY_WIDTH"`
 	OverlayHeight int `yaml:"OVERLAY_HEIGHT"`
 
-	// Gladia context adaptation.
-	SystemPrompt     string   `yaml:"SYSTEM_PROMPT"`
-	CustomVocabulary []string `yaml:"CUSTOM_VOCABULARY"`
-
 	// CV context for answer generation.
 	CVContext string `yaml:"CV_CONTEXT"`
 }
@@ -77,11 +72,6 @@ func (c *Config) loadFromEnv() {
 
 	// Основные поля — через reflection по yaml-тегам.
 	_ = loadFromYAMLTags(c)
-
-	// CustomVocabulary: особый случай — split по запятой.
-	if v := os.Getenv("CUSTOM_VOCABULARY"); v != "" {
-		c.CustomVocabulary = splitAndTrim(v, ",")
-	}
 }
 
 // loadFromYAMLTags reads env vars using yaml struct tags as env var names.
@@ -143,21 +133,7 @@ func (c *Config) SlogLevel() slog.Level {
 	}
 }
 
-// splitAndTrim splits a string by separator and trims whitespace from each part.
-// Empty parts are omitted.
-func splitAndTrim(s, sep string) []string {
-	parts := strings.Split(s, sep)
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// LoadConfigFromYAML reads a YAML configuration file, applies defaults for
+// SlogLevel converts the LogLevel string to slog.Level.
 // any missing fields, and then overrides with environment variables.
 // Environment variables always take precedence over YAML values.
 func LoadConfigFromYAML(path string) (*Config, error) {

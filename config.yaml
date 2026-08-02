@@ -14,20 +14,6 @@ TARGET_LANG: "ru"
 # Source language for Gladia (ISO 639-1)
 SOURCE_LANG: "en"
 
-# Gladia context_adaptation — улучшает точность распознавания технических терминов.
-# system_prompt — описание контекста встречи (опционально).
-# custom_vocabulary — список доменных терминов для улучшения распознавания (опционально).
-SYSTEM_PROMPT: "This is a technical IT meeting about software development, DevOps, and cloud architecture. Translate and transcribe accurately."
-CUSTOM_VOCABULARY:
-  - "Kubernetes"
-  - "Docker"
-  - "microservices"
-  - "CI/CD pipeline"
-  - "Kafka"
-  - "frontend"
-  - "backend"
-  - "PostgreSQL"
-
 # Session log directory
 LOG_DIR: "./logs"
 
