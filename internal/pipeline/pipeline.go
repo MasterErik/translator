@@ -53,7 +53,7 @@ type Pipeline struct {
 	sessLog  logger.SessionLogger
 
 	textStream   chan common.STTEvent
-	dispatchDone chan struct{}      // Сигнал завершения dispatcher (буфер 1)
+	dispatchDone chan struct{} // Сигнал завершения dispatcher (буфер 1)
 	dispatch     *dispatcher.Dispatcher
 }
 
@@ -67,6 +67,7 @@ type Config struct {
 
 	// STT (Gladia)
 	GladiaAPIKey string
+	SourceLang   string
 	TargetLang   string
 
 	// LLM
@@ -127,7 +128,11 @@ func New(cfg Config) (*Pipeline, error) {
 	}()
 
 	// STT-провайдер (Gladia).
-	sttProv := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang, sessLog)
+	sttProv := stt.NewGladiaProvider(stt.GladiaConfig{
+		APIKey:     cfg.GladiaAPIKey,
+		SourceLang: cfg.SourceLang,
+		TargetLang: cfg.TargetLang,
+	}, sessLog)
 
 	// LLM-провайдер.
 	llmAPIKey := cfg.LLMAPIKey

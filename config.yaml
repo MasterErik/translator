@@ -3,24 +3,18 @@
 
 # LLM base URL — supports any OpenAI-compatible provider.
 # OpenAI:      https://api.openai.com/v1
-# Z.AI GLM:    https://api.z.ai/api/paas/v4/
 # Groq Cloud:  https://api.groq.com/openai/v1
 llm_base_url: "https://api.groq.com/openai/v1"
 
 # LLM model — supports any model on the configured base_url.
 # OpenAI:      gpt-4o-mini (default)
-# Z.AI GLM:    glm-4.7-flash (бесплатный, ~0.4s latency, 2-3x быстрее GPT-4o-mini)
 # Groq:        llama-3.1-8b-instant (208ms), llama-3.3-70b-versatile (431ms)
 llm_model: "llama-3.3-70b-versatile"
 
-# Gladia model for speech-to-text and translation
-gladia_model: "solaria-1"
-
 # Target language for Gladia translation (ISO 639-1)
 target_lang: "ru"
-
-# Target language for translation (ISO 639-1)
-target_language: "ru"
+# Source language for Gladia (ISO 639-1)
+source_lang: "en"
 
 # Session log directory
 log_dir: "./logs"

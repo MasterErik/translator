@@ -39,6 +39,10 @@ type Config struct {
 	// Default: "llama-3.3-70b-versatile".
 	LLMModel string `yaml:"llm_model"`
 
+	// SourceLang is the source language code for Gladia STT (ISO 639-1).
+	// Default: "en". Read from SOURCE_LANG environment variable.
+	SourceLang string `yaml:"source_lang"`
+
 	// TargetLang is the language code for Gladia translation (ISO 639-1).
 	// Default: "ru".
 	TargetLang string `yaml:"target_lang"`
@@ -99,6 +103,9 @@ type Config struct {
 
 // applyDefaults sets reasonable default values for any unconfigured fields.
 func (c *Config) applyDefaults() {
+	if c.SourceLang == "" {
+		c.SourceLang = "en"
+	}
 	if c.TargetLang == "" {
 		c.TargetLang = "ru"
 	}
@@ -159,6 +166,9 @@ func (c *Config) loadFromEnv() {
 	}
 	if v := os.Getenv("TARGET_LANGUAGE"); v != "" {
 		c.TargetLanguage = v
+	}
+	if v := os.Getenv("SOURCE_LANG"); v != "" {
+		c.SourceLang = v
 	}
 	if v := os.Getenv("LOG_DIR"); v != "" {
 		c.LogDir = v

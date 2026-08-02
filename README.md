@@ -37,21 +37,14 @@ CGO_ENABLED=0 go build -ldflags="-H windowsgui" -o translator.exe .
 
 > **Примечание:** `-ldflags="-H windowsgui"` скрывает консольное окно. Без него Windows открывает пустой терминал при запуске.
 
-Остановка: `Ctrl+C`.
 
 ## Конфигурация
-
-Приоритет: **`.env` > `config.yaml`**. Минимальный `.env`:
 
 ```env
 GLADIA_API_KEY=your_key
 LLM_API_KEY=your_key
 LLM_BASE_URL=https://api.z.ai/api/paas/v4/
-```
 
-Аудиоустройства (опционально):
-
-```env
 LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
 MIC_DEVICE=Microphone (Realtek High Definition Audio)
 ```

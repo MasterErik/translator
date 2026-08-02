@@ -36,6 +36,7 @@ type gladiaInitRequest struct {
 	Channels     int                  `json:"channels"`
 	Model        string               `json:"model"`
 	Endpointing  float64              `json:"endpointing"`
+	MaxDuration  float64              `json:"maximum_duration_without_endpointing"`
 	LanguageCfg  gladiaLanguageConfig `json:"language_config"`
 	RealtimeProc gladiaRealtimeConfig `json:"realtime_processing"`
 	MessagesCfg  gladiaMessagesConfig `json:"messages_config"`
@@ -94,6 +95,41 @@ type gladiaTranslationData struct {
 	TranslatedUtterance gladiaUtterance `json:"translated_utterance"`
 }
 
+// GladiaConfig — конфигурация Gladia Live API.
+// Все поля имеют разумные значения по умолчанию через applyDefaults.
+type GladiaConfig struct {
+	APIKey           string  // x-gladia-key
+	SourceLang       string  // язык оригинала, default "en"
+	TargetLang       string  // язык перевода, default "ru"
+	Model            string  // модель STT, default "solaria-1"
+	Endpointing      float64 // чувствительность endpointing, default 0.7
+	MaxDuration      float64 // макс. длительность без endpointing, default 8
+	CodeSwitching    bool    // code switching
+	TranslationModel string  // модель перевода, default "enhanced"
+}
+
+// applyDefaults устанавливает значения по умолчанию для незаполненных полей.
+func (c *GladiaConfig) applyDefaults() {
+	if c.SourceLang == "" {
+		c.SourceLang = "en"
+	}
+	if c.TargetLang == "" {
+		c.TargetLang = "ru"
+	}
+	if c.Model == "" {
+		c.Model = "solaria-1"
+	}
+	if c.Endpointing == 0 {
+		c.Endpointing = 0.7
+	}
+	if c.MaxDuration == 0 {
+		c.MaxDuration = 8
+	}
+	if c.TranslationModel == "" {
+		c.TranslationModel = "enhanced"
+	}
+}
+
 // GladiaProvider реализует STTProvider через Gladia Live API.
 //
 // Двухфазный коннект:
@@ -103,8 +139,7 @@ type gladiaTranslationData struct {
 // События transcript → промежуточный (Update) или финальный (EndOfTurn) результат.
 // События translation → EventEndOfTurn с ChannelID="translation".
 type GladiaProvider struct {
-	apiKey     string
-	targetLang string
+	cfg GladiaConfig
 
 	wsConn  *websocket.Conn
 	audioCh chan []byte
@@ -122,19 +157,15 @@ type GladiaProvider struct {
 // NewGladiaProvider создаёт новый GladiaProvider.
 //
 // Параметры:
-//   - apiKey: ключ Gladia API (x-gladia-key)
-//   - targetLang: целевой язык перевода, по умолчанию "ru"
+//   - cfg: конфигурация Gladia (APIKey обязателен)
 //   - sessLog: логгер сессии для operational-логов
-func NewGladiaProvider(apiKey, targetLang string, sessLog logger.SessionLogger) *GladiaProvider {
-	if targetLang == "" {
-		targetLang = "ru"
-	}
+func NewGladiaProvider(cfg GladiaConfig, sessLog logger.SessionLogger) *GladiaProvider {
+	cfg.applyDefaults()
 	return &GladiaProvider{
-		apiKey:     apiKey,
-		targetLang: targetLang,
-		audioCh:    make(chan []byte, 64),
-		textCh:     make(chan common.STTEvent, 32),
-		sessLog:    sessLog,
+		cfg:      cfg,
+		audioCh:  make(chan []byte, 64),
+		textCh:   make(chan common.STTEvent, 32),
+		sessLog:  sessLog,
 	}
 }
 
@@ -234,17 +265,18 @@ func (g *GladiaProvider) initSession(ctx context.Context) (string, error) {
 		BitDepth:    16,
 		SampleRate:  16000,
 		Channels:    1,
-		Model:       "solaria-1",
-		Endpointing: 0.3,
+		Model:       g.cfg.Model,
+		Endpointing: g.cfg.Endpointing,
+		MaxDuration: g.cfg.MaxDuration,
 		LanguageCfg: gladiaLanguageConfig{
-			Languages:     []string{"en"},
-			CodeSwitching: false,
+			Languages:     []string{g.cfg.SourceLang},
+			CodeSwitching: g.cfg.CodeSwitching,
 		},
 		RealtimeProc: gladiaRealtimeConfig{
 			Translation: true,
 			TranslationCfg: gladiaTranslationCfg{
-				TargetLanguages: []string{g.targetLang},
-				Model:           "enhanced",
+				TargetLanguages: []string{g.cfg.TargetLang},
+				Model:           g.cfg.TranslationModel,
 			},
 		},
 		MessagesCfg: gladiaMessagesConfig{
@@ -263,7 +295,7 @@ func (g *GladiaProvider) initSession(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create init request: %w", err)
 	}
-	httpReq.Header.Set("x-gladia-key", g.apiKey)
+	httpReq.Header.Set("x-gladia-key", g.cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: gladiaHTTPTimeout}

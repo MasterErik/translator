@@ -126,29 +126,11 @@ TARGET_LANG=ru
 ### `config.yaml` — несекретные параметры
 
 ```yaml
-# LLM
-llm_base_url: "https://api.z.ai/api/paas/v4/"
-llm_model: "glm-4.7-flash"
-
-# Gladia STT + Translation
-gladia_model: "solaria-1"
-target_lang: "ru"
-
-# Аудио
-audio_sample_rate: 16000
-audio_channels: 1
-loopback_device: ""               # пусто = системный по умолчанию
-mic_device: ""
-
 # Логи
 log_dir: "./logs"
-save_audio: false
 
 # CV контекст для генерации подсказок
 cv_context: |
-  Senior Go developer with 5+ years experience.
-  Expert in distributed systems, microservices, Kubernetes.
-  Built high-load real-time processing pipelines.
 ```
 
 **CVContext** передаётся в LLM как system message (системный промпт):
@@ -164,9 +146,9 @@ cv_context: |
 
 **Подробнее:** `docs/gladia-flow.md`
 
-## LLM — GLM-4.7-Flash (Z.AI)
+## LLM
 
-OpenAI-совместимый API. Синхронный `GenerateAnswers` (не стриминг). Thinking **включён** по умолчанию (GLM требует `"thinking": {"type": "enabled"}`). Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: `CVContext` из `config.yaml`. Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале.
+OpenAI-совместимый API. Синхронный `GenerateAnswers` (не стриминг). Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: `CVContext` из `config.yaml`. Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале.
 
 ---
 
@@ -246,49 +228,7 @@ internal/
 | `logCh` (mic fan-out) | `chan []byte` | 32 | mic capture → logger |
 
 ### Dispatcher (`internal/dispatcher/`)
-
-Отдельный модуль, реализующий:
-
-```go
-type Dispatcher struct {
-    overlay    OverlayUI
-    engine     AnswerGenerator   // → LLM
-    sessLog    SessionLogger
-
-    cfg        Config
-
-    // Очередь вопросов — предотвращает спам LLM-запросов (rate-limit 429).
-    answerCh   chan string       // buf 16, неблокирующая отправка
-    answerDone chan struct{}     // сигнал завершения answerWorker
-
-    // Rate-limited buffer monitoring
-    dropCount    atomic.Int64
-    lastDropWarn time.Time
-    dropMu       sync.Mutex
-}
-
-// Run — главный цикл: читает textStream, маршрутизирует события,
-// запускает answerWorker (одна горутина- consumer).
-func (d *Dispatcher) Run(ctx context.Context, textStream <-chan STTEvent, done chan<- struct{})
-
-// route — маршрутизация одного события.
-func (d *Dispatcher) route(event STTEvent, ...)
-
-// enqueueQuestion — неблокирующая отправка вопроса в answerCh.
-// При переполнении — дроп с debug-логом.
-func (d *Dispatcher) enqueueQuestion(question string)
-
-// answerWorker — единственная горутина, последовательно вызывает LLM.
-// Дедуплицирует повторяющиеся подряд вопросы.
-func (d *Dispatcher) answerWorker(ctx context.Context)
-
-// drainQueue — дренирует очередь при shutdown (ctx.Done).
-func (d *Dispatcher) drainQueue(lastQuestion *string)
-
-// GenerateAnswers — вызывает engine.GenerateAnswers с таймаутом.
-// Логирует пустой ответ (len(answers)==0).
-func (d *Dispatcher) GenerateAnswers(question string)
-```
+Главный организатор логики работы приложения и каналов 
 
 **Логика маршрутизации:** раздельные потоки — без `historySeen` и связки через `lastOriginal`.
 
@@ -306,14 +246,13 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
          нет → ничего
 ```
 
-Зоны 2 и 3 питаются из разных типов сообщений: Translation и History. Дедупликация не требуется — каждый тип пишется из одного места.
+Зоны 2 и 3 питаются из разных типов сообщений: Translation и History.
 
 **Очередь подсказок (answerQueue):**
 
-Вместо `go generateAnswers(q)` (горутина на каждый вопрос) — буферизованный канал `answerCh` (16) и одна горутина `answerWorker`. Зачем:
+- Буферизованный канал `answerCh` (16) и одна горутина `answerWorker`. Зачем:
 - Предотвращает спам LLM-запросов → **rate-limit 429** больше не возникает
 - Последовательные запросы (FIFO) — сервер не перегружается
-- Дедупликация: повторяющийся подряд вопрос логируется и пропускается
 - Неблокирующая отправка: если очередь переполнена — дроп с debug-логом
 - Graceful shutdown: worker дренирует оставшиеся вопросы перед выходом
 

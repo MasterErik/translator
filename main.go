@@ -37,6 +37,7 @@ func main() {
 		LoopbackName:  cfg.LoopbackDeviceName,
 		MicName:       cfg.MicDeviceName,
 		GladiaAPIKey:  cfg.GladiaAPIKey,
+		SourceLang:    cfg.SourceLang,
 		TargetLang:    cfg.TargetLang,
 		LLMBaseURL:    cfg.LLMBaseURL,
 		LLMAPIKey:     cfg.LLMAPIKey,

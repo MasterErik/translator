@@ -43,7 +43,11 @@ func main() {
 }
 
 func testSTT(ctx context.Context, cfg *common.Config) {
-	prov := stt.NewGladiaProvider(cfg.GladiaAPIKey, cfg.TargetLang, logger.NewNopSessionLogger())
+	prov := stt.NewGladiaProvider(stt.GladiaConfig{
+		APIKey:     cfg.GladiaAPIKey,
+		SourceLang: cfg.SourceLang,
+		TargetLang: cfg.TargetLang,
+	}, logger.NewNopSessionLogger())
 
 	if err := prov.Start(ctx); err != nil {
 		fmt.Printf("  FAIL: Gladia connect: %v\n", err)
