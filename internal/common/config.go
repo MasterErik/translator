@@ -22,10 +22,6 @@ type Config struct {
 	// Read from GLADIA_API_KEY environment variable.
 	GladiaAPIKey string
 
-	// OpenAIAPIKey is the API key for OpenAI LLM service.
-	// Read from OPENAI_API_KEY environment variable.
-	OpenAIAPIKey string
-
 	// LLMBaseURL is the base URL for the OpenAI-compatible API.
 	// Supports any OpenAI-compatible provider (OpenAI, Z.AI GLM, etc.).
 	// Read from LLM_BASE_URL environment variable. Default: "https://api.openai.com/v1".
@@ -139,18 +135,11 @@ func (c *Config) loadFromEnv() {
 	if v := os.Getenv("GLADIA_API_KEY"); v != "" {
 		c.GladiaAPIKey = v
 	}
-	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
-		c.OpenAIAPIKey = v
-	}
 	if v := os.Getenv("LLM_BASE_URL"); v != "" {
 		c.LLMBaseURL = v
 	}
 	if v := os.Getenv("LLM_API_KEY"); v != "" {
 		c.LLMAPIKey = v
-	}
-	// Fallback: LLM_API_KEY → OPENAI_API_KEY.
-	if c.LLMAPIKey == "" {
-		c.LLMAPIKey = c.OpenAIAPIKey
 	}
 	if v := os.Getenv("LLM_MODEL"); v != "" {
 		c.LLMModel = v

@@ -9,7 +9,7 @@ import (
 func TestLoadConfigDefaults(t *testing.T) {
 	// Clear relevant env vars to isolate defaults.
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
+		"GLADIA_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
@@ -36,7 +36,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestLoadConfigFromYAML(t *testing.T) {
 	// Clear relevant env vars.
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
+		"GLADIA_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
@@ -81,7 +81,7 @@ cv_context: "Backend Engineer"
 
 func TestLoadConfigFromYAMLEnvOverride(t *testing.T) {
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
+		"GLADIA_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
 		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
@@ -218,38 +218,15 @@ func TestLLMBaseURLEnv(t *testing.T) {
 	}
 }
 
-// TestLLMAPIKeyFallback проверяет fallback LLM_API_KEY → OPENAI_API_KEY.
-func TestLLMAPIKeyFallback(t *testing.T) {
-	os.Setenv("OPENAI_API_KEY", "«redacted:sk-…»")
-	os.Unsetenv("LLM_API_KEY")
-	t.Cleanup(func() {
-		os.Unsetenv("OPENAI_API_KEY")
-	})
-
-	cfg := LoadConfig()
-
-	if cfg.LLMAPIKey != "«redacted:sk-…»" {
-		t.Errorf("LLMAPIKey fallback: got %q, want %q", cfg.LLMAPIKey, "«redacted:sk-…»")
-	}
-}
-
-// TestLLMAPIKeyOverride проверяет, что LLM_API_KEY имеет приоритет над OPENAI_API_KEY.
-func TestLLMAPIKeyOverride(t *testing.T) {
-	os.Setenv("OPENAI_API_KEY", "«redacted:sk-…»")
+// TestLLMAPIKeyEnv проверяет чтение LLM_API_KEY из env.
+func TestLLMAPIKeyEnv(t *testing.T) {
 	os.Setenv("LLM_API_KEY", "sk-glm-key")
-	t.Cleanup(func() {
-		os.Unsetenv("OPENAI_API_KEY")
-		os.Unsetenv("LLM_API_KEY")
-	})
+	t.Cleanup(func() { os.Unsetenv("LLM_API_KEY") })
 
 	cfg := LoadConfig()
 
 	if cfg.LLMAPIKey != "sk-glm-key" {
-		t.Errorf("LLMAPIKey override: got %q, want %q", cfg.LLMAPIKey, "sk-glm-key")
-	}
-	// OpenAIAPIKey всё ещё должно быть «redacted:sk-…».
-	if cfg.OpenAIAPIKey != "«redacted:sk-…»" {
-		t.Errorf("OpenAIAPIKey should be unchanged: got %q", cfg.OpenAIAPIKey)
+		t.Errorf("LLMAPIKey env: got %q, want %q", cfg.LLMAPIKey, "sk-glm-key")
 	}
 }
 
@@ -376,7 +353,6 @@ func TestLoadConfig_LLMFieldsEmptyWithoutEnv(t *testing.T) {
 	os.Unsetenv("LLM_BASE_URL")
 	os.Unsetenv("LLM_MODEL")
 	os.Unsetenv("LLM_API_KEY")
-	os.Unsetenv("OPENAI_API_KEY")
 
 	cfg := LoadConfig()
 
