@@ -4,21 +4,21 @@
 # LLM base URL — supports any OpenAI-compatible provider.
 # OpenAI:      https://api.openai.com/v1
 # Groq Cloud:  https://api.groq.com/openai/v1
-llm_base_url: "https://api.groq.com/openai/v1"
+LLM_BASE_URL: "https://api.groq.com/openai/v1"
 
 # LLM model — supports any model on the configured base_url.
-llm_model: "llama-3.3-70b-versatile"
+LLM_MODEL: "llama-3.3-70b-versatile"
 
 # Target language for Gladia translation (ISO 639-1)
-target_lang: "ru"
+TARGET_LANG: "ru"
 # Source language for Gladia (ISO 639-1)
-source_lang: "en"
+SOURCE_LANG: "en"
 
 # Gladia context_adaptation — улучшает точность распознавания технических терминов.
 # system_prompt — описание контекста встречи (опционально).
 # custom_vocabulary — список доменных терминов для улучшения распознавания (опционально).
-system_prompt: "This is a technical IT meeting about software development, DevOps, and cloud architecture. Translate and transcribe accurately."
-custom_vocabulary:
+SYSTEM_PROMPT: "This is a technical IT meeting about software development, DevOps, and cloud architecture. Translate and transcribe accurately."
+CUSTOM_VOCABULARY:
   - "Kubernetes"
   - "Docker"
   - "microservices"
@@ -29,22 +29,22 @@ custom_vocabulary:
   - "PostgreSQL"
 
 # Session log directory
-log_dir: "./logs"
+LOG_DIR: "./logs"
 
 # Audio device names — edit to match your setup
 # Leave empty to use system defaults, or set specific device names:
-#   loopback_device: "CABLE Input (VB-Audio Virtual Cable)"
-#   mic_device:     "Microphone (Realtek High Definition Audio)"
-loopback_device: ""
-mic_device: ""
+#   LOOPBACK_DEVICE: "CABLE Input (VB-Audio Virtual Cable)"
+#   MIC_DEVICE:     "Microphone (Realtek High Definition Audio)"
+LOOPBACK_DEVICE: ""
+MIC_DEVICE: ""
 
 # Save raw PCM audio chunks to disk (audio/ directory under log_dir).
 # Default false — set true to enable for debugging or post-session review.
-save_audio: false
+SAVE_AUDIO: false
 
 # Системный промпт для генерации подсказок (используется как system message LLM).
 # Пиши от первого лица, как готовый ответ кандидата.
-cv_context: |
+CV_CONTEXT: |
   You are an expert interview coach helping a candidate answer technical questions.
   The candidate is a Senior Go developer.
   Generate 1 concise answer from the candidate's perspective (first person, ready to read aloud).
@@ -53,6 +53,6 @@ cv_context: |
   1. Output EXACTLY 1 bullet point starting with a dash (-).
   2. Format: "- EN: <English answer> | RU: <Russian translation>"
   3. Keep IT terms in English: API, Kubernetes, CI/CD, Docker, microservices, etc.
-  4. Write from FIRST PERSON ("I am Erik Ivanov" / "Я Эрик Иванов") — as if the candidate is speaking right now.
+  4. Write from FIRST PERSON ("I am ..." / "Я ....") — as if the candidate is speaking right now.
   5. The answer should be 1-2 sentences — concise, natural spoken language, ready to read aloud.
   6. Do NOT write instructions or reminders — write the actual answer.

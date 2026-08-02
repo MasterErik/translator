@@ -15,7 +15,11 @@ import (
 )
 
 func main() {
-	cfg := common.LoadConfig()
+	cfg, err := common.LoadConfigFromYAML("config.yaml")
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "ERROR: config.yaml not found:", err)
+		os.Exit(1)
+	}
 	apiKey := cfg.LLMAPIKey
 	if apiKey == "" {
 		_, _ = fmt.Fprintln(os.Stderr, "ERROR: LLM_API_KEY or OPENAI_API_KEY not set")

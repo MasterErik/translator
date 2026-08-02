@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -15,188 +15,115 @@ import (
 )
 
 // Config holds all configuration parameters for the Translator application.
-// API keys are read from environment variables; non-secret parameters
-// can be loaded from a YAML config file or set via environment variables.
+// Every field has a yaml tag in UPPER_SNAKE_CASE — the same string is used
+// both by yaml.Unmarshal (case-insensitive) and as the env var name.
 type Config struct {
-	// GladiaAPIKey is the API key for Gladia STT + Translation service.
-	// Read from GLADIA_API_KEY environment variable.
-	GladiaAPIKey string
+	// API keys.
+	GladiaAPIKey string `yaml:"GLADIA_API_KEY"`
+	LLMAPIKey    string `yaml:"LLM_API_KEY"`
 
-	// LLMBaseURL is the base URL for the OpenAI-compatible API.
-	// Supports any OpenAI-compatible provider (OpenAI, Z.AI GLM, etc.).
-	// Read from LLM_BASE_URL environment variable. Default: "https://api.openai.com/v1".
-	LLMBaseURL string `yaml:"llm_base_url"`
+	// LLM settings.
+	LLMBaseURL string `yaml:"LLM_BASE_URL"`
+	LLMModel   string `yaml:"LLM_MODEL"`
+	MaxTokens  int    `yaml:"LLM_MAX_TOKENS"`
 
-	// LLMAPIKey is the API key for the LLM service.
-	// Read from LLM_API_KEY environment variable. Falls back to OPENAI_API_KEY.
-	LLMAPIKey string
+	// Languages (ISO 639-1).
+	SourceLang string `yaml:"SOURCE_LANG"`
+	TargetLang string `yaml:"TARGET_LANG"`
 
-	// LLMModel specifies the LLM model to use for translation and answer generation.
-	// Default: "llama-3.3-70b-versatile".
-	LLMModel string `yaml:"llm_model"`
+	// Logging.
+	LogDir    string `yaml:"LOG_DIR"`
+	LogLevel  string `yaml:"LOG_LEVEL"`
+	SaveAudio bool   `yaml:"SAVE_AUDIO"`
 
-	// SourceLang is the source language code for Gladia STT (ISO 639-1).
-	// Default: "en". Read from SOURCE_LANG environment variable.
-	SourceLang string `yaml:"source_lang"`
+	// Audio devices.
+	LoopbackDeviceName string `yaml:"LOOPBACK_DEVICE"`
+	MicDeviceName      string `yaml:"MIC_DEVICE"`
 
-	// TargetLang is the language code for Gladia translation (ISO 639-1).
-	// Default: "ru".
-	TargetLang string `yaml:"target_lang"`
+	// Overlay.
+	OverlayWidth  int `yaml:"OVERLAY_WIDTH"`
+	OverlayHeight int `yaml:"OVERLAY_HEIGHT"`
 
-	// TargetLanguage is the language to translate into (ISO 639-1 code).
-	// Default: "ru".
-	TargetLanguage string `yaml:"target_language"`
+	// Gladia context adaptation.
+	SystemPrompt     string   `yaml:"SYSTEM_PROMPT"`
+	CustomVocabulary []string `yaml:"CUSTOM_VOCABULARY"`
 
-	// LogDir is the directory where session logs and audio chunks are stored.
-	// Default: "./logs".
-	LogDir string `yaml:"log_dir"`
-
-	// WindowSize is the number of recent utterances kept in the sliding translation window.
-	// Default: 5.
-	WindowSize int `yaml:"window_size"`
-
-	// CVContext is the CV/resume context for answer generation.
-	// Can be set via CV_CONTEXT environment variable or YAML config.
-	CVContext string `yaml:"cv_context"`
-
-	// LoopbackDeviceName is the name of the WASAPI loopback device (e.g. "CABLE Output").
-	// If empty, the default playback device is used. Read from LOOPBACK_DEVICE env or YAML.
-	LoopbackDeviceName string `yaml:"loopback_device"`
-
-	// MicDeviceName is the name of the microphone device.
-	// If empty, the default capture device is used. Read from MIC_DEVICE env or YAML.
-	MicDeviceName string `yaml:"mic_device"`
-
-	// SaveAudio enables saving raw PCM audio chunks to disk (audio/ directory).
-	// Default: false. Read from SAVE_AUDIO env or YAML (true/1/yes → enabled).
-	// Приоритет: env > .env > yaml.
-	SaveAudio bool `yaml:"save_audio"`
-
-	// MaxTokens limits the maximum number of output tokens for LLM requests.
-	// 0 means provider default (no limit). Read from LLM_MAX_TOKENS env.
-	MaxTokens int
-
-	// SystemPrompt is the system prompt for Gladia context_adaptation.
-	// Read from SYSTEM_PROMPT environment variable. Optional.
-	SystemPrompt string `yaml:"system_prompt"`
-
-	// CustomVocabulary is a list of domain-specific terms for Gladia context_adaptation.
-	// Read from CUSTOM_VOCABULARY env (comma-separated) or YAML (array). Optional.
-	CustomVocabulary []string `yaml:"custom_vocabulary"`
-
-	// OverlayWidth is the overlay window width in pixels. Default: 800.
-	// Read from OVERLAY_WIDTH env.
-	OverlayWidth int
-
-	// OverlayHeight is the overlay window height in pixels. Default: 650.
-	// Read from OVERLAY_HEIGHT env.
-	OverlayHeight int
-
-	// LogLevel sets the minimum log level for slog (debug, info, warn, error).
-	// Default: "info". Read from LOG_LEVEL environment variable.
-	LogLevel string
+	// CV context for answer generation.
+	CVContext string `yaml:"CV_CONTEXT"`
 }
 
-// applyDefaults sets reasonable default values for any unconfigured fields.
+func setDefault[T comparable](v *T, def T) {
+	var zero T
+	if *v == zero {
+		*v = def
+	}
+}
+
 func (c *Config) applyDefaults() {
-	if c.SourceLang == "" {
-		c.SourceLang = "en"
-	}
-	if c.TargetLang == "" {
-		c.TargetLang = "ru"
-	}
-	if c.TargetLanguage == "" {
-		c.TargetLanguage = "ru"
-	}
-	if c.LogDir == "" {
-		c.LogDir = "./logs"
-	}
-	if c.WindowSize == 0 {
-		c.WindowSize = 5
-	}
-	if c.OverlayWidth == 0 {
-		c.OverlayWidth = 800
-	}
-	if c.OverlayHeight == 0 {
-		c.OverlayHeight = 650
-	}
-	if c.LogLevel == "" {
-		c.LogLevel = "info"
-	}
+	setDefault(&c.SourceLang, "en")
+	setDefault(&c.TargetLang, "ru")
+	setDefault(&c.LogDir, "./logs")
+	setDefault(&c.OverlayWidth, 800)
+	setDefault(&c.OverlayHeight, 650)
+	setDefault(&c.LogLevel, "info")
 }
 
-// loadFromEnv reads API keys and overridable settings from environment variables.
-// Also loads .env file from project root if it exists.
+// loadFromEnv loads .env via godotenv, then reads environment variables
+// using yaml struct tags directly as env var names.
 func (c *Config) loadFromEnv() {
-	// Try to load .env file from common locations.
-	_ = godotenv.Load()                           // current dir
-	_ = godotenv.Load(filepath.Join(".", ".env")) // explicit
+	if err := godotenv.Load(); err != nil {
+		slog.Warn("godotenv: .env не загружен", "err", err)
+	}
 
-	if v := os.Getenv("GLADIA_API_KEY"); v != "" {
-		c.GladiaAPIKey = v
-	}
-	if v := os.Getenv("LLM_BASE_URL"); v != "" {
-		c.LLMBaseURL = v
-	}
-	if v := os.Getenv("LLM_API_KEY"); v != "" {
-		c.LLMAPIKey = v
-	}
-	if v := os.Getenv("LLM_MODEL"); v != "" {
-		c.LLMModel = v
-	}
-	if v := os.Getenv("TARGET_LANG"); v != "" {
-		c.TargetLang = v
-	}
-	if v := os.Getenv("TARGET_LANGUAGE"); v != "" {
-		c.TargetLanguage = v
-	}
-	if v := os.Getenv("SOURCE_LANG"); v != "" {
-		c.SourceLang = v
-	}
-	if v := os.Getenv("LOG_DIR"); v != "" {
-		c.LogDir = v
-	}
-	if v := os.Getenv("WINDOW_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.WindowSize = n
-		}
-	}
-	if v := os.Getenv("CV_CONTEXT"); v != "" {
-		c.CVContext = v
-	}
-	if v := os.Getenv("LOOPBACK_DEVICE"); v != "" {
-		c.LoopbackDeviceName = v
-	}
-	if v := os.Getenv("MIC_DEVICE"); v != "" {
-		c.MicDeviceName = v
-	}
-	if v := os.Getenv("SAVE_AUDIO"); v != "" {
-		c.SaveAudio = isTruthy(v)
-	}
-	if v := os.Getenv("LLM_MAX_TOKENS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.MaxTokens = n
-		}
-	}
-	if v := os.Getenv("SYSTEM_PROMPT"); v != "" {
-		c.SystemPrompt = v
-	}
+	// Основные поля — через reflection по yaml-тегам.
+	_ = loadFromYAMLTags(c)
+
+	// CustomVocabulary: особый случай — split по запятой.
 	if v := os.Getenv("CUSTOM_VOCABULARY"); v != "" {
 		c.CustomVocabulary = splitAndTrim(v, ",")
 	}
-	if v := os.Getenv("OVERLAY_WIDTH"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.OverlayWidth = n
+}
+
+// loadFromYAMLTags reads env vars using yaml struct tags as env var names.
+// Only string, int, and bool fields are supported.
+// Invalid values are silently ignored (no error returned).
+func loadFromYAMLTags(cfg *Config) error {
+	v := reflect.ValueOf(cfg).Elem()
+	t := v.Type()
+
+	for i := 0; i < t.NumField(); i++ {
+		field := v.Field(i)
+		envName := t.Field(i).Tag.Get("yaml")
+		if envName == "" {
+			continue
+		}
+
+		value, exists := os.LookupEnv(envName)
+		if !exists || value == "" {
+			continue
+		}
+
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString(value)
+
+		case reflect.Int:
+			n, err := strconv.ParseInt(value, 10, field.Type().Bits())
+			if err != nil {
+				return fmt.Errorf("%s: %w", envName, err)
+			}
+			field.SetInt(n)
+
+		case reflect.Bool:
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("%s: %w", envName, err)
+			}
+			field.SetBool(b)
 		}
 	}
-	if v := os.Getenv("OVERLAY_HEIGHT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.OverlayHeight = n
-		}
-	}
-	if v := os.Getenv("LOG_LEVEL"); v != "" {
-		c.LogLevel = strings.ToLower(v)
-	}
+
+	return nil
 }
 
 // SlogLevel converts the LogLevel string to slog.Level.
@@ -216,16 +143,6 @@ func (c *Config) SlogLevel() slog.Level {
 	}
 }
 
-// isTruthy returns true for typical boolean-like true values.
-func isTruthy(v string) bool {
-	switch v {
-	case "true", "1", "yes", "TRUE", "YES", "True", "Yes":
-		return true
-	default:
-		return false
-	}
-}
-
 // splitAndTrim splits a string by separator and trims whitespace from each part.
 // Empty parts are omitted.
 func splitAndTrim(s, sep string) []string {
@@ -240,34 +157,11 @@ func splitAndTrim(s, sep string) []string {
 	return result
 }
 
-// LoadConfig creates a Config with sensible defaults, then reads API keys
-// and overrides from environment variables. This is the simplest way to
-// obtain a working configuration without a YAML file.
-//
-// Example:
-//
-//	cfg := common.LoadConfig()
-//	fmt.Println(cfg.LLMModel) // "llama-3.3-70b-versatile" unless overridden
-func LoadConfig() *Config {
-	cfg := &Config{}
-	cfg.applyDefaults()
-	cfg.loadFromEnv()
-	return cfg
-}
-
 // LoadConfigFromYAML reads a YAML configuration file, applies defaults for
 // any missing fields, and then overrides with environment variables.
 // Environment variables always take precedence over YAML values.
-//
-// Example:
-//
-//	cfg, err := common.LoadConfigFromYAML("config.yaml")
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
 func LoadConfigFromYAML(path string) (*Config, error) {
 	cfg := &Config{}
-	cfg.applyDefaults()
 
 	data, err := os.ReadFile(path)
 	if err != nil {

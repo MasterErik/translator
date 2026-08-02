@@ -19,7 +19,11 @@ import (
 )
 
 func main() {
-	cfg := common.LoadConfig()
+	cfg, err := common.LoadConfigFromYAML("config.yaml")
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "ERROR: config.yaml not found:", err)
+		os.Exit(1)
+	}
 
 	if cfg.GladiaAPIKey == "" {
 		_, _ = fmt.Fprintln(os.Stderr, "ERROR: GLADIA_API_KEY not set in .env or environment")

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -10,24 +12,24 @@ import (
 	"github.com/mastererik/translator/internal/ui"
 )
 
-// TestLoadConfig verifies that common.LoadConfig returns a non-nil
+// TestLoadConfig verifies that LoadConfigFromYAML returns a non-nil
 // configuration with sensible defaults.
 func TestLoadConfig(t *testing.T) {
-	cfg := common.LoadConfig()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := common.LoadConfigFromYAML(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFromYAML: %v", err)
+	}
 	if cfg == nil {
-		t.Fatal("LoadConfig returned nil")
+		t.Fatal("LoadConfigFromYAML returned nil")
 	}
 	if cfg.TargetLang == "" {
 		t.Error("TargetLang should have a default value")
 	}
-	if cfg.TargetLanguage == "" {
-		t.Error("TargetLanguage should have a default value")
-	}
-	if cfg.WindowSize == 0 {
-		t.Error("WindowSize should have a default value")
-	}
-	t.Logf("Config: model=%s, lang=%s, window=%d",
-		cfg.LLMModel, cfg.TargetLanguage, cfg.WindowSize)
 }
 
 // TestOverlayStub verifies that the UI overlay can accept and retrieve

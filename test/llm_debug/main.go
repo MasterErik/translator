@@ -12,7 +12,11 @@ import (
 )
 
 func main() {
-	cfg := common.LoadConfig()
+	cfg, err := common.LoadConfigFromYAML("config.yaml")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: config.yaml not found:", err)
+		os.Exit(1)
+	}
 	apiKey := cfg.LLMAPIKey
 	if apiKey == "" {
 		fmt.Fprintln(os.Stderr, "ERROR: no API key")
