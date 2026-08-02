@@ -133,7 +133,7 @@ func (c *Config) SlogLevel() slog.Level {
 	}
 }
 
-// SlogLevel converts the LogLevel string to slog.Level.
+// LoadConfigFromYAML reads a YAML configuration file, applies defaults for
 // any missing fields, and then overrides with environment variables.
 // Environment variables always take precedence over YAML values.
 func LoadConfigFromYAML(path string) (*Config, error) {
