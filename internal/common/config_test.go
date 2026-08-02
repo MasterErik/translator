@@ -11,7 +11,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	for _, v := range []string{
 		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
-		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
@@ -28,12 +28,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.LogDir != "./logs" {
 		t.Errorf("LogDir default: got %q, want %q", cfg.LogDir, "./logs")
 	}
-	if cfg.AudioSampleRate != 16000 {
-		t.Errorf("AudioSampleRate default: got %d, want %d", cfg.AudioSampleRate, 16000)
-	}
-	if cfg.AudioChannels != 1 {
-		t.Errorf("AudioChannels default: got %d, want %d", cfg.AudioChannels, 1)
-	}
 	if cfg.WindowSize != 5 {
 		t.Errorf("WindowSize default: got %d, want %d", cfg.WindowSize, 5)
 	}
@@ -42,29 +36,25 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestLoadConfigEnvOverride(t *testing.T) {
 	// Clear relevant env vars first.
 	for _, v := range []string{
-		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
-		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
-		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"GLADIA_API_KEY", "LLM_MODEL",
+		"TARGET_LANG", "SOURCE_LANG", "LOG_DIR",
+		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
 	}
 
-	os.Setenv("LLM_MODEL", "gpt-4")
+	os.Setenv("LLM_MODEL", "llama-3.3-70b-versatile")
 	os.Setenv("TARGET_LANGUAGE", "fr")
-	os.Setenv("AUDIO_SAMPLE_RATE", "48000")
 	os.Setenv("CV_CONTEXT", "Senior Go Developer")
 
 	cfg := LoadConfig()
 
-	if cfg.LLMModel != "gpt-4" {
-		t.Errorf("LLMModel env override: got %q, want %q", cfg.LLMModel, "gpt-4")
+	if cfg.LLMModel != "llama-3.3-70b-versatile" {
+		t.Errorf("LLMModel env override: got %q, want %q", cfg.LLMModel, "llama-3.3-70b-versatile")
 	}
 	if cfg.TargetLanguage != "fr" {
 		t.Errorf("TargetLanguage env override: got %q, want %q", cfg.TargetLanguage, "fr")
-	}
-	if cfg.AudioSampleRate != 48000 {
-		t.Errorf("AudioSampleRate env override: got %d, want %d", cfg.AudioSampleRate, 48000)
 	}
 	if cfg.CVContext != "Senior Go Developer" {
 		t.Errorf("CVContext env override: got %q, want %q", cfg.CVContext, "Senior Go Developer")
@@ -80,7 +70,7 @@ func TestLoadConfigFromYAML(t *testing.T) {
 	for _, v := range []string{
 		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
-		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
@@ -89,7 +79,7 @@ func TestLoadConfigFromYAML(t *testing.T) {
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 	content := `
-llm_model: "gpt-4"
+llm_model: "qwen-2.5-72b"
 target_language: "de"
 window_size: 10
 cv_context: "Backend Engineer"
@@ -103,8 +93,8 @@ cv_context: "Backend Engineer"
 		t.Fatal(err)
 	}
 
-	if cfg.LLMModel != "gpt-4" {
-		t.Errorf("LLMModel from YAML: got %q, want %q", cfg.LLMModel, "gpt-4")
+	if cfg.LLMModel != "qwen-2.5-72b" {
+		t.Errorf("LLMModel from YAML: got %q, want %q", cfg.LLMModel, "qwen-2.5-72b")
 	}
 	if cfg.TargetLanguage != "de" {
 		t.Errorf("TargetLanguage from YAML: got %q, want %q", cfg.TargetLanguage, "de")
@@ -125,7 +115,7 @@ func TestLoadConfigFromYAMLEnvOverride(t *testing.T) {
 	for _, v := range []string{
 		"GLADIA_API_KEY", "OPENAI_API_KEY", "LLM_MODEL",
 		"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
-		"AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS", "WINDOW_SIZE", "CV_CONTEXT",
+		"WINDOW_SIZE", "CV_CONTEXT",
 		"LLM_BASE_URL", "LLM_API_KEY",
 	} {
 		os.Unsetenv(v)
@@ -134,7 +124,7 @@ func TestLoadConfigFromYAMLEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	yamlPath := filepath.Join(dir, "config.yaml")
 	content := `
-llm_model: "gpt-4"
+llm_model: "qwen-2.5-72b"
 target_language: "de"
 `
 	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
@@ -142,7 +132,7 @@ target_language: "de"
 	}
 
 	// Env vars should override YAML.
-	os.Setenv("LLM_MODEL", "gpt-4o")
+	os.Setenv("LLM_MODEL", "deepseek-v3")
 	os.Setenv("TARGET_LANGUAGE", "es")
 
 	cfg, err := LoadConfigFromYAML(yamlPath)
@@ -150,8 +140,8 @@ target_language: "de"
 		t.Fatal(err)
 	}
 
-	if cfg.LLMModel != "gpt-4o" {
-		t.Errorf("Env should override YAML: got %q, want %q", cfg.LLMModel, "gpt-4o")
+	if cfg.LLMModel != "deepseek-v3" {
+		t.Errorf("Env should override YAML: got %q, want %q", cfg.LLMModel, "deepseek-v3")
 	}
 	if cfg.TargetLanguage != "es" {
 		t.Errorf("Env should override YAML: got %q, want %q", cfg.TargetLanguage, "es")
@@ -222,7 +212,7 @@ func TestSaveAudioYAML(t *testing.T) {
 	// save_audio: true в YAML.
 	content := `
 save_audio: true
-llm_model: "gpt-4"
+llm_model: "llama-3.3-70b-versatile"
 `
 	if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -377,7 +367,7 @@ func TestGladiaAPIKeyEnv(t *testing.T) {
 	cfg := LoadConfig()
 
 	if cfg.GladiaAPIKey != "gladia-test-key" {
-		t.Errorf("GladiaAPIKey: *** %q, want %q", cfg.GladiaAPIKey, "gladia-test-key")
+		t.Errorf("GladiaAPIKey: got %q, want %q", cfg.GladiaAPIKey, "gladia-test-key")
 	}
 }
 
@@ -399,8 +389,8 @@ func TestApplyDefaults_NumericAndString(t *testing.T) {
 // НЕ перезаписывает уже установленные значения.
 func TestApplyDefaults_PreservesExistingValues(t *testing.T) {
 	cfg := Config{
-		LLMBaseURL:  "https://custom.api.com",
-		LLMModel: "custom-model",
+		LLMBaseURL: "https://custom.api.com",
+		LLMModel:   "custom-model",
 	}
 	cfg.applyDefaults()
 

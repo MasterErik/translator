@@ -8,7 +8,7 @@ import "context"
 // It provides answer generation capabilities used by the engine.
 //
 // Implementations:
-//   - ChatProvider (current): GPT-4o-mini via go-openai.
+//   - ChatProvider (current): OpenAI-compatible API via go-openai.
 //   - Future: local models (Ollama, llama.cpp).
 type LLMProvider interface {
 	// GenerateAnswers generates candidate answers to a detected question,

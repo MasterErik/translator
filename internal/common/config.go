@@ -55,14 +55,6 @@ type Config struct {
 	// Default: "./logs".
 	LogDir string `yaml:"log_dir"`
 
-	// AudioSampleRate is the sample rate in Hz for audio capture.
-	// Default: 16000.
-	AudioSampleRate int `yaml:"audio_sample_rate"`
-
-	// AudioChannels is the number of audio channels (1 = mono).
-	// Default: 1.
-	AudioChannels int `yaml:"audio_channels"`
-
 	// WindowSize is the number of recent utterances kept in the sliding translation window.
 	// Default: 5.
 	WindowSize int `yaml:"window_size"`
@@ -123,12 +115,6 @@ func (c *Config) applyDefaults() {
 	if c.LogDir == "" {
 		c.LogDir = "./logs"
 	}
-	if c.AudioSampleRate == 0 {
-		c.AudioSampleRate = 16000
-	}
-	if c.AudioChannels == 0 {
-		c.AudioChannels = 1
-	}
 	if c.WindowSize == 0 {
 		c.WindowSize = 5
 	}
@@ -180,16 +166,6 @@ func (c *Config) loadFromEnv() {
 	}
 	if v := os.Getenv("LOG_DIR"); v != "" {
 		c.LogDir = v
-	}
-	if v := os.Getenv("AUDIO_SAMPLE_RATE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.AudioSampleRate = n
-		}
-	}
-	if v := os.Getenv("AUDIO_CHANNELS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.AudioChannels = n
-		}
 	}
 	if v := os.Getenv("WINDOW_SIZE"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

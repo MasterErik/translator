@@ -151,7 +151,7 @@ func New(cfg Config) (*Pipeline, error) {
 	}
 	llmModel := cfg.LLMModel
 	if llmModel == "" {
-		newErr = fmt.Errorf("pipeline: LLMModel обязателен (например llama-3.3-70b-versatile)")
+		newErr = fmt.Errorf("pipeline: LLMModel обязателен")
 		return nil, newErr
 	}
 

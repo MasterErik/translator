@@ -7,8 +7,6 @@
 llm_base_url: "https://api.groq.com/openai/v1"
 
 # LLM model — supports any model on the configured base_url.
-# OpenAI:      gpt-4o-mini (default)
-# Groq:        llama-3.1-8b-instant (208ms), llama-3.3-70b-versatile (431ms)
 llm_model: "llama-3.3-70b-versatile"
 
 # Target language for Gladia translation (ISO 639-1)
@@ -32,10 +30,6 @@ custom_vocabulary:
 
 # Session log directory
 log_dir: "./logs"
-
-# Audio capture settings
-audio_sample_rate: 16000
-audio_channels: 1
 
 # Audio device names — edit to match your setup
 # Leave empty to use system defaults, or set specific device names:

@@ -23,14 +23,11 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.TargetLanguage == "" {
 		t.Error("TargetLanguage should have a default value")
 	}
-	if cfg.AudioSampleRate == 0 {
-		t.Error("AudioSampleRate should have a default value")
-	}
 	if cfg.WindowSize == 0 {
 		t.Error("WindowSize should have a default value")
 	}
-	t.Logf("Config: model=%s, lang=%s, window=%d, sampleRate=%d",
-		cfg.LLMModel, cfg.TargetLanguage, cfg.WindowSize, cfg.AudioSampleRate)
+	t.Logf("Config: model=%s, lang=%s, window=%d",
+		cfg.LLMModel, cfg.TargetLanguage, cfg.WindowSize)
 }
 
 // TestOverlayStub verifies that the UI overlay can accept and retrieve
