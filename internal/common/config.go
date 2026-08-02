@@ -88,6 +88,14 @@ type Config struct {
 	// 0 means provider default (no limit). Read from LLM_MAX_TOKENS env.
 	MaxTokens int
 
+	// SystemPrompt is the system prompt for Gladia context_adaptation.
+	// Read from SYSTEM_PROMPT environment variable. Optional.
+	SystemPrompt string `yaml:"system_prompt"`
+
+	// CustomVocabulary is a list of domain-specific terms for Gladia context_adaptation.
+	// Read from CUSTOM_VOCABULARY env (comma-separated) or YAML (array). Optional.
+	CustomVocabulary []string `yaml:"custom_vocabulary"`
+
 	// OverlayWidth is the overlay window width in pixels. Default: 800.
 	// Read from OVERLAY_WIDTH env.
 	OverlayWidth int
@@ -205,6 +213,12 @@ func (c *Config) loadFromEnv() {
 			c.MaxTokens = n
 		}
 	}
+	if v := os.Getenv("SYSTEM_PROMPT"); v != "" {
+		c.SystemPrompt = v
+	}
+	if v := os.Getenv("CUSTOM_VOCABULARY"); v != "" {
+		c.CustomVocabulary = splitAndTrim(v, ",")
+	}
 	if v := os.Getenv("OVERLAY_WIDTH"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.OverlayWidth = n
@@ -245,6 +259,20 @@ func isTruthy(v string) bool {
 	default:
 		return false
 	}
+}
+
+// splitAndTrim splits a string by separator and trims whitespace from each part.
+// Empty parts are omitted.
+func splitAndTrim(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 // LoadConfig creates a Config with sensible defaults, then reads API keys

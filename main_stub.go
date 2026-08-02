@@ -47,6 +47,8 @@ func main() {
 		GladiaAPIKey:  cfg.GladiaAPIKey,
 		SourceLang:    cfg.SourceLang,
 		TargetLang:    cfg.TargetLang,
+		SystemPrompt:  cfg.SystemPrompt,
+		CustomVocabulary: cfg.CustomVocabulary,
 		LLMBaseURL:    cfg.LLMBaseURL,
 		LLMAPIKey:     cfg.LLMAPIKey,
 		LLMModel:      cfg.LLMModel,

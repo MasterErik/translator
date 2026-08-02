@@ -66,9 +66,11 @@ type Config struct {
 	MicName       string
 
 	// STT (Gladia)
-	GladiaAPIKey string
-	SourceLang   string
-	TargetLang   string
+	GladiaAPIKey     string
+	SourceLang       string
+	TargetLang       string
+	SystemPrompt     string   // системный промпт для context_adaptation
+	CustomVocabulary []string // пользовательский словарь терминов
 
 	// LLM
 	LLMBaseURL string
@@ -129,9 +131,11 @@ func New(cfg Config) (*Pipeline, error) {
 
 	// STT-провайдер (Gladia).
 	sttProv := stt.NewGladiaProvider(stt.GladiaConfig{
-		APIKey:     cfg.GladiaAPIKey,
-		SourceLang: cfg.SourceLang,
-		TargetLang: cfg.TargetLang,
+		APIKey:           cfg.GladiaAPIKey,
+		SourceLang:       cfg.SourceLang,
+		TargetLang:       cfg.TargetLang,
+		SystemPrompt:     cfg.SystemPrompt,
+		CustomVocabulary: cfg.CustomVocabulary,
 	}, sessLog)
 
 	// LLM-провайдер.

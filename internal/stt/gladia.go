@@ -38,8 +38,9 @@ type gladiaInitRequest struct {
 	Endpointing  float64              `json:"endpointing"`
 	MaxDuration  float64              `json:"maximum_duration_without_endpointing"`
 	LanguageCfg  gladiaLanguageConfig `json:"language_config"`
-	RealtimeProc gladiaRealtimeConfig `json:"realtime_processing"`
-	MessagesCfg  gladiaMessagesConfig `json:"messages_config"`
+	RealtimeProc      gladiaRealtimeConfig      `json:"realtime_processing"`
+	MessagesCfg       gladiaMessagesConfig       `json:"messages_config"`
+	ContextAdaptation *gladiaContextAdaptation   `json:"context_adaptation,omitempty"`
 }
 
 type gladiaLanguageConfig struct {
@@ -61,6 +62,11 @@ type gladiaMessagesConfig struct {
 	ReceivePartialTranscripts       bool `json:"receive_partial_transcripts"`
 	ReceiveFinalTranscripts         bool `json:"receive_final_transcripts"`
 	ReceiveRealtimeProcessingEvents bool `json:"receive_realtime_processing_events"`
+}
+
+type gladiaContextAdaptation struct {
+	SystemPrompt     string   `json:"system_prompt,omitempty"`
+	CustomVocabulary []string `json:"custom_vocabulary,omitempty"`
 }
 
 // gladiaInitResponse — ответ от POST /v2/live: id и url для WebSocket.
@@ -98,14 +104,16 @@ type gladiaTranslationData struct {
 // GladiaConfig — конфигурация Gladia Live API.
 // Все поля имеют разумные значения по умолчанию через applyDefaults.
 type GladiaConfig struct {
-	APIKey           string  // x-gladia-key
-	SourceLang       string  // язык оригинала, default "en"
-	TargetLang       string  // язык перевода, default "ru"
-	Model            string  // модель STT, default "solaria-1"
-	Endpointing      float64 // чувствительность endpointing, default 0.7
-	MaxDuration      float64 // макс. длительность без endpointing, default 8
-	CodeSwitching    bool    // code switching
-	TranslationModel string  // модель перевода, default "enhanced"
+	APIKey           string   // x-gladia-key
+	SourceLang       string   // язык оригинала, default "en"
+	TargetLang       string   // язык перевода, default "ru"
+	Model            string   // модель STT, default "solaria-1"
+	Endpointing      float64  // чувствительность endpointing, default 0.7
+	MaxDuration      float64  // макс. длительность без endpointing, default 8
+	CodeSwitching    bool     // code switching
+	TranslationModel string   // модель перевода, default "enhanced"
+	SystemPrompt     string   // системный промпт для context_adaptation (опционально)
+	CustomVocabulary []string // пользовательский словарь терминов (опционально)
 }
 
 // applyDefaults устанавливает значения по умолчанию для незаполненных полей.
@@ -284,6 +292,13 @@ func (g *GladiaProvider) initSession(ctx context.Context) (string, error) {
 			ReceiveFinalTranscripts:         true,
 			ReceiveRealtimeProcessingEvents: true,
 		},
+	}
+
+	if g.cfg.SystemPrompt != "" || len(g.cfg.CustomVocabulary) > 0 {
+		reqBody.ContextAdaptation = &gladiaContextAdaptation{
+			SystemPrompt:     g.cfg.SystemPrompt,
+			CustomVocabulary: g.cfg.CustomVocabulary,
+		}
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
