@@ -17,7 +17,7 @@ import (
 )
 
 // gladiaBaseURL — базовый URL Gladia Live API v2.
-const gladiaBaseURL = "https://api.gladia.io/v2/live"
+var gladiaBaseURL = "https://api.gladia.io/v2/live"
 
 // gladiaDialTimeout — таймаут на установку WebSocket-соединения.
 const gladiaDialTimeout = 15 * time.Second
@@ -104,7 +104,7 @@ type gladiaTranslationData struct {
 // GladiaConfig — конфигурация Gladia Live API.
 // Все поля имеют разумные значения по умолчанию через applyDefaults.
 type GladiaConfig struct {
-	APIKey           string   // x-gladia-key
+	APIKey           string   `yaml:"gladia_api_key"` // x-gladia-key
 	SourceLang       string   // язык оригинала, default "en"
 	TargetLang       string   // язык перевода, default "ru"
 	Model            string   // модель STT, default "solaria-1"
@@ -294,12 +294,8 @@ func (g *GladiaProvider) initSession(ctx context.Context) (string, error) {
 		},
 	}
 
-	if g.cfg.SystemPrompt != "" || len(g.cfg.CustomVocabulary) > 0 {
-		reqBody.ContextAdaptation = &gladiaContextAdaptation{
-			SystemPrompt:     g.cfg.SystemPrompt,
-			CustomVocabulary: g.cfg.CustomVocabulary,
-		}
-	}
+	// Context adaptation не поддерживается в live-режиме Gladia v2 (только pre-recorded).
+	// SystemPrompt и CustomVocabulary сохранены в GladiaConfig для будущего использования.
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {

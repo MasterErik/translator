@@ -636,3 +636,49 @@ func TestGladiaProvider_DoubleCloseWsConn(t *testing.T) {
 		t.Errorf("неожиданная ошибка Stop после завершения pump'ов: %v", err)
 	}
 }
+
+// TestInitSession_NoContextAdaptation проверяет, что Gladia v2 live init
+// НЕ отправляет context_adaptation (не поддерживается в live-режиме).
+func TestInitSession_NoContextAdaptation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-gladia-key") == "" {
+			t.Error("x-gladia-key header missing")
+		}
+
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode body: %v", err)
+		}
+
+		if _, ok := body["context_adaptation"]; ok {
+			t.Error("context_adaptation присутствует в теле запроса — Gladia v2 live не поддерживает")
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(gladiaInitResponse{
+			ID:  "test-id",
+			URL: "ws://test/ws",
+		})
+	}))
+	defer server.Close()
+
+	origURL := gladiaBaseURL
+	gladiaBaseURL = server.URL
+	defer func() { gladiaBaseURL = origURL }()
+
+	cfg := GladiaConfig{
+		APIKey:           "test-key",
+		SystemPrompt:     "test system prompt",
+		CustomVocabulary: []string{"Kubernetes", "Docker"},
+	}
+	cfg.applyDefaults()
+
+	provider := NewGladiaProvider(cfg, nil)
+	wsURL, err := provider.initSession(context.Background())
+	if err != nil {
+		t.Fatalf("initSession: %v", err)
+	}
+	if wsURL != "ws://test/ws" {
+		t.Errorf("wsURL: got %q, want %q", wsURL, "ws://test/ws")
+	}
+}
