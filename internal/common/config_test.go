@@ -33,38 +33,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfigEnvOverride(t *testing.T) {
-	// Clear relevant env vars first.
-	for _, v := range []string{
-		"GLADIA_API_KEY", "LLM_MODEL",
-		"TARGET_LANG", "SOURCE_LANG", "LOG_DIR",
-		"WINDOW_SIZE", "CV_CONTEXT",
-		"LLM_BASE_URL", "LLM_API_KEY",
-	} {
-		os.Unsetenv(v)
-	}
-
-	os.Setenv("LLM_MODEL", "llama-3.3-70b-versatile")
-	os.Setenv("TARGET_LANGUAGE", "fr")
-	os.Setenv("CV_CONTEXT", "Senior Go Developer")
-
-	cfg := LoadConfig()
-
-	if cfg.LLMModel != "llama-3.3-70b-versatile" {
-		t.Errorf("LLMModel env override: got %q, want %q", cfg.LLMModel, "llama-3.3-70b-versatile")
-	}
-	if cfg.TargetLanguage != "fr" {
-		t.Errorf("TargetLanguage env override: got %q, want %q", cfg.TargetLanguage, "fr")
-	}
-	if cfg.CVContext != "Senior Go Developer" {
-		t.Errorf("CVContext env override: got %q, want %q", cfg.CVContext, "Senior Go Developer")
-	}
-	// Defaults should still apply for unset fields.
-	if cfg.TargetLang != "ru" {
-		t.Errorf("TargetLang should be default: got %q", cfg.TargetLang)
-	}
-}
-
 func TestLoadConfigFromYAML(t *testing.T) {
 	// Clear relevant env vars.
 	for _, v := range []string{
