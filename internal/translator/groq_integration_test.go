@@ -12,9 +12,9 @@ import (
 // =========================================================================
 //
 // Groq Cloud предлагает постоянный бесплатный тир (Developer Plan) с доступом к:
-//   - llama-3.1-8b-instant     (560 tps, default)
+//   - openai/gpt-oss-20b       (1000 tps, default)
+//   - llama-3.1-8b-instant     (560 tps)
 //   - llama-3.3-70b-versatile  (280 tps)
-//   - openai/gpt-oss-20b       (1000 tps)
 //   - openai/gpt-oss-120b      (500 tps)
 //
 // API endpoint: https://api.groq.com/openai/v1/chat/completions
@@ -22,12 +22,12 @@ import (
 //
 // Использует основные переменные LLM (Groq — основной провайдер):
 //   LLM_API_KEY  — API ключ из https://console.groq.com/keys
-//   LLM_MODEL — модель (по умолчанию llama-3.1-8b-instant)
+//   LLM_MODEL — модель (по умолчанию openai/gpt-oss-20b)
 // =========================================================================
 
 const (
 	groqBaseURL      = "https://api.groq.com/openai/v1"
-	defaultGroqModel = "llama-3.1-8b-instant"
+	defaultGroqModel = "openai/gpt-oss-20b"
 )
 
 // TestIntegration_GroqGenerateAnswers тестирует базовую генерацию ответов
@@ -55,6 +55,7 @@ func TestIntegration_GroqAllModels(t *testing.T) {
 	}
 
 	models := []string{
+		"qwen/qwen3.6-27b",
 		"llama-3.1-8b-instant",
 		"llama-3.3-70b-versatile",
 		"openai/gpt-oss-20b",

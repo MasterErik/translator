@@ -23,7 +23,6 @@ import (
 //
 // Используется:
 //   - groq_integration_test.go  (Groq Cloud API)
-//   - openai_integration_test.go (Z.AI GLM / OpenAI)
 // =========================================================================
 
 const defaultLatencyRuns = 5 // количество замеров для статистики
@@ -32,17 +31,18 @@ const defaultLatencyRuns = 5 // количество замеров для ст�
 
 // benchConfig описывает конфигурацию провайдера для бенчмарка.
 type benchConfig struct {
-	Name      string        // отображаемое имя (напр. "Groq", "LLM (GLM)")
-	BaseURL   string
-	APIKey    string
-	Model     string
-	Pause     time.Duration // пауза между запросами
+	Name    string // отображаемое имя (напр. "Groq", "LLM (GLM)")
+	BaseURL string
+	APIKey  string
+	Model   string
+	Pause   time.Duration // пауза между запросами
 }
 
 // chatResponse — сырой ответ chat/completions.
 type chatResponse struct {
 	Content          string
 	ReasoningContent string
+	Reasoning        string
 }
 
 // latencyStats — агрегированная статистика замеров.
@@ -114,6 +114,7 @@ func parseChatResponse(t *testing.T, rawJSON string) chatResponse {
 			Message struct {
 				Content          string `json:"content"`
 				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -128,6 +129,7 @@ func parseChatResponse(t *testing.T, rawJSON string) chatResponse {
 	return chatResponse{
 		Content:          result.Choices[0].Message.Content,
 		ReasoningContent: result.Choices[0].Message.ReasoningContent,
+		Reasoning:        result.Choices[0].Message.Reasoning,
 	}
 }
 
@@ -253,10 +255,14 @@ func benchSingle(t *testing.T, baseURL, apiKey, model, question string) {
 		t.Logf("Latency: %v", elapsed)
 		t.Logf("Content length: %d chars", len(parsed.Content))
 		t.Logf("Content preview: %q", truncate(parsed.Content, 200))
+		t.Logf("Reasoning (reasoning_content): %q", truncate(parsed.ReasoningContent, 200))
+		t.Logf("Reasoning (reasoning): %q", truncate(parsed.Reasoning, 200))
 
 		if parsed.Content == "" {
 			t.Fatal("Provider returned empty content")
 		}
+
+		checkAnswerFormat(t, parsed.Content)
 	})
 
 	t.Run("parsed_answers", func(t *testing.T) {
@@ -278,6 +284,10 @@ func benchSingle(t *testing.T, baseURL, apiKey, model, question string) {
 
 		if len(answers) == 0 {
 			t.Fatal("Provider returned empty answers after parsing")
+		}
+
+		for _, a := range answers {
+			checkAnswerFormat(t, a)
 		}
 	})
 }
@@ -326,6 +336,31 @@ func printComparisonTable(t *testing.T, nameA, nameB string, countA, countB int,
 }
 
 // ── Утилиты ───────────────────────────────────────────────────────────────
+
+// checkAnswerFormat проверяет, что ответ соответствует формату
+// «EN: ... | RU: ...» (SystemPromptAnswerGen). Возвращает false, если формат
+// не соблюдён. Не фейлит тест жёстко: модель может изредка отклониться от
+// формата — в этом случае просто логируем предупреждение с полным ответом.
+func checkAnswerFormat(t *testing.T, answer string) bool {
+	t.Helper()
+	if answer == "" {
+		return false
+	}
+
+	// Reasoning-мусор: Groq/qwen возвращает внутренние рассуждения внутри
+	// тегов <think>…</think> прямо в поле content (без разделителя «|»).
+	// Это явный красный флаг — ловим его до проверки формата.
+	if strings.Contains(answer, "<think>") || strings.Contains(answer, "</think>") {
+		t.Logf("⚠️  В content обнаружен reasoning-мусор (<think>…</think>): %q", answer)
+		return false
+	}
+
+	if !strings.Contains(answer, "EN:") || !strings.Contains(answer, "RU:") || !strings.Contains(answer, "|") {
+		t.Logf("⚠️  Ответ не соответствует формату «EN: ... | RU: ...»: %q", answer)
+		return false
+	}
+	return true
+}
 
 // truncate обрезает строку до maxLen символов.
 func truncate(s string, maxLen int) string {

@@ -282,13 +282,13 @@ func newTestPipeline(sttProv *mockSTT, capt *mockCapturer, ovl *mockOverlay, llm
 		MaxTokens:        256,
 	}
 	return &Pipeline{
-		cfg:          cfg,
-		capturer:     capt,
-		sttProv:      sttProv,
-		engine:       engine,
-		overlay:      ovl,
-		sessLog:      sessLog,
-		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
+		cfg:        cfg,
+		capturer:   capt,
+		sttProv:    sttProv,
+		engine:     engine,
+		overlay:    ovl,
+		sessLog:    sessLog,
+		textStream: make(chan common.STTEvent, cfg.TextStreamBuffer),
 		dispatch: dispatcher.New(
 			ovl,
 			engine,
@@ -847,35 +847,6 @@ func TestGenerateAnswersAsync_LLMError(t *testing.T) {
 }
 
 // =========================================================================
-// TestParseAnswerHints_Pipeline — табличные тесты парсинга подсказок из pipeline
-// =========================================================================
-
-func TestParseAnswerHints_Pipeline(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-		want int
-	}{
-		{"single", "- hint", 1},
-		{"three bullets", "- A\n- B\n- C", 3},
-		{"truncate to 3", "- A\n- B\n- C\n- D\n- E", 3},
-		{"empty lines", "- A\n\n- B", 2},
-		{"empty input", "", 0},
-		{"star bullets", "* A\n* B", 2},
-		{"numbered", "1. A\n2. B", 2},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseAnswerHints(tt.raw)
-			if len(got) != tt.want {
-				t.Errorf("parseAnswerHints(%q) len = %d, want %d. Got: %v", tt.raw, len(got), tt.want, got)
-			}
-		})
-	}
-}
-
-// =========================================================================
 // TestPipelineNew_EmptyLLMAPIKey — проверка ошибки при пустом LLMAPIKey
 // =========================================================================
 
@@ -1141,6 +1112,7 @@ func TestPipelineNoHistoryDuplicates(t *testing.T) {
 		seenTrans[m.Text] = true
 	}
 }
+
 // TestPipelineHistoryDedup — проверяет что повторные переводы не дублируются.
 func TestPipelineHistoryDedup(t *testing.T) {
 	stt := newMockSTT()

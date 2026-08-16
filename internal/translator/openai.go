@@ -165,7 +165,17 @@ func isRateLimitError(err error) bool {
 		strings.Contains(errStr, "too many requests")
 }
 
+// maxAnswerHints ограничивает число возвращаемых подсказок.
+// Защита от «мусорных» ответов reasoning-моделей, которые генерируют
+// десятки строк вместо одной.
+const maxAnswerHints = 3
+
 func parseAnswerHints(raw string) []string {
+	// Удаляем reasoning-блок Groq (<think>…</think>) целиком. Внутри него
+	// строки могут содержать «EN:», «RU:» и «|» (модель рассуждает о формате),
+	// поэтому построчная фильтрация по формату не справится — блок вырезаем.
+	raw = stripThinking(raw)
+
 	lines := strings.Split(raw, "\n")
 	var hints []string
 	for _, line := range lines {
@@ -174,11 +184,58 @@ func parseAnswerHints(raw string) []string {
 			continue
 		}
 		clean := stripBulletPrefix(trimmed)
-		if clean != "" {
-			hints = append(hints, clean)
+		if clean == "" {
+			continue
 		}
+		// Отбрасываем reasoning-мусор (chain-of-thought): оставляем только
+		// строки в формате подсказки «EN: <English> | RU: <Russian>».
+		if !isHintLine(clean) {
+			continue
+		}
+		hints = append(hints, clean)
+	}
+	// Ограничиваем количество подсказок (защита от «83 подсказок»-мусора).
+	if len(hints) > maxAnswerHints {
+		hints = hints[:maxAnswerHints]
 	}
 	return hints
+}
+
+// stripThinking удаляет из ответа все блоки <think>…</think>. Groq для
+// qwen3.6-27b кладёт chain-of-thought прямо в content именно в таких тегах
+// (поля reasoning/reasoning_content при этом пустые). Удаляем блоки целиком,
+// так как отдельные строки внутри могут выглядеть как валидные подсказки.
+func stripThinking(s string) string {
+	for {
+		start := strings.Index(s, "<think>")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "</think>")
+		if end == -1 {
+			// Нет закрывающего тега — вырезаем всё до конца строки.
+			return s[:start]
+		}
+		end += start + len("</think>")
+		s = s[:start] + s[end:]
+	}
+}
+
+// isHintLine определяет, соответствует ли строка формату подсказки
+// «EN: <English> | RU: <Russian>» (см. SystemPromptAnswerGen и CV_CONTEXT).
+// Reasoning-строки (chain-of-thought) такого формата не содержат и отбрасываются.
+func isHintLine(line string) bool {
+	// Groq для qwen3.6-27b кладёт reasoning (chain-of-thought) прямо в
+	// content внутри тегов <think>…</think>. Отбрасываем такие строки явно —
+	// они точно не являются подсказкой, даже если случайно содержат «|».
+	if strings.Contains(line, "<think>") || strings.Contains(line, "</think>") {
+		return false
+	}
+	if !strings.Contains(line, "|") {
+		return false
+	}
+	upper := strings.ToUpper(line)
+	return strings.Contains(upper, "EN:") && strings.Contains(upper, "RU:")
 }
 
 func stripBulletPrefix(s string) string {

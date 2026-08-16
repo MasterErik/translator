@@ -35,7 +35,7 @@ func TestChatProvider_GenerateAnswers_Success(t *testing.T) {
 			Choices: []openai.ChatCompletionChoice{
 				{
 					Message: openai.ChatCompletionMessage{
-						Content: "- Расскажи про свой опыт с Kubernetes: 3 года, Helm\n- Упомяни про CI/CD пайплайны на GitHub Actions\n- Опиши мониторинг через Prometheus",
+						Content: "- EN: I have 3 years of Kubernetes experience with Helm | RU: У меня 3 года опыта с Kubernetes и Helm\n- EN: I set up CI/CD pipelines on GitHub Actions | RU: Я настраивал CI/CD пайплайны на GitHub Actions\n- EN: I used Prometheus for monitoring | RU: Я использовал Prometheus для мониторинга",
 					},
 				},
 			},
@@ -57,7 +57,7 @@ func TestChatProvider_GenerateAnswers_Success(t *testing.T) {
 		t.Fatalf("GenerateAnswers() returned %d answers, want 3", len(answers))
 	}
 
-	expectedFirst := "Расскажи про свой опыт с Kubernetes: 3 года, Helm"
+	expectedFirst := "EN: I have 3 years of Kubernetes experience with Helm | RU: У меня 3 года опыта с Kubernetes и Helm"
 	if answers[0] != expectedFirst {
 		t.Errorf("GenerateAnswers()[0] = %q, want %q", answers[0], expectedFirst)
 	}
@@ -69,7 +69,7 @@ func TestChatProvider_GenerateAnswers_EmptyCV(t *testing.T) {
 			Choices: []openai.ChatCompletionChoice{
 				{
 					Message: openai.ChatCompletionMessage{
-						Content: "- Объясни концепцию TDD: сначала тесты, потом код",
+						Content: "- EN: I write tests first with TDD | RU: Я сначала пишу тесты по TDD",
 					},
 				},
 			},
@@ -191,38 +191,73 @@ func TestParseAnswerHints(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "dash bullets",
-			input: "- First hint\n- Second hint\n- Third hint",
-			want:  []string{"First hint", "Second hint", "Third hint"},
+			name:  "dash bullets EN/RU",
+			input: "- EN: First | RU: Первая\n- EN: Second | RU: Вторая\n- EN: Third | RU: Третья",
+			want:  []string{"EN: First | RU: Первая", "EN: Second | RU: Вторая", "EN: Third | RU: Третья"},
 		},
 		{
-			name:  "numbered bullets",
-			input: "1. First hint\n2. Second hint",
-			want:  []string{"First hint", "Second hint"},
+			name:  "numbered bullets EN/RU",
+			input: "1. EN: First | RU: Первая\n2. EN: Second | RU: Вторая",
+			want:  []string{"EN: First | RU: Первая", "EN: Second | RU: Вторая"},
 		},
 		{
-			name:  "mixed bullets",
-			input: "1. First\n- Second\n* Third",
-			want:  []string{"First", "Second", "Third"},
+			name:  "mixed bullets EN/RU",
+			input: "1. EN: First | RU: Первая\n- EN: Second | RU: Вторая\n* EN: Third | RU: Третья",
+			want:  []string{"EN: First | RU: Первая", "EN: Second | RU: Вторая", "EN: Third | RU: Третья"},
 		},
 		{
 			name:  "with empty lines",
-			input: "- First\n\n- Second\n\n- Third",
-			want:  []string{"First", "Second", "Third"},
+			input: "- EN: First | RU: Первая\n\n- EN: Second | RU: Вторая\n\n- EN: Third | RU: Третья",
+			want:  []string{"EN: First | RU: Первая", "EN: Second | RU: Вторая", "EN: Third | RU: Третья"},
 		},
 		{
-			name:  "no truncation — returns all",
-			input: "- A\n- B\n- C\n- D\n- E",
-			want:  []string{"A", "B", "C", "D", "E"},
+			name:  "truncate to max 3",
+			input: "- EN: A | RU: А\n- EN: B | RU: Б\n- EN: C | RU: В\n- EN: D | RU: Г\n- EN: E | RU: Д",
+			want:  []string{"EN: A | RU: А", "EN: B | RU: Б", "EN: C | RU: В"},
 		},
 		{
 			name:  "single hint",
-			input: "- Just one hint",
-			want:  []string{"Just one hint"},
+			input: "- EN: Just one hint | RU: Одна подсказка",
+			want:  []string{"EN: Just one hint | RU: Одна подсказка"},
 		},
 		{
 			name:  "empty input",
 			input: "",
+			want:  nil,
+		},
+		{
+			name:  "reasoning chain-of-thought before final hint",
+			input: "Okay, let me think about this question step by step.\nFirst, the candidate is a senior Go developer.\nThe interviewer asked about Kubernetes experience.\nI should mention Helm and CI/CD.\nLet me craft a concise answer.\n- EN: I have 5 years of Kubernetes experience using Helm | RU: У меня 5 лет опыта с Kubernetes и Helm",
+			want:  []string{"EN: I have 5 years of Kubernetes experience using Helm | RU: У меня 5 лет опыта с Kubernetes и Helm"},
+		},
+		{
+			name:  "reasoning only — no valid hint",
+			input: "Let me analyze the question.\nThe candidate should mention Kubernetes.\nAlso mention CI/CD and Helm.\nThis is a good answer structure.",
+			want:  nil,
+		},
+		{
+			name:  "line without pipe separator is discarded",
+			input: "- EN: missing separator RU: текст",
+			want:  nil,
+		},
+		{
+			name:  "line without EN/RU prefixes is discarded",
+			input: "- Some hint | другая часть",
+			want:  nil,
+		},
+		{
+			name:  "reasoning plus 4 valid hints truncated to 3",
+			input: "Thinking...\n- EN: A | RU: А\n- EN: B | RU: Б\n- EN: C | RU: В\n- EN: D | RU: Г\nmore reasoning",
+			want:  []string{"EN: A | RU: А", "EN: B | RU: Б", "EN: C | RU: В"},
+		},
+		{
+			name:  "groq think-tags reasoning before final hint",
+			input: "<think>\nThinking Process:\n1. Format: `- EN: <English answer> | RU: <Russian translation>`.\n2. Structure matches `- EN: ... | RU: ...`? Yes.\n</think>\n\n- EN: I use Redis as an in-memory store for caching | RU: Я использую Redis как in-memory хранилище для кэширования",
+			want:  []string{"EN: I use Redis as an in-memory store for caching | RU: Я использую Redis как in-memory хранилище для кэширования"},
+		},
+		{
+			name:  "think block without closing tag truncated",
+			input: "<think>\nLet me analyze the format.\n- EN: should not leak",
 			want:  nil,
 		},
 	}
@@ -276,7 +311,7 @@ func TestNewChatProvider_CustomBaseURL(t *testing.T) {
 			Choices: []openai.ChatCompletionChoice{
 				{
 					Message: openai.ChatCompletionMessage{
-						Content: "- Answer hint",
+						Content: "- EN: Answer hint | RU: Подсказка",
 					},
 				},
 			},

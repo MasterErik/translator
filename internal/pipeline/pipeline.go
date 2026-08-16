@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -486,30 +485,6 @@ func (p *Pipeline) generateAnswersAsync(question string) {
 			dispatcher.Config{AnswerTimeout: p.cfg.AnswerTimeout})
 	}
 	p.dispatch.GenerateAnswers(question)
-}
-
-// parseAnswerHints разбирает сырой ответ LLM на отдельные подсказки.
-// Поддерживает формат: "- EN: <eng> | RU: <rus>" (двуязычный).
-func parseAnswerHints(raw string) []string {
-	lines := strings.Split(raw, "\n")
-	var hints []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		// Убираем ведущий маркер списка ("- ", "* ", "• ").
-		clean := strings.TrimLeft(trimmed, "-*• ")
-		clean = strings.TrimSpace(clean)
-		if clean == "" {
-			continue
-		}
-		hints = append(hints, clean)
-	}
-	if len(hints) > 3 {
-		hints = hints[:3]
-	}
-	return hints
 }
 
 // --------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 LLM_BASE_URL: "https://api.groq.com/openai/v1"
 
 # LLM model — supports any model on the configured base_url.
-LLM_MODEL: "llama-3.3-70b-versatile"
+LLM_MODEL: "openai/gpt-oss-20b"
 
 # Target language for Gladia translation (ISO 639-1)
 TARGET_LANG: "ru"
