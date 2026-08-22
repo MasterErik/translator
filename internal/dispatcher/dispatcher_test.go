@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	"github.com/mastererik/translator/internal/translator"
 	"github.com/mastererik/translator/internal/ui"
 )
 
@@ -38,11 +39,13 @@ type mockEngine struct {
 	err     error
 	delay   time.Duration
 	calls   []string
+	reqs    []translator.AnswerRequest
 }
 
-func (m *mockEngine) GenerateAnswers(ctx context.Context, question string) ([]string, error) {
+func (m *mockEngine) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	m.mu.Lock()
-	m.calls = append(m.calls, question)
+	m.calls = append(m.calls, req.Question)
+	m.reqs = append(m.reqs, req)
 	answers := make([]string, len(m.answers))
 	copy(answers, m.answers)
 	err := m.err
@@ -63,6 +66,14 @@ func (m *mockEngine) Calls() []string {
 	defer m.mu.Unlock()
 	out := make([]string, len(m.calls))
 	copy(out, m.calls)
+	return out
+}
+
+func (m *mockEngine) Reqs() []translator.AnswerRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]translator.AnswerRequest, len(m.reqs))
+	copy(out, m.reqs)
 	return out
 }
 

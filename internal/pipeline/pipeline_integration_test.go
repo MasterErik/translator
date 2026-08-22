@@ -37,16 +37,16 @@ type streamingMockLLM struct {
 	callLog []string
 }
 
-func (m *streamingMockLLM) GenerateAnswers(ctx context.Context, question string, cv string) ([]string, error) {
+func (m *streamingMockLLM) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	m.mu.Lock()
-	m.callLog = append(m.callLog, "GenAnswers:"+question)
+	m.callLog = append(m.callLog, "GenAnswers:"+req.Question)
 	m.mu.Unlock()
 	return []string{"hint 1", "hint 2"}, nil
 }
 
-func (m *streamingMockLLM) GenerateAnswersStream(ctx context.Context, question string, cv string) (<-chan string, error) {
+func (m *streamingMockLLM) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
 	m.mu.Lock()
-	m.callLog = append(m.callLog, "GenAnswersStream:"+question)
+	m.callLog = append(m.callLog, "GenAnswersStream:"+req.Question)
 	m.mu.Unlock()
 
 	ch := make(chan string, len(m.tokens)+1)
@@ -86,7 +86,7 @@ func newSlowLLM(delay time.Duration) *slowLLM {
 	}
 }
 
-func (m *slowLLM) GenerateAnswers(ctx context.Context, question string, cv string) ([]string, error) {
+func (m *slowLLM) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	return []string{"answer 1", "answer 2"}, nil
 }
 
@@ -151,13 +151,13 @@ func buildTestPipeline(sttProv *mockSTT, capt capturer, ovl Overlay, llm transla
 		SaveAudio:        true,
 	}
 	return &Pipeline{
-		cfg:          cfg,
-		capturer:     capt,
-		sttProv:      sttProv,
-		engine:       engine,
-		overlay:      ovl,
-		sessLog:      sessLog,
-		textStream:   make(chan common.STTEvent, txtBufSize),
+		cfg:        cfg,
+		capturer:   capt,
+		sttProv:    sttProv,
+		engine:     engine,
+		overlay:    ovl,
+		sessLog:    sessLog,
+		textStream: make(chan common.STTEvent, txtBufSize),
 		dispatch: dispatcher.New(
 			ovl,
 			engine,

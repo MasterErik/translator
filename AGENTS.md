@@ -10,6 +10,7 @@
 | `docs/TESTING.md` | Интеграционные тесты, SLA & Performance Test Constraints |
 | `docs/UI.md` | Четырёхзонный layout, параметры окна, автоскролл |
 | `docs/gladia-flow.md` | Детальная схема Gladia WebSocket (двухфазный коннект) |
+| `docs/qa-architecture.md` | Архитектура ответов на вопросы (LLM QA): Candidate/Conversation context, F1-F4/Esc, retrieval |
 | `.env.example` | Шаблон переменных окружения |
 | `config.yaml` | Несекретные параметры |
 
@@ -28,7 +29,6 @@ internal/
 
 ## Инструменты анализа кода (CodeGraph MCP)
 
-- ❌ **НЕ использовать** `read_file` / `search_files` для поиска или чтения Go-кода
 - ✅ **ВСЕГДА первым** вызывай `codegraph_explore` — он возвращает verbatim source с номерами строк. Эквивалент `read_file` + `search_files` в одном вызове
 - `read_file` — только для не-кода: документация (`.md`), конфигурация (`.yaml`, `.env`), скрипты (`.py`, `.sh`)
 - `search_files` — только для поиска не-Go файлов

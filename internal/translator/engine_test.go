@@ -11,23 +11,18 @@ import (
 // mockLLMProvider is a test stub implementing LLMProvider.
 type mockLLMProvider struct {
 	mu            sync.Mutex
-	generateCalls []generateCall
-	generateFn    func(ctx context.Context, question string, cvContext string) ([]string, error)
+	generateCalls []AnswerRequest
+	generateFn    func(ctx context.Context, req AnswerRequest) ([]string, error)
 }
 
-type generateCall struct {
-	question  string
-	cvContext string
-}
-
-func (m *mockLLMProvider) GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error) {
+func (m *mockLLMProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) ([]string, error) {
 	m.mu.Lock()
-	m.generateCalls = append(m.generateCalls, generateCall{question, cvContext})
+	m.generateCalls = append(m.generateCalls, req)
 	fn := m.generateFn
 	m.mu.Unlock()
 
 	if fn != nil {
-		return fn(ctx, question, cvContext)
+		return fn(ctx, req)
 	}
 	return []string{"hint 1", "hint 2"}, nil
 }
@@ -103,8 +98,8 @@ func TestProcessQuestion_ClassificationNegative(t *testing.T) {
 
 func TestProcessQuestion_AnswerGenerationTriggered(t *testing.T) {
 	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
-			return []string{"hint about " + question}, nil
+		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
+			return []string{"hint about " + req.Question}, nil
 		},
 	}
 	engine := NewEngine(mock)
@@ -133,7 +128,7 @@ func TestProcessQuestion_AnswerGenerationTriggered(t *testing.T) {
 
 func TestProcessQuestion_NoAnswerForNonQuestion(t *testing.T) {
 	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
+		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
 			t.Error("GenerateAnswers should not be called for non-questions")
 			return nil, nil
 		},
@@ -211,7 +206,7 @@ func TestIsQuestion_EdgeCases(t *testing.T) {
 // TestProcessQuestion_LLMError проверяет, что ошибка LLM не паникует.
 func TestProcessQuestion_LLMError(t *testing.T) {
 	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
+		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
 			return nil, fmt.Errorf("simulated error")
 		},
 	}
@@ -299,13 +294,13 @@ func TestIsQuestion_TableDriven(t *testing.T) {
 // TestEngine_GenerateAnswers проверяет делегирование GenerateAnswers.
 func TestEngine_GenerateAnswers(t *testing.T) {
 	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
+		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
 			return []string{"answer1", "answer2"}, nil
 		},
 	}
 	engine := NewEngine(mock)
 
-	answers, err := engine.GenerateAnswers(context.Background(), "question")
+	answers, err := engine.GenerateAnswers(context.Background(), AnswerRequest{Question: "question"})
 	if err != nil {
 		t.Fatalf("GenerateAnswers error: %v", err)
 	}
@@ -318,13 +313,13 @@ func TestEngine_GenerateAnswers(t *testing.T) {
 func TestEngine_GenerateAnswersStream(t *testing.T) {
 	// mockLLMProvider НЕ реализует StreamingAnswersProvider — должен быть fallback.
 	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
+		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
 			return []string{"a", "b", "c"}, nil
 		},
 	}
 	engine := NewEngine(mock)
 
-	ch, err := engine.GenerateAnswersStream(context.Background(), "q")
+	ch, err := engine.GenerateAnswersStream(context.Background(), AnswerRequest{Question: "q"})
 	if err != nil {
 		t.Fatalf("GenerateAnswersStream error: %v", err)
 	}
@@ -338,13 +333,27 @@ func TestEngine_GenerateAnswersStream(t *testing.T) {
 	}
 }
 
+// Test 4 — неявные запросы на генерацию ответа распознаются как вопросы.
+func TestIsQuestion_ImplicitRequests(t *testing.T) {
+	for _, phrase := range []string{
+		"Tell me about your latest project.",
+		"Describe your latest project.",
+		"Your latest project?",
+		"Let's talk about your latest project.",
+	} {
+		if !IsQuestion(phrase) {
+			t.Errorf("IsQuestion(%q) = false, want true", phrase)
+		}
+	}
+}
+
 // mockStreamingProvider — мок, реализующий StreamingAnswersProvider.
 type mockStreamingProvider struct {
 	mockLLMProvider
 	tokens []string
 }
 
-func (m *mockStreamingProvider) GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error) {
+func (m *mockStreamingProvider) GenerateAnswersStream(ctx context.Context, req AnswerRequest) (<-chan string, error) {
 	ch := make(chan string, len(m.tokens))
 	for _, t := range m.tokens {
 		ch <- t
@@ -362,7 +371,7 @@ func TestEngine_GenerateAnswersStream_DirectStreaming(t *testing.T) {
 	}
 	engine := NewEngine(mock)
 
-	ch, err := engine.GenerateAnswersStream(context.Background(), "q")
+	ch, err := engine.GenerateAnswersStream(context.Background(), AnswerRequest{Question: "q"})
 	if err != nil {
 		t.Fatalf("GenerateAnswersStream error: %v", err)
 	}

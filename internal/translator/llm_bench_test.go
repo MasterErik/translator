@@ -64,7 +64,7 @@ func sendChatRequest(t *testing.T, baseURL, apiKey, model, question string, disa
 		"model": model,
 		"messages": []map[string]string{
 			{"role": "system", "content": SystemPromptAnswerGen},
-			{"role": "user", "content": BuildAnswerPrompt(question)},
+			{"role": "user", "content": BuildAnswerPrompt(AnswerRequest{Question: question})},
 		},
 		"temperature": 0.3,
 	}
@@ -148,7 +148,7 @@ func runLatencyBench(t *testing.T, cfg benchConfig, question string, runs int) [
 	t.Logf("--- %s ---", cfg.Name)
 	for i := 0; i < runs; i++ {
 		start := time.Now()
-		answers, err := provider.GenerateAnswers(context.Background(), question, "")
+		answers, err := provider.GenerateAnswers(context.Background(), AnswerRequest{Question: question})
 		elapsed := time.Since(start)
 
 		if err != nil {
@@ -217,7 +217,7 @@ func benchAllModels(t *testing.T, baseURL, apiKey, question string, models []str
 		provider := NewChatProvider(baseURL, apiKey, model)
 
 		start := time.Now()
-		answers, err := provider.GenerateAnswers(context.Background(), question, "")
+		answers, err := provider.GenerateAnswers(context.Background(), AnswerRequest{Question: question})
 		elapsed := time.Since(start)
 
 		if err != nil {
@@ -269,7 +269,7 @@ func benchSingle(t *testing.T, baseURL, apiKey, model, question string) {
 		provider := NewChatProvider(baseURL, apiKey, model)
 
 		start := time.Now()
-		answers, err := provider.GenerateAnswers(context.Background(), question, "")
+		answers, err := provider.GenerateAnswers(context.Background(), AnswerRequest{Question: question})
 		elapsed := time.Since(start)
 
 		if err != nil {

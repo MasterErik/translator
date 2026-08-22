@@ -237,8 +237,8 @@ type llmAdapter struct {
 	prov *translator.ChatProvider
 }
 
-func (a *llmAdapter) GenerateAnswers(ctx context.Context, question string) ([]string, error) {
-	return a.prov.GenerateAnswers(ctx, question, "")
+func (a *llmAdapter) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
+	return a.prov.GenerateAnswers(ctx, req)
 }
 
 // readFileBytes читает файл целиком в []byte.

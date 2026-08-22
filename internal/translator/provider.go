@@ -12,9 +12,8 @@ import "context"
 //   - Future: local models (Ollama, llama.cpp).
 type LLMProvider interface {
 	// GenerateAnswers generates candidate answers to a detected question,
-	// optionally incorporating CV/resume context for personalization.
-	// cvContext may be empty.
-	GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error)
+	// incorporating the candidate context and conversation history from req.
+	GenerateAnswers(ctx context.Context, req AnswerRequest) ([]string, error)
 }
 
 // StreamingAnswersProvider extends LLMProvider with streaming answer generation.
@@ -29,5 +28,5 @@ type StreamingAnswersProvider interface {
 	// GenerateAnswersStream генерирует подсказки потоково.
 	// Возвращает канал с токенами ответа. Канал закрывается
 	// по завершении генерации или при ошибке.
-	GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error)
+	GenerateAnswersStream(ctx context.Context, req AnswerRequest) (<-chan string, error)
 }

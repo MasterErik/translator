@@ -24,16 +24,11 @@
 ┌──────────┐  ┌─────────┐  ┌──────────────────────────────────┐    │
 │ VB-Cable │  │WASAPI   │  │    WebSocket (wss://)            │    │
 │ Loopback │  │Capture  │  │  ◄ BinaryMessage (PCM 80ms)      │    │
-│          │  │48k→16k  │  │  ► JSON: transcript + translation │    │
+│(собеседник)│ │48k→16k  │  │  ► JSON: transcript + translation │    │
 └──────────┘  └────┬────┘  └────────────┬─────────────────────┘    │
+                   │ audioStream        │                           │
+                   │ (только loopback)  │                           │
                    │                    │                           │
-┌──────────┐  ┌────┴────┐              │                           │
-│ Микрофон │  │WASAPI   │              │                           │
-│          │  │Capture  │              │                           │
-│          │  │48k→16k  │              │                           │
-└──────────┘  └────┬────┘              │                           │
-                   │                    │                           │
-        audioStream│                    │                           │
                    │                    │                           │
 ┌──────────────────┴────────────────────┴───────────────────────────┘
 │                        PIPELINE (main.go)                          │
@@ -67,6 +62,8 @@
 │                   └────────────┘                                   │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+Микрофон (ваш голос) захватывается **только при `SAVE_AUDIO=true`** (`CaptureConfig.EnableMic`) и идёт напрямую в логгер сессии (запись MP3). В STT/перевод микрофон не попадает — `audioStream` получает только loopback (собеседник).
 
 ### Поток событий
 
@@ -129,14 +126,18 @@ TARGET_LANG=ru
 # Логи
 log_dir: "./logs"
 
-# CV контекст для генерации подсказок
-cv_context: |
+# База CV (Candidate Context) — путь к текстовому файлу с фактами кандидата
+candidate_context_file: "candidate_context.md"
+
+# Conversation context — ограничение истории интервью
+conversation:
+  recent_turns: 6
+  max_context_tokens: 4000
 ```
 
-**CVContext** передаётся в LLM как system message (системный промпт):
-`Pipeline.Config.CVContext` → `engine.SetCVContext()` → `GenerateAnswers(ctx, question, cvContext)` → system message.
+**Candidate Context** — постоянные факты кандидата (база CV), читается из файла `candidate_context_file` и передаётся в LLM как system message (системный промпт). **Conversation Context** — история текущего интервью (последние `recent_turns` turns, обрезается по `max_context_tokens`), передаётся в user prompt.
 
-Полный системный промпт настраивается в `config.yaml` в поле `cv_context`. При отсутствии используется дефолтный `SystemPromptAnswerGen`.
+Два контекста разделены: факты кандидата (база CV) не смешиваются с историей разговора. Информация о компании/вакансии (сказанное интервьюером) остаётся в conversation history и не становится фактами кандидата.
 
 ---
 
@@ -148,7 +149,9 @@ cv_context: |
 
 ## LLM
 
-OpenAI-совместимый API. Синхронный `GenerateAnswers` (не стриминг). Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: `CVContext` из `config.yaml`. Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале.
+OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1 — обычный ответ, F2 — think deeper, F3 — больше контекста, F4 — проще английский, Esc — отмена очереди.
+
+**Подробнее:** `docs/qa-architecture.md`
 
 ---
 
@@ -180,10 +183,10 @@ internal/
 ││ CAPTURE   │ │ CAPTURE  │ │ GLADIA   │ │DISPATCHER│ │ UI       │
 ││ Loopback  │ │ Mic      │ │ writePump│ │          │ │ GioUI    │
 ││ 80ms PCM  │ │ 80ms PCM │ │ readPump │ │ select { │ │ event    │
-││ → audio-  │ │ → fan-out│ │ (2 гор.) │ │  interim │ │ loop     │
-││   Stream  │ │   STT +  │ │          │ │  → UI    │ │          │
-││           │ │   logger │ │          │ │  final   │ │          │
-││           │ │          │ │          │ │  → UI    │ │          │
+││ → audio-  │ │ → logger │ │ (2 гор.) │ │  interim │ │ loop     │
+││   Stream  │ │ (только  │ │          │ │  → UI    │ │          │
+││           │ │ при Save-│ │          │ │  final   │ │          │
+││           │ │ Audio)   │ │          │ │  → UI    │ │          │
 ││           │ │          │ │          │ │  transl. │ │          │
 ││           │ │          │ │          │ │  → UI    │ │          │
 ││           │ │          │ │          │ │  ? → ans │ │          │
@@ -207,8 +210,8 @@ internal/
 |---|----------|-------|------------|
 | 1 | `main` | `main.go` | sigCtx.Done() или закрытие окна |
 | 2 | `capture·loopback` | `internal/capture` | runCtx.Done() |
-| 3 | `capture·mic` | `internal/capture` | runCtx.Done() |
-| 4 | `capture·mic·logger` | `internal/pipeline` | runCtx.Done() |
+| 3 | `capture·mic` | `internal/capture` | runCtx.Done() (только при `SAVE_AUDIO`) |
+| 4 | `capture·mic·logger` (routeRawMic) | `internal/pipeline` | runCtx.Done() (только при `SAVE_AUDIO`) |
 | 5 | `stt·gladia·writePump` | `internal/stt` | runCtx.Done() / conn close |
 | 6 | `stt·gladia·readPump` | `internal/stt` | runCtx.Done() / conn close |
 | 7 | `route·stt` (runSTT) | `internal/pipeline` | runCtx.Done() |
@@ -220,12 +223,11 @@ internal/
 
 | Канал | Тип | Буфер | Путь |
 |---|---|---|---|
-| `audioCh` (GladiaProvider) | `chan []byte` | 64 | runCapture → writePump |
+| `audioCh` (GladiaProvider) | `chan []byte` | 64 | runCapture (loopback) → writePump |
 | `textCh` (GladiaProvider) | `chan STTEvent` | 32 | readPump → runSTT |
 | `textStream` (Pipeline) | `chan STTEvent` | 64 | runSTT → dispatcher |
 | `answerCh` (Dispatcher) | `chan string` | 16 | route → answerWorker |
 | `dispatchDone` | `chan struct{}` | 1 | dispatcher → shutdown |
-| `logCh` (mic fan-out) | `chan []byte` | 32 | mic capture → logger |
 
 ### Dispatcher (`internal/dispatcher/`)
 Главный организатор логики работы приложения и каналов 
@@ -256,7 +258,12 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 - Неблокирующая отправка: если очередь переполнена — дроп с debug-логом
 - Graceful shutdown: worker дренирует оставшиеся вопросы перед выходом
 
-При `AnswerQueueSize = -1` в Config — возврат к старому поведению (горутина на каждый вопрос).
+**Управление генерацией (функциональные клавиши F1–F4, Esc):**
+
+- `commandCh` (chan `GenerationCommand`) — команды F1–F4 из глобальных hotkeys (`internal/hotkey/`, Win32 `RegisterHotKey`).
+- `cancelCh` — Esc: отменяет активную генерацию (`activeCancel`) и очищает очередь (`cancelled` + `dropQueue`).
+- F1 (`CommandAnswer`) — обычная генерация; F2–F4 — regeneration на текущий вопрос без нового turn (последняя версия становится текущим ответом).
+- Один `answerWorker` обрабатывает и вопросы, и команды **последовательно** (FIFO) — без параллельных LLM-запросов.
 
 ### Логирование
 

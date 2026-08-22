@@ -18,6 +18,11 @@ type CaptureConfig struct {
 	// If empty, the default capture device is used.
 	MicDeviceName string
 
+	// EnableMic controls whether the microphone is captured at all.
+	// When false (default), only loopback is captured — the mic device
+	// is not opened. Used when session recording (SaveAudio) is disabled.
+	EnableMic bool
+
 	// BufferSizeMs is the audio buffer period in milliseconds.
 	// This determines callback frequency. Default is 20ms.
 	BufferSizeMs int

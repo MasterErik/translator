@@ -34,7 +34,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	answers, err := prov.GenerateAnswers(ctx, q, cv)
+	answers, err := prov.GenerateAnswers(ctx, translator.AnswerRequest{Question: q, CandidateContext: cv})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)

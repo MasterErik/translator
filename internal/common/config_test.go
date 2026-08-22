@@ -131,19 +131,19 @@ func TestLoadConfigFromYAML(t *testing.T) {
 	// basic
 	t.Run("basic", func(t *testing.T) {
 		cleanEnv(t, "GLADIA_API_KEY", "LLM_MODEL", "TARGET_LANG", "TARGET_LANGUAGE",
-			"LOG_DIR", "WINDOW_SIZE", "CV_CONTEXT", "LLM_BASE_URL", "LLM_API_KEY")
+			"LOG_DIR", "WINDOW_SIZE", "CANDIDATE_CONTEXT_FILE", "LLM_BASE_URL", "LLM_API_KEY")
 
 		cfg := minimalYAML(t, `
 LLM_MODEL: "qwen-2.5-72b"
 TARGET_LANG: "de"
-CV_CONTEXT: "Backend Engineer"
+CANDIDATE_CONTEXT_FILE: "candidate_context.md"
 `)
 
 		if cfg.LLMModel != "qwen-2.5-72b" {
 			t.Errorf("LLMModel from YAML: got %q, want %q", cfg.LLMModel, "qwen-2.5-72b")
 		}
-		if cfg.CVContext != "Backend Engineer" {
-			t.Errorf("CVContext from YAML: got %q, want %q", cfg.CVContext, "Backend Engineer")
+		if cfg.CandidateContextFile != "candidate_context.md" {
+			t.Errorf("CandidateContextFile from YAML: got %q, want %q", cfg.CandidateContextFile, "candidate_context.md")
 		}
 		if cfg.TargetLang != "de" {
 			t.Errorf("TargetLang from YAML: got %q, want %q", cfg.TargetLang, "de")
@@ -153,7 +153,7 @@ CV_CONTEXT: "Backend Engineer"
 	// env_override
 	t.Run("env_override", func(t *testing.T) {
 		cleanEnv(t, "GLADIA_API_KEY", "LLM_MODEL", "TARGET_LANG", "TARGET_LANGUAGE",
-			"LOG_DIR", "WINDOW_SIZE", "CV_CONTEXT", "LLM_BASE_URL", "LLM_API_KEY")
+			"LOG_DIR", "WINDOW_SIZE", "CANDIDATE_CONTEXT_FILE", "LLM_BASE_URL", "LLM_API_KEY")
 
 		t.Setenv("LLM_MODEL", "deepseek-v3")
 
@@ -243,7 +243,7 @@ LLM_MODEL: "llama-3.3-70b-versatile"
 
 		envContent := `LLM_API_KEY=test-llm-key
 GLADIA_API_KEY=test-gladia-key
-CV_CONTEXT=You are an expert.\n  Rule 1.\n  Rule 2.
+CANDIDATE_CONTEXT_FILE=candidate_context.md
 `
 		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(envContent), 0644); err != nil {
 			t.Fatal(err)
@@ -266,8 +266,8 @@ CV_CONTEXT=You are an expert.\n  Rule 1.\n  Rule 2.
 		if cfg.GladiaAPIKey != "test-gladia-key" {
 			t.Errorf("GladiaAPIKey: got %q, want %q", cfg.GladiaAPIKey, "test-gladia-key")
 		}
-		if cfg.CVContext != "You are an expert.\\n  Rule 1.\\n  Rule 2." {
-			t.Errorf("CVContext: got %q, want raw \\n string", cfg.CVContext)
+		if cfg.CandidateContextFile != "candidate_context.md" {
+			t.Errorf("CandidateContextFile: got %q, want %q", cfg.CandidateContextFile, "candidate_context.md")
 		}
 	})
 }
@@ -295,6 +295,44 @@ func TestSaveAudio(t *testing.T) {
 					t.Errorf("SAVE_AUDIO=%q: got %v, want false", v, cfg.SaveAudio)
 				}
 			})
+		}
+	})
+}
+
+// TestConversationConfig — параметры conversation context (defaults, YAML, env-override).
+func TestConversationConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cleanEnv(t, "CONVERSATION_RECENT_TURNS", "CONVERSATION_MAX_CONTEXT_TOKENS")
+		cfg := minimalYAML(t, "")
+		if cfg.Conversation.RecentTurns != 6 {
+			t.Errorf("RecentTurns default: got %d, want 6", cfg.Conversation.RecentTurns)
+		}
+		if cfg.Conversation.MaxContextTokens != 4000 {
+			t.Errorf("MaxContextTokens default: got %d, want 4000", cfg.Conversation.MaxContextTokens)
+		}
+	})
+
+	t.Run("from_yaml", func(t *testing.T) {
+		cleanEnv(t, "CONVERSATION_RECENT_TURNS", "CONVERSATION_MAX_CONTEXT_TOKENS")
+		cfg := minimalYAML(t, `
+conversation:
+  recent_turns: 3
+  max_context_tokens: 1000
+`)
+		if cfg.Conversation.RecentTurns != 3 {
+			t.Errorf("RecentTurns from YAML: got %d, want 3", cfg.Conversation.RecentTurns)
+		}
+		if cfg.Conversation.MaxContextTokens != 1000 {
+			t.Errorf("MaxContextTokens from YAML: got %d, want 1000", cfg.Conversation.MaxContextTokens)
+		}
+	})
+
+	t.Run("env_override", func(t *testing.T) {
+		cleanEnv(t, "CONVERSATION_RECENT_TURNS", "CONVERSATION_MAX_CONTEXT_TOKENS")
+		t.Setenv("CONVERSATION_RECENT_TURNS", "9")
+		cfg := minimalYAML(t, "")
+		if cfg.Conversation.RecentTurns != 9 {
+			t.Errorf("RecentTurns env override: got %d, want 9", cfg.Conversation.RecentTurns)
 		}
 	})
 }

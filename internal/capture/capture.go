@@ -44,7 +44,6 @@ func (c *Capture) Start(ctx context.Context) (<-chan []byte, <-chan []byte, erro
 	}
 
 	loopbackCh := make(chan []byte, channelBufferSize)
-	micCh := make(chan []byte, channelBufferSize)
 
 	if err := c.startLoopback(ctx, loopbackCh); err != nil {
 		c.ctx.Uninit()
@@ -52,11 +51,17 @@ func (c *Capture) Start(ctx context.Context) (<-chan []byte, <-chan []byte, erro
 		return nil, nil, fmt.Errorf("capture: start loopback: %w", err)
 	}
 
-	if err := c.startMic(ctx, micCh); err != nil {
-		c.loopback.Uninit()
-		c.ctx.Uninit()
-		c.ctx.Free()
-		return nil, nil, fmt.Errorf("capture: start microphone: %w", err)
+	// Микрофон захватываем только когда EnableMic — иначе он не нужен
+	// (запись сессии выключена). В этом случае возвращаем micCh = nil.
+	var micCh chan []byte
+	if c.config.EnableMic {
+		micCh = make(chan []byte, channelBufferSize)
+		if err := c.startMic(ctx, micCh); err != nil {
+			c.loopback.Uninit()
+			c.ctx.Uninit()
+			c.ctx.Free()
+			return nil, nil, fmt.Errorf("capture: start microphone: %w", err)
+		}
 	}
 
 	return loopbackCh, micCh, nil

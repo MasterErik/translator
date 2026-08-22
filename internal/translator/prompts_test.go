@@ -5,44 +5,15 @@ import (
 	"testing"
 )
 
-func TestSystemPromptTranslationContainsITTermsPreservation(t *testing.T) {
-	// Verify the system prompt explicitly instructs the model to preserve
-	// IT terminology and keep terms in English.
-	terms := []string{
-		"NEVER translate IT terminology",
-		"keep them as-is",
-		"Kubernetes", "Docker", "CI/CD", "API", "microservices",
-		"race condition", "mutex", "goroutine",
-		"Deadlock", "CQRS",
-	}
-
-	for _, term := range terms {
-		if !strings.Contains(SystemPromptTranslation, term) {
-			t.Errorf("SystemPromptTranslation should contain %q", term)
-		}
-	}
-}
-
-func TestSystemPromptTranslationRequiresRussianOutput(t *testing.T) {
-	if !strings.Contains(SystemPromptTranslation, "Russian") {
-		t.Error("SystemPromptTranslation should instruct to translate into Russian")
-	}
-}
-
-func TestSystemPromptTranslationNoMetaCommentary(t *testing.T) {
-	if !strings.Contains(SystemPromptTranslation, "no meta-commentary") {
-		t.Error("SystemPromptTranslation should prohibit meta-commentary")
-	}
-}
-
 func TestSystemPromptAnswerGenFormat(t *testing.T) {
-	// Verify the answer generation prompt specifies bullet format and language.
+	// Verify the answer generation prompt specifies the answer format,
+	// first-person perspective, candidate-context grounding, and language.
 	checks := []string{
-		"1",
-		"bullet",
-		"Russian",
-		"dash (-)",
 		"first person",
+		"candidate context",
+		"EN:",
+		"RU:",
+		"IT terminology in English",
 	}
 
 	for _, check := range checks {
@@ -53,86 +24,126 @@ func TestSystemPromptAnswerGenFormat(t *testing.T) {
 }
 
 func TestSystemPromptAnswerGenKeepsITTerms(t *testing.T) {
-	if !strings.Contains(SystemPromptAnswerGen, "API, Kubernetes, CI/CD") {
+	if !strings.Contains(SystemPromptAnswerGen, "Use IT terminology in English in both languages.") {
 		t.Error("SystemPromptAnswerGen should instruct to keep IT terms in English")
 	}
 }
 
-func TestBuildTranslationPromptWithHistory(t *testing.T) {
-	text := "What is your experience with Docker?"
-	history := []string{
-		"Hello, nice to meet you.",
-		"I have been working in IT for 5 years.",
+// Test 1/2 — conversation context попадает в user prompt, текущий вопрос всегда в конце.
+func TestBuildAnswerPrompt_WithConversationContext(t *testing.T) {
+	req := AnswerRequest{
+		Question:            "What was your role there?",
+		ConversationContext: "Q: Tell me about Project X.\nA: I built the pricing engine.",
+		Command:             CommandAnswer,
 	}
 
-	result := BuildTranslationPrompt(text, history)
+	prompt := BuildAnswerPrompt(req)
 
-	// Should contain the text to translate.
-	if !strings.Contains(result, text) {
-		t.Errorf("BuildTranslationPrompt should contain the text to translate, got:\n%s", result)
+	if !strings.Contains(prompt, "Recent conversation:") {
+		t.Error("prompt must contain a conversation context section")
+	}
+	if !strings.Contains(prompt, "Tell me about Project X.") {
+		t.Error("prompt must include conversation history (Project X)")
+	}
+	if !strings.Contains(prompt, "What was your role there?") {
+		t.Error("prompt must include the current question")
+	}
+	// Текущий вопрос идёт ПОСЛЕ истории.
+	if strings.Index(prompt, "Tell me about Project X.") > strings.Index(prompt, "What was your role there?") {
+		t.Error("current question must come after conversation history")
+	}
+}
+
+// Текущий вопрос всегда присутствует, даже без истории.
+func TestBuildAnswerPrompt_CurrentQuestionAlwaysPresent(t *testing.T) {
+	prompt := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go."})
+	if !strings.Contains(prompt, "Tell me about Go.") {
+		t.Error("current question must always be present")
+	}
+	if !strings.Contains(prompt, "Generate 1 answer from the candidate's perspective") {
+		t.Error("prompt must contain the generation instruction")
+	}
+}
+
+// F2–F4 добавляют свои инструкции, F1 — нет.
+func TestBuildAnswerPrompt_CommandModifiers(t *testing.T) {
+	base := AnswerRequest{Question: "Tell me about Go."}
+
+	if p := BuildAnswerPrompt(base); p == "" {
+		t.Fatal("F1 prompt must not be empty")
 	}
 
-	// Should contain history entries.
-	for _, h := range history {
-		if !strings.Contains(result, h) {
-			t.Errorf("BuildTranslationPrompt should contain history entry %q", h)
+	f2 := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Command: CommandThinkDeeper})
+	if !strings.Contains(f2, "Think more deeply") {
+		t.Error("F2 must add Think Deeper instruction")
+	}
+	if strings.Contains(f2, "Do not reveal your reasoning") == false {
+		t.Error("F2 must instruct not to reveal reasoning")
+	}
+
+	f3 := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Command: CommandMoreContext})
+	if !strings.Contains(f3, "more detailed") {
+		t.Error("F3 must add more detailed instruction")
+	}
+
+	f4 := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Command: CommandSimplerEnglish})
+	if !strings.Contains(f4, "simpler English") {
+		t.Error("F4 must add simpler English instruction")
+	}
+
+	// F1 (CommandAnswer) не должен содержать инструкций F2–F4.
+	f1 := BuildAnswerPrompt(base)
+	for _, phrase := range []string{"Think more deeply", "more detailed", "simpler English"} {
+		if strings.Contains(f1, phrase) {
+			t.Errorf("F1 must not contain %q", phrase)
 		}
 	}
+}
 
-	// Should contain the structure markers.
-	if !strings.Contains(result, "Previous exchanges") {
-		t.Error("BuildTranslationPrompt should contain 'Previous exchanges' section")
+// Candidate Context и Conversation Context не смешиваются.
+func TestBuildAnswerPrompt_SeparatesContexts(t *testing.T) {
+	req := AnswerRequest{
+		Question:            "What was your role there?",
+		CandidateContext:    "Candidate: Senior Go developer",
+		ConversationContext: "Q: Tell me about Project X.\nA: I built it.",
+		Command:             CommandAnswer,
 	}
-	if !strings.Contains(result, "Translate the following English text to Russian") {
-		t.Error("BuildTranslationPrompt should contain translation instruction")
+
+	userPrompt := BuildAnswerPrompt(req)
+	systemPrompt := buildSystemPrompt(req.CandidateContext)
+
+	if strings.Contains(userPrompt, "Candidate: Senior Go developer") {
+		t.Error("candidate context must not be in the user prompt (it goes to system)")
+	}
+	if !strings.Contains(systemPrompt, "Candidate: Senior Go developer") {
+		t.Error("candidate context must be in the system prompt")
+	}
+	if !strings.Contains(userPrompt, "Tell me about Project X.") {
+		t.Error("conversation context must be in the user prompt")
 	}
 }
 
-func TestBuildTranslationPromptEmptyHistory(t *testing.T) {
-	text := "Tell me about microservices."
-	result := BuildTranslationPrompt(text, nil)
+// Test 6 — информация о компании не становится фактами кандидата.
+func TestBuildAnswerPrompt_CompanyInfoNotCandidateFacts(t *testing.T) {
+	conversation := "Q: Our company has 500 employees.\nA: That is good to know."
+	candidate := "Candidate: Senior Go developer, PostgreSQL, Kafka."
 
-	if !strings.Contains(result, text) {
-		t.Errorf("BuildTranslationPrompt should contain the text to translate, got:\n%s", result)
+	req := AnswerRequest{
+		Question:            "What is your role?",
+		CandidateContext:    candidate,
+		ConversationContext: conversation,
 	}
 
-	if !strings.Contains(result, "(no previous context)") {
-		t.Error("BuildTranslationPrompt should indicate empty history")
-	}
+	userPrompt := BuildAnswerPrompt(req)
+	systemPrompt := buildSystemPrompt(candidate)
 
-	if strings.Contains(result, "1. ") {
-		t.Error("BuildTranslationPrompt should NOT contain numbered entries when history is empty")
+	if strings.Contains(systemPrompt, "500 employees") {
+		t.Error("company info must not leak into candidate context (system prompt)")
 	}
-}
-
-func TestBuildAnswerPromptWithCV(t *testing.T) {
-	question := "How did you handle database migrations?"
-	cvContext := "5 years as backend developer, PostgreSQL, MongoDB, Kubernetes."
-
-	// CV context now goes to system message, NOT user prompt.
-	result := BuildAnswerPrompt(question)
-
-	if !strings.Contains(result, question) {
-		t.Errorf("BuildAnswerPrompt should contain the question, got:\n%s", result)
+	if !strings.Contains(userPrompt, "500 employees") {
+		t.Error("company info stays in conversation context as a spoken line, not a candidate fact")
 	}
-	// CV context should NOT be in user prompt anymore (it's the system message).
-	if strings.Contains(result, cvContext) {
-		t.Errorf("BuildAnswerPrompt should NOT contain CV context (it's the system message now):\n%s", result)
-	}
-	if !strings.Contains(result, "Generate 1 answer from the candidate's perspective") {
-		t.Error("BuildAnswerPrompt should contain the generation instruction")
-	}
-}
-
-func TestBuildAnswerPromptEmptyCV(t *testing.T) {
-	question := "What is TDD?"
-	result := BuildAnswerPrompt(question)
-
-	if !strings.Contains(result, question) {
-		t.Errorf("BuildAnswerPrompt should contain the question, got:\n%s", result)
-	}
-	// No CV context — no "(no CV context provided)" placeholder needed anymore.
-	if !strings.Contains(result, "Generate 1 answer from the candidate's perspective") {
-		t.Error("BuildAnswerPrompt should contain the generation instruction")
+	if !strings.Contains(systemPrompt, "Senior Go developer") {
+		t.Error("candidate facts must remain in the candidate context")
 	}
 }

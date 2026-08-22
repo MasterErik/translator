@@ -57,7 +57,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
 		start := time.Now()
-		answers, err := prov.GenerateAnswers(ctx, q, cv)
+		answers, err := prov.GenerateAnswers(ctx, translator.AnswerRequest{Question: q, CandidateContext: cv})
 		elapsed := time.Since(start)
 		cancel()
 

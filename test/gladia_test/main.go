@@ -5,10 +5,10 @@
 package main
 
 import (
-	"github.com/mastererik/translator/internal/logger"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/mastererik/translator/internal/logger"
 	"io"
 	"os"
 	"time"
@@ -88,12 +88,22 @@ func testSTT(ctx context.Context, cfg *common.Config) {
 				return
 			}
 		}
+		// 1 секунда тишины в конце — endpointing (0.3s) детектит конец
+		// фразы, после чего Gladia выдаёт финальный транскрипт + перевод.
+		silence := make([]byte, chunkSize)
+		for i := 0; i < 50; i++ { // 50 × 20ms = 1s
+			select {
+			case prov.AudioStream() <- silence:
+			case <-ctx.Done():
+				return
+			}
+		}
 	}()
 
 	// Collect results.
 	fmt.Println("  Waiting for transcription...")
-	var finalText string
-	deadline := time.After(15 * time.Second)
+	var finalText, finalTranslation string
+	deadline := time.After(20 * time.Second)
 
 loop:
 	for {
@@ -106,14 +116,21 @@ loop:
 				fmt.Printf("  STT error: %v\n", event.Error)
 				break loop
 			}
-			if event.Event == common.EventEndOfTurn {
+			switch {
+			case event.ChannelID == "translation":
+				finalTranslation = event.Text
+				fmt.Printf("  TRANSLATION: %q\n", finalTranslation)
+			case event.Event == common.EventEndOfTurn:
 				finalText = event.Text
 				fmt.Printf("  FINAL: %q\n", finalText)
-			} else if event.Text != "" {
+			case event.Text != "":
 				fmt.Printf("  interim: %q\n", event.Text)
 			}
+			if finalText != "" && finalTranslation != "" {
+				break loop
+			}
 		case <-deadline:
-			fmt.Println("  TIMEOUT: no transcription received in 15s")
+			fmt.Println("  TIMEOUT: no final transcript in 20s")
 			break loop
 		case <-ctx.Done():
 			break loop
@@ -125,6 +142,11 @@ loop:
 	} else {
 		fmt.Println("  STT RESULT: no final text (empty audio or silence?)")
 	}
+	if finalTranslation != "" {
+		fmt.Println("  TRANSLATION RESULT: OK")
+	} else {
+		fmt.Println("  TRANSLATION RESULT: no translation received")
+	}
 }
 
 func testAnswerGeneration(ctx context.Context, cfg *common.Config) {
@@ -135,7 +157,7 @@ func testAnswerGeneration(ctx context.Context, cfg *common.Config) {
 	q := "What is the difference between a mutex and a channel in Go?"
 	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
 	fmt.Printf("  Question: %q\n", q)
-	answers, err := prov.GenerateAnswers(ctx, q, cv)
+	answers, err := prov.GenerateAnswers(ctx, translator.AnswerRequest{Question: q, CandidateContext: cv})
 	if err != nil {
 		fmt.Printf("  FAIL: %v\n", err)
 		return

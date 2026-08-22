@@ -49,7 +49,7 @@ var questionWords = []string{
 	"can you", "could you", "would you", "will you", "do you",
 	"have you", "did you", "are you", "is it", "is there",
 	"explain", "describe", "tell me", "elaborate", "clarify",
-	"share", "walk me", "talk about", "give me",
+	"share", "walk me", "talk about", "let's talk about", "give me",
 }
 
 // TranslationEngine orchestrates question classification and answer
@@ -57,21 +57,12 @@ var questionWords = []string{
 //
 // All methods are safe for concurrent use.
 type TranslationEngine struct {
-	llm       LLMProvider
-	cvContext string
-	mu        sync.RWMutex
+	llm LLMProvider
 }
 
 // NewEngine creates a new TranslationEngine with the given LLM provider.
 func NewEngine(llm LLMProvider) *TranslationEngine {
 	return &TranslationEngine{llm: llm}
-}
-
-// SetCVContext задаёт контекст резюме для генерации подсказок.
-func (e *TranslationEngine) SetCVContext(ctx string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.cvContext = ctx
 }
 
 // ProcessQuestion processes a question text:
@@ -105,7 +96,7 @@ func (e *TranslationEngine) ProcessQuestion(text string) (*TranslationResult, er
 			// Use a background context so answer generation is not
 			// tied to the request's lifecycle.
 			bgCtx := context.Background()
-			answers, genErr := e.llm.GenerateAnswers(bgCtx, question, "")
+			answers, genErr := e.llm.GenerateAnswers(bgCtx, AnswerRequest{Question: question})
 			if genErr != nil {
 				slog.Error("генерация подсказок не удалась", "question", question, "error", genErr)
 				return
@@ -145,24 +136,17 @@ func IsQuestion(text string) bool {
 }
 
 // GenerateAnswers делегирует генерацию подсказок LLM-провайдеру.
-func (e *TranslationEngine) GenerateAnswers(ctx context.Context, question string) ([]string, error) {
-	e.mu.RLock()
-	cvCtx := e.cvContext
-	e.mu.RUnlock()
-	return e.llm.GenerateAnswers(ctx, question, cvCtx)
+func (e *TranslationEngine) GenerateAnswers(ctx context.Context, req AnswerRequest) ([]string, error) {
+	return e.llm.GenerateAnswers(ctx, req)
 }
 
 // GenerateAnswersStream делегирует потоковую генерацию подсказок LLM-провайдеру.
 // Токены доставляются по одному через возвращаемый канал.
 // Канал закрывается по завершении генерации или при ошибке.
-func (e *TranslationEngine) GenerateAnswersStream(ctx context.Context, question string) (<-chan string, error) {
-	e.mu.RLock()
-	cvCtx := e.cvContext
-	e.mu.RUnlock()
-
+func (e *TranslationEngine) GenerateAnswersStream(ctx context.Context, req AnswerRequest) (<-chan string, error) {
 	streamer, ok := e.llm.(StreamingAnswersProvider)
 	if !ok {
-		answers, err := e.llm.GenerateAnswers(ctx, question, cvCtx)
+		answers, err := e.llm.GenerateAnswers(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("generate answers stream: %w", err)
 		}
@@ -173,5 +157,5 @@ func (e *TranslationEngine) GenerateAnswersStream(ctx context.Context, question 
 		close(ch)
 		return ch, nil
 	}
-	return streamer.GenerateAnswersStream(ctx, question, cvCtx)
+	return streamer.GenerateAnswersStream(ctx, req)
 }

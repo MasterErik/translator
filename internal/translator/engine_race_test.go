@@ -49,7 +49,7 @@ func TestEngine_ConcurrentQuestionAndAnswers(t *testing.T) {
 	var genCallCount int
 
 	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, question string, cvContext string) ([]string, error) {
+		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
 			genMu.Lock()
 			genCallCount++
 			genMu.Unlock()

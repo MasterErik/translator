@@ -13,6 +13,7 @@ import (
 
 	"github.com/mastererik/translator/internal/common"
 	"github.com/mastererik/translator/internal/dispatcher"
+	"github.com/mastererik/translator/internal/hotkey"
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/stt"
 	"github.com/mastererik/translator/internal/translator"
@@ -74,7 +75,11 @@ type Config struct {
 	LLMAPIKey  string
 	LLMModel   string
 	MaxTokens  int
-	CVContext  string // контекст резюме для подсказок
+
+	// Candidate context (база CV) и conversation context.
+	CandidateContextFile string // путь к файлу базы CV
+	RecentTurns          int    // максимум turns в context
+	MaxContextTokens     int    // лимит размера context
 
 	// Overlay
 	OverlayCfg ui.OverlayConfig
@@ -155,8 +160,15 @@ func New(cfg Config) (*Pipeline, error) {
 
 	// TranslationEngine.
 	engine := translator.NewEngine(llmProv)
-	if cfg.CVContext != "" {
-		engine.SetCVContext(cfg.CVContext)
+
+	// Candidate context — читаем файл базы CV (если задан).
+	candidateContext := ""
+	if cfg.CandidateContextFile != "" {
+		if data, err := os.ReadFile(cfg.CandidateContextFile); err != nil {
+			sessLog.LogDebug(fmt.Sprintf("WARN: не удалось прочитать candidate context %s: %v", cfg.CandidateContextFile, err))
+		} else {
+			candidateContext = string(data)
+		}
 	}
 
 	// Overlay.
@@ -188,7 +200,12 @@ func New(cfg Config) (*Pipeline, error) {
 			overlay,
 			engine,
 			sessLog,
-			dispatcher.Config{AnswerTimeout: cfg.AnswerTimeout},
+			dispatcher.Config{
+				AnswerTimeout:    cfg.AnswerTimeout,
+				CandidateContext: candidateContext,
+				RecentTurns:      cfg.RecentTurns,
+				MaxContextTokens: cfg.MaxContextTokens,
+			},
 		),
 	}
 
@@ -220,6 +237,7 @@ func (p *Pipeline) Run() error {
 	go p.runSTT(runCtx)
 	go p.dispatch.Run(runCtx, p.textStream, p.dispatchDone)
 	go p.runUI(runCtx)
+	go p.runHotkeys(runCtx)
 
 	// Ждём закрытия UI-окна или SIGINT/SIGTERM.
 	overlayDone := make(chan struct{})
@@ -297,52 +315,15 @@ func (p *Pipeline) runCapture(ctx context.Context) {
 
 	audioStream := p.sttProv.AudioStream()
 
-	// Fan-out micCh: копируем каждый фрейм в логгер и STT.
-	var logCh chan []byte
-	if p.cfg.SaveAudio && p.sessLog != nil {
-		logCh = make(chan []byte, 32)
-	}
-
+	// Микрофон идёт только в запись сессии (логгер), не в STT —
+	// переводится только собеседник (loopback).
 	var wg sync.WaitGroup
 
-	// Микрофон → fan-out → STT + логгер.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case chunk, ok := <-micCh:
-				if !ok {
-					return
-				}
-				// В логгер (копия).
-				if logCh != nil {
-					raw := make([]byte, len(chunk))
-					copy(raw, chunk)
-					select {
-					case logCh <- raw:
-					default:
-					}
-				}
-				// В STT (оригинал).
-				select {
-				case audioStream <- chunk:
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
-		}
-	}()
-
-	// Запись микрофона → логгер (отдельная горутина).
-	if logCh != nil {
+	if p.cfg.SaveAudio && p.sessLog != nil && micCh != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.routeRawMic(ctx, logCh)
+			p.routeRawMic(ctx, micCh)
 		}()
 	}
 
@@ -485,6 +466,33 @@ func (p *Pipeline) generateAnswersAsync(question string) {
 			dispatcher.Config{AnswerTimeout: p.cfg.AnswerTimeout})
 	}
 	p.dispatch.GenerateAnswers(question)
+}
+
+// runHotkeys запускает глобальные hotkeys (F1–F4, Esc) и маршрутизирует их
+// в dispatcher: F1–F4 → HandleCommand, Esc → Cancel.
+func (p *Pipeline) runHotkeys(ctx context.Context) {
+	if err := hotkey.Run(ctx, p.handleHotkey); err != nil && err != context.Canceled {
+		p.sessLog.LogDebug(fmt.Sprintf("hotkey: %v", err))
+	}
+}
+
+// handleHotkey маппит функциональную клавишу на команду генерации.
+func (p *Pipeline) handleHotkey(k hotkey.Key) {
+	if p.dispatch == nil {
+		return
+	}
+	switch k {
+	case hotkey.KeyF1:
+		p.dispatch.HandleCommand(translator.CommandAnswer)
+	case hotkey.KeyF2:
+		p.dispatch.HandleCommand(translator.CommandThinkDeeper)
+	case hotkey.KeyF3:
+		p.dispatch.HandleCommand(translator.CommandMoreContext)
+	case hotkey.KeyF4:
+		p.dispatch.HandleCommand(translator.CommandSimplerEnglish)
+	case hotkey.KeyEsc:
+		p.dispatch.Cancel()
+	}
 }
 
 // --------------------------------------------------------------------------

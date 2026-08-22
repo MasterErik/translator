@@ -43,8 +43,17 @@ type Config struct {
 	OverlayWidth  int `yaml:"OVERLAY_WIDTH"`
 	OverlayHeight int `yaml:"OVERLAY_HEIGHT"`
 
-	// CV context for answer generation.
-	CVContext string `yaml:"CV_CONTEXT"`
+	// Candidate context file (база CV) — путь к текстовому файлу с фактами кандидата.
+	CandidateContextFile string `yaml:"CANDIDATE_CONTEXT_FILE"`
+
+	// Conversation context — ограничение истории интервью.
+	Conversation ConversationConfig `yaml:"conversation"`
+}
+
+// ConversationConfig — параметры conversation context (история интервью).
+type ConversationConfig struct {
+	RecentTurns      int `yaml:"recent_turns"`       // максимум turns в context
+	MaxContextTokens int `yaml:"max_context_tokens"` // лимит размера context
 }
 
 func setDefault[T comparable](v *T, def T) {
@@ -61,6 +70,8 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.OverlayWidth, 800)
 	setDefault(&c.OverlayHeight, 650)
 	setDefault(&c.LogLevel, "info")
+	setDefault(&c.Conversation.RecentTurns, 6)
+	setDefault(&c.Conversation.MaxContextTokens, 4000)
 }
 
 // loadFromEnv loads .env via godotenv, then reads environment variables
@@ -72,6 +83,19 @@ func (c *Config) loadFromEnv() {
 
 	// Основные поля — через reflection по yaml-тегам.
 	_ = loadFromYAMLTags(c)
+
+	// Вложенная секция conversation — env-override вручную
+	// (reflection не заходит во вложенные структуры).
+	if v := os.Getenv("CONVERSATION_RECENT_TURNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Conversation.RecentTurns = n
+		}
+	}
+	if v := os.Getenv("CONVERSATION_MAX_CONTEXT_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Conversation.MaxContextTokens = n
+		}
+	}
 }
 
 // loadFromYAMLTags reads env vars using yaml struct tags as env var names.

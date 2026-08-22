@@ -225,12 +225,12 @@ type mockLLM struct {
 	mu sync.Mutex
 }
 
-func (m *mockLLM) GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error) {
+func (m *mockLLM) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	return []string{"mock hint 1", "mock hint 2"}, nil
 }
 
 // GenerateAnswersStream реализует translator.StreamingAnswersProvider.
-func (m *mockLLM) GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error) {
+func (m *mockLLM) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
 	ch := make(chan string, 2)
 	ch <- "mock hint 1"
 	ch <- "mock hint 2"
@@ -866,7 +866,7 @@ type errorLLM struct {
 	err error
 }
 
-func (m *errorLLM) GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error) {
+func (m *errorLLM) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	return nil, m.err
 }
 
@@ -990,13 +990,13 @@ type localStreamingMockLLM struct {
 	callLog []string
 }
 
-func (m *localStreamingMockLLM) GenerateAnswers(ctx context.Context, question string, cv string) ([]string, error) {
+func (m *localStreamingMockLLM) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	return []string{"hint 1", "hint 2"}, nil
 }
 
-func (m *localStreamingMockLLM) GenerateAnswersStream(ctx context.Context, question string, cv string) (<-chan string, error) {
+func (m *localStreamingMockLLM) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
 	m.mu.Lock()
-	m.callLog = append(m.callLog, "GenAnswersStream:"+question)
+	m.callLog = append(m.callLog, "GenAnswersStream:"+req.Question)
 	m.mu.Unlock()
 
 	ch := make(chan string, len(m.tokens)+1)

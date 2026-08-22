@@ -1,5 +1,6 @@
 # Secrets
 .env
+candidate_context.md
 
 # Build output
 *.exe

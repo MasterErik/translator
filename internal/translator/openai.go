@@ -38,18 +38,28 @@ func (p *ChatProvider) SetMaxTokens(n int) {
 	p.maxTokens = n
 }
 
-func (p *ChatProvider) GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error) {
+// buildSystemPrompt собирает system-промпт: правила формата подсказки
+// (SystemPromptAnswerGen) всегда идут первыми. Candidate context добавляется
+// отдельной секцией для персонализации — он НЕ затирает правила формата.
+// Раньше непустой cvContext полностью заменял SystemPromptAnswerGen, из-за чего
+// модель отвечала без «EN: … | RU: …» и parseAnswerHints отбрасывал всё.
+func buildSystemPrompt(candidateContext string) string {
+	prompt := SystemPromptAnswerGen
+	if candidateContext != "" {
+		prompt += "\n\nCandidate context:\n" + candidateContext
+	}
+	return prompt
+}
+
+func (p *ChatProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) ([]string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	userPrompt := BuildAnswerPrompt(question)
+	userPrompt := BuildAnswerPrompt(req)
 
-	systemPrompt := cvContext
-	if systemPrompt == "" {
-		systemPrompt = SystemPromptAnswerGen
-	}
+	systemPrompt := buildSystemPrompt(req.CandidateContext)
 
-	req := openai.ChatCompletionRequest{
+	chatReq := openai.ChatCompletionRequest{
 		Model: p.model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
@@ -60,7 +70,7 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, question string, cvC
 		N:           1,
 	}
 
-	resp, err := p.createChatCompletionWithRetry(ctx, req)
+	resp, err := p.createChatCompletionWithRetry(ctx, chatReq)
 	if err != nil {
 		return nil, fmt.Errorf("generate answers: %w", err)
 	}
@@ -70,20 +80,17 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, question string, cvC
 	return parseAnswerHints(resp.Choices[0].Message.Content), nil
 }
 
-func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, question string, cvContext string) (<-chan string, error) {
+func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, req AnswerRequest) (<-chan string, error) {
 	tokenCh := make(chan string, 64)
-	userPrompt := BuildAnswerPrompt(question)
+	userPrompt := BuildAnswerPrompt(req)
 
-	systemPrompt := cvContext
-	if systemPrompt == "" {
-		systemPrompt = SystemPromptAnswerGen
-	}
+	systemPrompt := buildSystemPrompt(req.CandidateContext)
 
 	p.mu.Lock()
 	maxTok := p.maxTokens
 	p.mu.Unlock()
 
-	req := openai.ChatCompletionRequest{
+	chatReq := openai.ChatCompletionRequest{
 		Model: p.model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
@@ -94,7 +101,7 @@ func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, question strin
 		Stream:      true,
 	}
 
-	stream, err := p.client.CreateChatCompletionStream(ctx, req)
+	stream, err := p.client.CreateChatCompletionStream(ctx, chatReq)
 	if err != nil {
 		close(tokenCh)
 		return nil, fmt.Errorf("generate answers stream: %w", err)

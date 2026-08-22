@@ -48,7 +48,7 @@ func TestChatProvider_GenerateAnswers_Success(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	answers, err := provider.GenerateAnswers(ctx, "What is your DevOps experience?", "DevOps engineer, 5 years")
+	answers, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "What is your DevOps experience?", CandidateContext: "DevOps engineer, 5 years"})
 	if err != nil {
 		t.Fatalf("GenerateAnswers() error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestChatProvider_GenerateAnswers_EmptyCV(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	answers, err := provider.GenerateAnswers(ctx, "What is TDD?", "")
+	answers, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "What is TDD?"})
 	if err != nil {
 		t.Fatalf("GenerateAnswers() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestChatProvider_RetryOnRateLimit(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	_, err := provider.GenerateAnswers(ctx, "Question?", "")
+	_, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "Question?"})
 	if err != nil {
 		t.Fatalf("GenerateAnswers() error after retries = %v", err)
 	}
@@ -138,7 +138,7 @@ func TestChatProvider_RetryExhausted(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	_, err := provider.GenerateAnswers(ctx, "Question?", "")
+	_, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "Question?"})
 	if err == nil {
 		t.Error("GenerateAnswers() should return error after exhausting retries")
 	}
@@ -159,7 +159,7 @@ func TestChatProvider_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := provider.GenerateAnswers(ctx, "Question?", "")
+	_, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "Question?"})
 	if err == nil {
 		t.Error("GenerateAnswers() should return error on context cancellation")
 	}
@@ -178,7 +178,7 @@ func TestChatProvider_NoChoices(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	_, err := provider.GenerateAnswers(ctx, "Question?", "")
+	_, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "Question?"})
 	if err == nil {
 		t.Error("GenerateAnswers() should return error when response has no choices")
 	}
@@ -279,6 +279,52 @@ func TestParseAnswerHints(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt(t *testing.T) {
+	tests := []struct {
+		name      string
+		cvContext string
+		check     func(t *testing.T, prompt string)
+	}{
+		{
+			name:      "empty cv uses only format rules",
+			cvContext: "",
+			check: func(t *testing.T, prompt string) {
+				if prompt != SystemPromptAnswerGen {
+					t.Error("buildSystemPrompt(\"\") should equal SystemPromptAnswerGen")
+				}
+			},
+		},
+		{
+			name:      "cv context appended after format rules",
+			cvContext: "Senior Go developer, 5 years",
+			check: func(t *testing.T, prompt string) {
+				// Формат ВСЕГДА идёт первым — корень бага: раньше cvContext затирал его.
+				if !strings.HasPrefix(prompt, SystemPromptAnswerGen) {
+					t.Error("prompt must start with SystemPromptAnswerGen (format rules)")
+				}
+				if !strings.Contains(prompt, "Candidate context:\nSenior Go developer, 5 years") {
+					t.Errorf("prompt must contain CV context section, got: %q", prompt)
+				}
+			},
+		},
+		{
+			name:      "format rules always present regardless of cv",
+			cvContext: "Some arbitrary resume text without any format rules",
+			check: func(t *testing.T, prompt string) {
+				if !strings.Contains(prompt, "EN:") || !strings.Contains(prompt, "RU:") || !strings.Contains(prompt, "|") {
+					t.Error("prompt must always contain EN:/RU:/| format rules")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.check(t, buildSystemPrompt(tt.cvContext))
+		})
+	}
+}
+
 func TestStripBulletPrefix(t *testing.T) {
 	tests := []struct {
 		input string
@@ -329,7 +375,7 @@ func TestNewChatProvider_CustomBaseURL(t *testing.T) {
 		t.Errorf("Model = %q, want %q", provider.model, "glm-4-flash")
 	}
 
-	answers, err := provider.GenerateAnswers(ctx, "Question?", "")
+	answers, err := provider.GenerateAnswers(ctx, AnswerRequest{Question: "Question?"})
 	if err != nil {
 		t.Fatalf("GenerateAnswers() error = %v", err)
 	}
@@ -386,7 +432,7 @@ func TestStreamingGenerateAnswers(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	tokenCh, err := provider.GenerateAnswersStream(ctx, "Question?", "")
+	tokenCh, err := provider.GenerateAnswersStream(ctx, AnswerRequest{Question: "Question?"})
 	if err != nil {
 		t.Fatalf("GenerateAnswersStream() error = %v", err)
 	}
@@ -415,7 +461,7 @@ func TestStreamingGenerateAnswers_EmptyResponse(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	tokenCh, err := provider.GenerateAnswersStream(ctx, "Hello", "")
+	tokenCh, err := provider.GenerateAnswersStream(ctx, AnswerRequest{Question: "Hello"})
 	if err != nil {
 		t.Fatalf("GenerateAnswersStream() error = %v", err)
 	}
@@ -449,7 +495,7 @@ func TestStreamingGenerateAnswers_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	tokenCh, err := provider.GenerateAnswersStream(ctx, "Hello", "")
+	tokenCh, err := provider.GenerateAnswersStream(ctx, AnswerRequest{Question: "Hello"})
 	if err != nil {
 		// Это приемлемо — ошибка при открытии потока.
 		return
@@ -489,7 +535,7 @@ func TestStreamingGenerateAnswers_StreamError(t *testing.T) {
 	provider := newTestChatProvider(server, "gpt-4o-mini")
 	ctx := context.Background()
 
-	tokenCh, err := provider.GenerateAnswersStream(ctx, "Question?", "")
+	tokenCh, err := provider.GenerateAnswersStream(ctx, AnswerRequest{Question: "Question?"})
 	if err != nil {
 		// Ошибка при открытии потока — приемлемо.
 		return

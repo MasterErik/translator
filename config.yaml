@@ -28,17 +28,11 @@ MIC_DEVICE: ""
 # Default false — set true to enable for debugging or post-session review.
 SAVE_AUDIO: false
 
-# Системный промпт для генерации подсказок (используется как system message LLM).
-# Пиши от первого лица, как готовый ответ кандидата.
-CV_CONTEXT: |
-  You are an expert interview coach helping a candidate answer technical questions.
-  The candidate is a Senior Go developer.
-  Generate 1 concise answer from the candidate's perspective (first person, ready to read aloud).
+# Candidate context (база CV) — путь к текстовому файлу с фактами кандидата.
+# Сюда добавляйте дополнительную информацию о кандидате (факты, проекты, технологии).
+CANDIDATE_CONTEXT_FILE: "candidate_context.md"
 
-  CRITICAL RULES:
-  1. Output EXACTLY 1 bullet point starting with a dash (-).
-  2. Format: "- EN: <English answer> | RU: <Russian translation>"
-  3. Keep IT terms in English: API, Kubernetes, CI/CD, Docker, microservices, etc.
-  4. Write from FIRST PERSON ("I am ..." / "Я ....") — as if the candidate is speaking right now.
-  5. The answer should be 1-2 sentences — concise, natural spoken language, ready to read aloud.
-  6. Do NOT write instructions or reminders — write the actual answer.
+# Conversation context — ограничение истории интервью.
+conversation:
+  recent_turns: 6
+  max_context_tokens: 4000
