@@ -19,10 +19,10 @@ const (
 )
 
 var (
-	user32                      = syscall.NewLazyDLL("user32.dll")
-	procGetWindowLongPtrW       = user32.NewProc("GetWindowLongPtrW")
-	procSetWindowLongPtrW       = user32.NewProc("SetWindowLongPtrW")
-	procEnumWindows             = user32.NewProc("EnumWindows")
+	user32                       = syscall.NewLazyDLL("user32.dll")
+	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW        = user32.NewProc("SetWindowLongPtrW")
+	procEnumWindows              = user32.NewProc("EnumWindows")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 )
 

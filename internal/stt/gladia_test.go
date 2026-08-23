@@ -93,10 +93,10 @@ func TestGladiaProvider_ParseTranscript(t *testing.T) {
 			defer cancel()
 
 			provider := &GladiaProvider{
-				cfg:      GladiaConfig{APIKey: "test-key"},
+				cfg:     GladiaConfig{APIKey: "test-key"},
 				audioCh: make(chan []byte, 8),
 				textCh:  make(chan common.STTEvent, 8),
-		sessLog: logger.NewNopSessionLogger(),
+				sessLog: logger.NewNopSessionLogger(),
 			}
 			provider.ctx, provider.cancel = context.WithCancel(ctx)
 
@@ -131,7 +131,7 @@ func TestGladiaProvider_ParseTranslation(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -163,7 +163,7 @@ func TestGladiaProvider_ParseTranscriptEmpty(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -187,7 +187,7 @@ func TestGladiaProvider_ParseUnknownType(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -234,7 +234,7 @@ func TestGladiaProvider_DoubleStart(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -256,7 +256,7 @@ func TestGladiaProvider_ParseBrokenJSON(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -281,7 +281,7 @@ func TestGladiaProvider_ParseTranslationEmpty(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -306,7 +306,7 @@ func TestGladiaProvider_ParseTranscriptBadData(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -334,7 +334,7 @@ func TestGladiaProvider_ParseTranslationBadData(t *testing.T) {
 	defer cancel()
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 8),
 		sessLog: logger.NewNopSessionLogger(),
@@ -362,7 +362,7 @@ func TestGladiaProvider_EmitFullChannel(t *testing.T) {
 
 	// Канал ёмкостью 0 — всегда полон.
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent), // unbuffered → always full unless reader
 		sessLog: logger.NewNopSessionLogger(),
@@ -386,7 +386,7 @@ func TestGladiaProvider_EmitContextCancelled(t *testing.T) {
 	cancel() // сразу отменяем
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent), // никто не читает
 		sessLog: logger.NewNopSessionLogger(),
@@ -415,7 +415,7 @@ func TestGladiaProvider_ConcurrentStopAndEmit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 8),
 		textCh:  make(chan common.STTEvent, 32),
 		sessLog: logger.NewNopSessionLogger(),
@@ -508,7 +508,7 @@ func TestGladiaProvider_StopWaitsForPumps(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 64),
 		textCh:  make(chan common.STTEvent, 32),
 		sessLog: logger.NewNopSessionLogger(),
@@ -566,7 +566,7 @@ func TestGladiaProvider_DoubleCloseWsConn(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	provider := &GladiaProvider{
-		cfg:      GladiaConfig{APIKey: "test-key"},
+		cfg:     GladiaConfig{APIKey: "test-key"},
 		audioCh: make(chan []byte, 64),
 		textCh:  make(chan common.STTEvent, 32),
 		sessLog: logger.NewNopSessionLogger(),

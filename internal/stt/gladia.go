@@ -38,8 +38,8 @@ type gladiaInitRequest struct {
 	Endpointing  float64              `json:"endpointing"`
 	MaxDuration  float64              `json:"maximum_duration_without_endpointing"`
 	LanguageCfg  gladiaLanguageConfig `json:"language_config"`
-	RealtimeProc      gladiaRealtimeConfig      `json:"realtime_processing"`
-	MessagesCfg       gladiaMessagesConfig       `json:"messages_config"`
+	RealtimeProc gladiaRealtimeConfig `json:"realtime_processing"`
+	MessagesCfg  gladiaMessagesConfig `json:"messages_config"`
 }
 
 type gladiaLanguageConfig struct {
@@ -98,14 +98,14 @@ type gladiaTranslationData struct {
 // GladiaConfig — конфигурация Gladia Live API.
 // Все поля имеют разумные значения по умолчанию через applyDefaults.
 type GladiaConfig struct {
-	APIKey           string   `yaml:"gladia_api_key"` // x-gladia-key
-	SourceLang       string   // язык оригинала, default "en"
-	TargetLang       string   // язык перевода, default "ru"
-	Model            string   // модель STT, default "solaria-1"
-	Endpointing      float64  // чувствительность endpointing, default 0.7
-	MaxDuration      float64  // макс. длительность без endpointing, default 8
-	CodeSwitching    bool     // code switching
-	TranslationModel string   // модель перевода, default "enhanced"
+	APIKey           string  `yaml:"gladia_api_key"` // x-gladia-key
+	SourceLang       string  // язык оригинала, default "en"
+	TargetLang       string  // язык перевода, default "ru"
+	Model            string  // модель STT, default "solaria-1"
+	Endpointing      float64 // чувствительность endpointing, default 0.7
+	MaxDuration      float64 // макс. длительность без endpointing, default 8
+	CodeSwitching    bool    // code switching
+	TranslationModel string  // модель перевода, default "enhanced"
 }
 
 // applyDefaults устанавливает значения по умолчанию для незаполненных полей.
@@ -162,10 +162,10 @@ type GladiaProvider struct {
 func NewGladiaProvider(cfg GladiaConfig, sessLog logger.SessionLogger) *GladiaProvider {
 	cfg.applyDefaults()
 	return &GladiaProvider{
-		cfg:      cfg,
-		audioCh:  make(chan []byte, 64),
-		textCh:   make(chan common.STTEvent, 32),
-		sessLog:  sessLog,
+		cfg:     cfg,
+		audioCh: make(chan []byte, 64),
+		textCh:  make(chan common.STTEvent, 32),
+		sessLog: sessLog,
 	}
 }
 

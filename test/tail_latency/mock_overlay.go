@@ -17,12 +17,12 @@ type TimedMessage struct {
 // с временной меткой AddMessage. Используется в latency-тесте для замера
 // задержек от отправки WAV до появления текста в каждой UI-зоне.
 type MockOverlay struct {
-	mu                sync.Mutex
-	messages          []TimedMessage
-	firstInterim      time.Time
-	firstHistory      time.Time
-	firstTranslation  time.Time
-	firstAnswer       time.Time
+	mu               sync.Mutex
+	messages         []TimedMessage
+	firstInterim     time.Time
+	firstHistory     time.Time
+	firstTranslation time.Time
+	firstAnswer      time.Time
 }
 
 func (m *MockOverlay) AddMessage(msg ui.UIMessage) {

@@ -119,7 +119,7 @@ func TestGladiaEmulator_EventsSequence(t *testing.T) {
 	// Отправляем достаточно аудио (~1 секунда).
 	audioCh := e.AudioStream()
 	chunk := make([]byte, 2560) // 80ms фрейм @ 16kHz
-	for i := 0; i < 13; i++ {  // 13 × 80ms = 1040ms
+	for i := 0; i < 13; i++ {   // 13 × 80ms = 1040ms
 		audioCh <- chunk
 	}
 

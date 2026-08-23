@@ -37,6 +37,10 @@ type Config struct {
 	// CandidateContext — постоянные факты кандидата (база CV).
 	CandidateContext string
 
+	// CandidateContextFn — функция точечного retrieval candidate context по
+	// вопросу (fact-level). Если задана, используется вместо CandidateContext.
+	CandidateContextFn func(question string) string
+
 	// RecentTurns — максимум turns в conversation context (default 6).
 	RecentTurns int
 
@@ -77,8 +81,9 @@ type Dispatcher struct {
 	cancelCh  chan struct{}
 
 	// История текущего интервью и база CV.
-	history          *translator.ConversationHistory
-	candidateContext string
+	history            *translator.ConversationHistory
+	candidateContext   string
+	candidateContextFn func(string) string
 
 	// Текущий обнаруженный вопрос (для F1–F4 regeneration).
 	currentQuestion string
@@ -116,16 +121,17 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 	answerCh := make(chan string, cfg.AnswerQueueSize)
 
 	return &Dispatcher{
-		overlay:          overlay,
-		engine:           engine,
-		sessLog:          sessLog,
-		cfg:              cfg,
-		answerCh:         answerCh,
-		answerDone:       make(chan struct{}),
-		commandCh:        make(chan translator.GenerationCommand, cfg.CommandBufferSize),
-		cancelCh:         make(chan struct{}, 1),
-		history:          translator.NewConversationHistory(cfg.RecentTurns, cfg.MaxContextTokens),
-		candidateContext: cfg.CandidateContext,
+		overlay:            overlay,
+		engine:             engine,
+		sessLog:            sessLog,
+		cfg:                cfg,
+		answerCh:           answerCh,
+		answerDone:         make(chan struct{}),
+		commandCh:          make(chan translator.GenerationCommand, cfg.CommandBufferSize),
+		cancelCh:           make(chan struct{}, 1),
+		history:            translator.NewConversationHistory(cfg.RecentTurns, cfg.MaxContextTokens),
+		candidateContext:   cfg.CandidateContext,
+		candidateContextFn: cfg.CandidateContextFn,
 	}
 }
 
@@ -404,9 +410,14 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		return
 	}
 
+	cc := d.candidateContext
+	if d.candidateContextFn != nil {
+		cc = d.candidateContextFn(question)
+	}
+
 	req := translator.AnswerRequest{
 		Question:            question,
-		CandidateContext:    d.candidateContext,
+		CandidateContext:    cc,
 		ConversationContext: d.history.BuildContext(),
 		Command:             cmd,
 	}

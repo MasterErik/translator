@@ -139,6 +139,8 @@ conversation:
 
 Два контекста разделены: факты кандидата (база CV) не смешиваются с историей разговора. Информация о компании/вакансии (сказанное интервьюером) остаётся в conversation history и не становится фактами кандидата.
 
+**Fact-level retrieval (режим с 2026-08):** вместо загрузки `candidate_context_file` целиком можно задать `candidate_context.dir` — тогда приложение строит локальный lexical index и на каждый вопрос отбирает точечно релевантные факты (profile + топ фактов по score). Полная база в prompt не попадает. Архитектура блока — `docs/candidate-context-architecture.md`, формат данных — `docs/candidate-context-format.md`.
+
 ---
 
 ## Gladia Live API v2
@@ -167,6 +169,7 @@ internal/
 ├── translator/      # LLM-провайдеры, TranslationEngine, промпты, IsQuestion
 ├── ui/              # GioUI overlay: 4 зоны, автоскролл, HWND-стили
 ├── logger/          # Запись сессии: CSV-лог, аудио MP3, VAD-светофор
+├── context/         # Candidate context: fact-level lexical retrieval (index/score/budget)
 └── common/          # Config, STTEvent, UIEvent, общие типы
 ```
 

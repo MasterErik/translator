@@ -325,6 +325,28 @@ func TestBuildSystemPrompt(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptCandidateContext — секция candidate context добавляется
+// ТОЛЬКО при непустом значении; правила формата (SystemPromptAnswerGen) всегда
+// идут первыми, а пустой candidate context секцию не порождает.
+func TestBuildSystemPromptCandidateContext(t *testing.T) {
+	const candidate = "some candidate context"
+
+	got := buildSystemPrompt(candidate)
+	if !strings.HasPrefix(got, SystemPromptAnswerGen) {
+		t.Errorf("buildSystemPrompt(%q) должен начинаться с SystemPromptAnswerGen, got:\n%s", candidate, got)
+	}
+	if !strings.Contains(got, candidate) {
+		t.Errorf("buildSystemPrompt(%q) должен содержать candidate context, got:\n%s", candidate, got)
+	}
+	if !strings.Contains(got, "Candidate context:\n"+candidate) {
+		t.Errorf("buildSystemPrompt(%q) должен содержать секцию «Candidate context:», got:\n%s", candidate, got)
+	}
+
+	if got := buildSystemPrompt(""); got != SystemPromptAnswerGen {
+		t.Errorf("buildSystemPrompt(\"\") должен быть равен SystemPromptAnswerGen без секции candidate context, got:\n%s", got)
+	}
+}
+
 func TestStripBulletPrefix(t *testing.T) {
 	tests := []struct {
 		input string

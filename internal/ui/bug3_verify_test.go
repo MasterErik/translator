@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"github.com/mastererik/translator/internal/logger"
 	"fmt"
+	"github.com/mastererik/translator/internal/logger"
 	"strings"
 	"testing"
 )

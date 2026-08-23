@@ -7,6 +7,8 @@ package translator
 import (
 	"strings"
 	"sync"
+
+	"github.com/mastererik/translator/internal/common"
 )
 
 // GenerationCommand — команда управления генерацией ответа (функциональные клавиши F1–F4).
@@ -147,7 +149,7 @@ func (h *ConversationHistory) BuildContext() string {
 	total := 0
 	for i := len(h.turns) - 1; i >= 0; i-- {
 		block := "Q: " + h.turns[i].Question + "\nA: " + h.turns[i].Answer
-		tk := estimateTokens(block)
+		tk := common.EstimateTokens(block)
 		if len(blocks) == 0 || total+tk <= h.maxContextTokens {
 			blocks = append(blocks, block)
 			total += tk
@@ -165,14 +167,4 @@ func (h *ConversationHistory) BuildContext() string {
 		sb.WriteString(blocks[i])
 	}
 	return sb.String()
-}
-
-// estimateTokens — простая оценка размера текста в токенах.
-// ~1 токен на 4 символа для английского текста. Заменяемая реализация:
-// при появлении точного tokenizer'а текущей модели заменить на tokenizer-based.
-func estimateTokens(s string) int {
-	if s == "" {
-		return 0
-	}
-	return (len(s) + 3) / 4
 }

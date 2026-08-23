@@ -229,7 +229,7 @@ func stripThinking(s string) string {
 }
 
 // isHintLine определяет, соответствует ли строка формату подсказки
-// «EN: <English> | RU: <Russian>» (см. SystemPromptAnswerGen и CV_CONTEXT).
+// «EN: <English> | RU: <Russian>» (см. SystemPromptAnswerGen и CandidateContext).
 // Reasoning-строки (chain-of-thought) такого формата не содержат и отбрасываются.
 func isHintLine(line string) bool {
 	// Groq для qwen3.6-27b кладёт reasoning (chain-of-thought) прямо в

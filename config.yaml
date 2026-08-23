@@ -32,6 +32,17 @@ SAVE_AUDIO: false
 # Сюда добавляйте дополнительную информацию о кандидате (факты, проекты, технологии).
 CANDIDATE_CONTEXT_FILE: "candidate_context.md"
 
+# Candidate context — fact-level retrieval (ВКЛЮЧЁН).
+# dir: "candidate_context" — локальный lexical retrieval: в prompt попадает
+# только профиль + точечно релевантные факты по вопросу.
+# dir: "" — legacy-режим: CANDIDATE_CONTEXT_FILE читается целиком.
+candidate_context:
+  dir: "candidate_context"
+  max_tokens: 2000
+  max_profile_tokens: 150
+  min_score: 0
+  top_k: 5
+
 # Conversation context — ограничение истории интервью.
 conversation:
   recent_turns: 6

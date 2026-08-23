@@ -1,9 +1,9 @@
 package ui
 
 import (
-	"github.com/mastererik/translator/internal/logger"
 	"context"
 	"fmt"
+	"github.com/mastererik/translator/internal/logger"
 	"sync"
 	"testing"
 	"time"
@@ -448,14 +448,14 @@ func TestWindowStarts(t *testing.T) {
 	}
 
 	// Проверяем скролл: prevTranscLen должен обновиться = 40 строк.
-	if o.prevTranscLen != 40 {
-		t.Errorf("prevTranscLen = %d, want 40 — скролл не сработал (needScrollHist=false?)", o.prevTranscLen)
+	if o.TranscriptionScrollLen() != 40 {
+		t.Errorf("prevTranscLen = %d, want 40 — скролл не сработал (needScrollHist=false?)", o.TranscriptionScrollLen())
 	}
 	// Флаги конца — производная проверка.
-	if !o.TranslationAtEnd {
+	if !o.TranslationAtEnd() {
 		t.Error("Translation History: скролл НЕ в конце")
 	}
-	if !o.TranscriptionAtEnd {
+	if !o.TranscriptionAtEnd() {
 		t.Error("Transcription History: скролл НЕ в конце")
 	}
 
@@ -467,13 +467,13 @@ func TestWindowStarts(t *testing.T) {
 		t.Errorf("Height = %d, want 650", o.cfg.Height)
 	}
 
-	// Проверяем пропорции зон согласно ARCHITECTURE.md:
+	// Проверяем пропорции зон согласно render() в overlay.go:
 	// 1. Interim (Rigid, 2 строки)
-	// 2. Translation History (Flexed 0.55, скролл переводов)
-	// 3. Transcription History (Flexed 0.25, скролл оригиналов)
+	// 2. Translation History (Flexed 0.45, скролл переводов)
+	// 3. Transcription History (Flexed 0.35, скролл оригиналов)
 	// 4. AnswerCandidates (Flexed 0.20, подсказки)
 	zonesInfo := []struct {
-		name  string
+		name   string
 		flexed bool
 	}{
 		{"Interim", false},

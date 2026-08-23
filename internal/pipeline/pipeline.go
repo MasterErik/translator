@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	candidatecontext "github.com/mastererik/translator/internal/context"
 	"github.com/mastererik/translator/internal/dispatcher"
 	"github.com/mastererik/translator/internal/hotkey"
 	"github.com/mastererik/translator/internal/logger"
@@ -77,9 +78,10 @@ type Config struct {
 	MaxTokens  int
 
 	// Candidate context (база CV) и conversation context.
-	CandidateContextFile string // путь к файлу базы CV
-	RecentTurns          int    // максимум turns в context
-	MaxContextTokens     int    // лимит размера context
+	CandidateContextFile string                        // путь к файлу базы CV (legacy)
+	CandidateContext     common.CandidateContextConfig // fact-level retrieval (Dir) — приоритет над File
+	RecentTurns          int                           // максимум turns в context
+	MaxContextTokens     int                           // лимит размера context
 
 	// Overlay
 	OverlayCfg ui.OverlayConfig
@@ -161,14 +163,12 @@ func New(cfg Config) (*Pipeline, error) {
 	// TranslationEngine.
 	engine := translator.NewEngine(llmProv)
 
-	// Candidate context — читаем файл базы CV (если задан).
-	candidateContext := ""
-	if cfg.CandidateContextFile != "" {
-		if data, err := os.ReadFile(cfg.CandidateContextFile); err != nil {
-			sessLog.LogDebug(fmt.Sprintf("WARN: не удалось прочитать candidate context %s: %v", cfg.CandidateContextFile, err))
-		} else {
-			candidateContext = string(data)
-		}
+	// Candidate context — fact-level retrieval (Dir) или legacy файл (File).
+	logf := func(msg string) { sessLog.LogDebug(msg) }
+	candidateContext, candidateContextFn, ccErr := resolveCandidateContext(cfg, logf)
+	if ccErr != nil {
+		newErr = fmt.Errorf("pipeline: candidate context: %w", ccErr)
+		return nil, newErr
 	}
 
 	// Overlay.
@@ -201,16 +201,74 @@ func New(cfg Config) (*Pipeline, error) {
 			engine,
 			sessLog,
 			dispatcher.Config{
-				AnswerTimeout:    cfg.AnswerTimeout,
-				CandidateContext: candidateContext,
-				RecentTurns:      cfg.RecentTurns,
-				MaxContextTokens: cfg.MaxContextTokens,
+				AnswerTimeout:      cfg.AnswerTimeout,
+				CandidateContext:   candidateContext,
+				CandidateContextFn: candidateContextFn,
+				RecentTurns:        cfg.RecentTurns,
+				MaxContextTokens:   cfg.MaxContextTokens,
 			},
 		),
 	}
 
 	ok = true
 	return p, nil
+}
+
+// resolveCandidateContext определяет источник candidate context для диспетчера.
+// Приоритет: CandidateContext.Dir (fact-level retrieval) над CandidateContextFile
+// (legacy — файл целиком). Возвращает:
+//   - legacyContext — строка legacy файла (используется, когда fn == nil);
+//   - fn — функция точечного retrieval по вопросу (nil в legacy-режиме);
+//   - err — фатальная ошибка (только когда Dir задан, retrieval упал, а legacy
+//     файл не задан). При ошибке retrieval с заданным legacy файлом — молчаливый
+//     fallback на файл (fn == nil, err == nil).
+func resolveCandidateContext(cfg Config, logf func(string)) (legacyContext string, fn func(string) string, err error) {
+	// Legacy путь: Dir не задан — читаем файл целиком (если задан).
+	if cfg.CandidateContext.Dir == "" {
+		if cfg.CandidateContextFile == "" {
+			return "", nil, nil
+		}
+		data, readErr := os.ReadFile(cfg.CandidateContextFile)
+		if readErr != nil {
+			logf(fmt.Sprintf("WARN: не удалось прочитать candidate context %s: %v", cfg.CandidateContextFile, readErr))
+			return "", nil, nil
+		}
+		return string(data), nil, nil
+	}
+
+	// Fact-level retrieval.
+	manifest, index, loadErr := candidatecontext.LoadCandidateContext(cfg.CandidateContext.Dir)
+	if loadErr != nil {
+		return fallbackToLegacyFile(cfg, logf, fmt.Errorf("pipeline: загрузка candidate context: %w", loadErr))
+	}
+
+	retriever, retErr := candidatecontext.NewRetriever(manifest, index, cfg.CandidateContext.Dir, cfg.CandidateContext.TopK, cfg.CandidateContext.MinScore)
+	if retErr != nil {
+		return fallbackToLegacyFile(cfg, logf, fmt.Errorf("pipeline: инициализация retriever candidate context: %w", retErr))
+	}
+
+	budgeter := candidatecontext.NewBudgeter(cfg.CandidateContext.MaxTokens, cfg.CandidateContext.MaxProfileTokens)
+	profile := manifest.Profile
+	fn = func(question string) string {
+		return budgeter.Budget(profile, retriever.Retrieve(question)).Render()
+	}
+	return "", fn, nil
+}
+
+// fallbackToLegacyFile обрабатывает ошибку fact-level retrieval: если legacy
+// файл задан — читает его целиком (fn == nil, err == nil); иначе возвращает
+// причину ошибки (startup завершится с ошибкой).
+func fallbackToLegacyFile(cfg Config, logf func(string), cause error) (string, func(string) string, error) {
+	if cfg.CandidateContextFile == "" {
+		return "", nil, cause
+	}
+	data, readErr := os.ReadFile(cfg.CandidateContextFile)
+	if readErr != nil {
+		logf(fmt.Sprintf("WARN: не удалось прочитать legacy candidate context %s: %v", cfg.CandidateContextFile, readErr))
+		return "", nil, nil
+	}
+	logf(fmt.Sprintf("WARN: fact-level candidate context недоступен (%v), fallback на legacy файл", cause))
+	return string(data), nil, nil
 }
 
 // --------------------------------------------------------------------------

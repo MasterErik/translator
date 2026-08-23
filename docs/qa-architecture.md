@@ -101,6 +101,28 @@ type AnswerGenerator interface {
 3. Динамическая история НЕ помещается в system prompt — только статичный Candidate Context.
 4. Candidate Context имеет приоритет над conversation history.
 
+## Fact-level candidate context retrieval (новый режим)
+
+Помимо legacy-передачи полного файла `CANDIDATE_CONTEXT_FILE` целиком, есть режим **fact-level retrieval**:
+
+- При заданном `CANDIDATE_CONTEXT_DIR` приложение строит локальный lexical index по базе фактов кандидата.
+- На каждый вопрос из базы отбираются только **точечно релевантные** факты: профиль (краткая сводка) + топ фактов по lexical score.
+- Полная база в prompt **не попадает** — в `CandidateContext` идёт только отобранное подмножество, ограниченное бюджетом токенов.
+
+Параметры (секция `candidate_context` в `config.yaml` / переменные `CANDIDATE_CONTEXT_*` в `.env`):
+
+| Параметр | Env-переменная | Default | Назначение |
+|---|---|---|---|
+| `dir` | `CANDIDATE_CONTEXT_DIR` | `""` | Путь к базе фактов; пусто = legacy (`CANDIDATE_CONTEXT_FILE` целиком) |
+| `max_tokens` | `CANDIDATE_CONTEXT_MAX_TOKENS` | `2000` | Бюджет фактов в токенах |
+| `max_profile_tokens` | `CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS` | `150` | Бюджет профиля в токенах |
+| `min_score` | `CANDIDATE_CONTEXT_MIN_SCORE` | `0` | Минимальный lexical score |
+| `top_k` | `CANDIDATE_CONTEXT_TOP_K` | `5` | Максимум фактов в prompt |
+
+Подробнее:
+- `docs/candidate-context-architecture.md` — архитектура (индекс, scoring, отбор).
+- `docs/candidate-context-format.md` — формат базы фактов.
+
 ## Ограничение контекста
 
 ```

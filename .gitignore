@@ -1,6 +1,10 @@
 # Secrets
 .env
 candidate_context.md
+candidate_context/
+
+# Hermes agent artifacts
+.hermes/
 
 # Build output
 *.exe

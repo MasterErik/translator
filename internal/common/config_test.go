@@ -29,7 +29,7 @@ func TestLoadConfig(t *testing.T) {
 	// defaults
 	t.Run("defaults", func(t *testing.T) {
 		cleanEnv(t, "GLADIA_API_KEY", "LLM_MODEL", "TARGET_LANG", "TARGET_LANGUAGE",
-			"LOG_DIR", "WINDOW_SIZE", "CV_CONTEXT", "LLM_BASE_URL", "LLM_API_KEY", "SAVE_AUDIO")
+			"LOG_DIR", "WINDOW_SIZE", "LLM_BASE_URL", "LLM_API_KEY", "SAVE_AUDIO")
 
 		cfg := minimalYAML(t, "")
 
@@ -230,7 +230,7 @@ LLM_MODEL: "glm-4-flash"
 	t.Run("broken_env_file", func(t *testing.T) {
 		cleanEnv(t, "GLADIA_API_KEY", "LLM_MODEL", "LLM_API_KEY",
 			"TARGET_LANG", "TARGET_LANGUAGE", "LOG_DIR",
-			"WINDOW_SIZE", "CV_CONTEXT", "LLM_BASE_URL")
+			"WINDOW_SIZE", "LLM_BASE_URL")
 
 		dir := t.TempDir()
 		yamlPath := filepath.Join(dir, "config.yaml")
@@ -333,6 +333,87 @@ conversation:
 		cfg := minimalYAML(t, "")
 		if cfg.Conversation.RecentTurns != 9 {
 			t.Errorf("RecentTurns env override: got %d, want 9", cfg.Conversation.RecentTurns)
+		}
+	})
+}
+
+// TestCandidateContextConfig — параметры fact-level candidate context (defaults, YAML, env-override).
+func TestCandidateContextConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cleanEnv(t, "CANDIDATE_CONTEXT_DIR", "CANDIDATE_CONTEXT_MAX_TOKENS",
+			"CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS", "CANDIDATE_CONTEXT_MIN_SCORE",
+			"CANDIDATE_CONTEXT_TOP_K")
+		cfg := minimalYAML(t, "")
+		if cfg.CandidateContext.Dir != "" {
+			t.Errorf("Dir default: got %q, want empty", cfg.CandidateContext.Dir)
+		}
+		if cfg.CandidateContext.MaxTokens != 2000 {
+			t.Errorf("MaxTokens default: got %d, want 2000", cfg.CandidateContext.MaxTokens)
+		}
+		if cfg.CandidateContext.MaxProfileTokens != 150 {
+			t.Errorf("MaxProfileTokens default: got %d, want 150", cfg.CandidateContext.MaxProfileTokens)
+		}
+		if cfg.CandidateContext.MinScore != 0 {
+			t.Errorf("MinScore default: got %v, want 0", cfg.CandidateContext.MinScore)
+		}
+		if cfg.CandidateContext.TopK != 5 {
+			t.Errorf("TopK default: got %d, want 5", cfg.CandidateContext.TopK)
+		}
+	})
+
+	t.Run("from_yaml", func(t *testing.T) {
+		cleanEnv(t, "CANDIDATE_CONTEXT_DIR", "CANDIDATE_CONTEXT_MAX_TOKENS",
+			"CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS", "CANDIDATE_CONTEXT_MIN_SCORE",
+			"CANDIDATE_CONTEXT_TOP_K")
+		cfg := minimalYAML(t, `
+candidate_context:
+  dir: "candidate_context"
+  max_tokens: 3000
+  max_profile_tokens: 200
+  min_score: 0.5
+  top_k: 7
+`)
+		if cfg.CandidateContext.Dir != "candidate_context" {
+			t.Errorf("Dir from YAML: got %q, want %q", cfg.CandidateContext.Dir, "candidate_context")
+		}
+		if cfg.CandidateContext.MaxTokens != 3000 {
+			t.Errorf("MaxTokens from YAML: got %d, want 3000", cfg.CandidateContext.MaxTokens)
+		}
+		if cfg.CandidateContext.MaxProfileTokens != 200 {
+			t.Errorf("MaxProfileTokens from YAML: got %d, want 200", cfg.CandidateContext.MaxProfileTokens)
+		}
+		if cfg.CandidateContext.MinScore != 0.5 {
+			t.Errorf("MinScore from YAML: got %v, want 0.5", cfg.CandidateContext.MinScore)
+		}
+		if cfg.CandidateContext.TopK != 7 {
+			t.Errorf("TopK from YAML: got %d, want 7", cfg.CandidateContext.TopK)
+		}
+	})
+
+	t.Run("env_override", func(t *testing.T) {
+		cleanEnv(t, "CANDIDATE_CONTEXT_DIR", "CANDIDATE_CONTEXT_MAX_TOKENS",
+			"CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS", "CANDIDATE_CONTEXT_MIN_SCORE",
+			"CANDIDATE_CONTEXT_TOP_K")
+		t.Setenv("CANDIDATE_CONTEXT_DIR", "my_context")
+		t.Setenv("CANDIDATE_CONTEXT_MAX_TOKENS", "4000")
+		t.Setenv("CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS", "250")
+		t.Setenv("CANDIDATE_CONTEXT_MIN_SCORE", "0.8")
+		t.Setenv("CANDIDATE_CONTEXT_TOP_K", "10")
+		cfg := minimalYAML(t, "")
+		if cfg.CandidateContext.Dir != "my_context" {
+			t.Errorf("Dir env override: got %q, want %q", cfg.CandidateContext.Dir, "my_context")
+		}
+		if cfg.CandidateContext.MaxTokens != 4000 {
+			t.Errorf("MaxTokens env override: got %d, want 4000", cfg.CandidateContext.MaxTokens)
+		}
+		if cfg.CandidateContext.MaxProfileTokens != 250 {
+			t.Errorf("MaxProfileTokens env override: got %d, want 250", cfg.CandidateContext.MaxProfileTokens)
+		}
+		if cfg.CandidateContext.MinScore != 0.8 {
+			t.Errorf("MinScore env override: got %v, want 0.8", cfg.CandidateContext.MinScore)
+		}
+		if cfg.CandidateContext.TopK != 10 {
+			t.Errorf("TopK env override: got %d, want 10", cfg.CandidateContext.TopK)
 		}
 	})
 }

@@ -13,11 +13,11 @@ import (
 
 // Default delays for the Gladia emulator (realistic per docs/TESTING.md SLA).
 const (
-	defaultConnectDelay     = 200 * time.Millisecond  // POST + WS dial ≤ 2s SLA
-	defaultInterimDelay     = 80 * time.Millisecond   // первый interim — быстро
-	defaultFinalDelay       = 400 * time.Millisecond  // EndOfTurn ≤ 1s SLA
-	defaultTranslationDelay = 15 * time.Millisecond   // почти мгновенно (10-50ms)
-	defaultJitter           = 50 * time.Millisecond   // общий jitter для STT-этапов
+	defaultConnectDelay      = 200 * time.Millisecond // POST + WS dial ≤ 2s SLA
+	defaultInterimDelay      = 80 * time.Millisecond  // первый interim — быстро
+	defaultFinalDelay        = 400 * time.Millisecond // EndOfTurn ≤ 1s SLA
+	defaultTranslationDelay  = 15 * time.Millisecond  // почти мгновенно (10-50ms)
+	defaultJitter            = 50 * time.Millisecond  // общий jitter для STT-этапов
 	defaultTranslationJitter = 5 * time.Millisecond   // jitter для перевода (узкий)
 )
 
@@ -29,8 +29,8 @@ type GladiaEmulator struct {
 	translation string // известный перевод
 	targetLang  string
 
-	audioCh  chan []byte
-	textCh   chan common.STTEvent
+	audioCh   chan []byte
+	textCh    chan common.STTEvent
 	audioDone chan struct{}
 
 	ctx    context.Context
@@ -38,11 +38,11 @@ type GladiaEmulator struct {
 	mu     sync.Mutex
 
 	// Настраиваемые задержки (значения по умолчанию — см. константы).
-	ConnectDelay     time.Duration
-	InterimDelay     time.Duration
-	FinalDelay       time.Duration
-	TranslationDelay time.Duration
-	Jitter           time.Duration // ± jitter для STT-этапов
+	ConnectDelay      time.Duration
+	InterimDelay      time.Duration
+	FinalDelay        time.Duration
+	TranslationDelay  time.Duration
+	Jitter            time.Duration // ± jitter для STT-этапов
 	TranslationJitter time.Duration // ± jitter для перевода (отдельно, уже)
 }
 
@@ -56,12 +56,12 @@ func NewGladiaEmulator(text, translation, targetLang string) *GladiaEmulator {
 		targetLang = "ru"
 	}
 	return &GladiaEmulator{
-		text:             text,
-		translation:      translation,
-		targetLang:       targetLang,
-		audioCh:          make(chan []byte, 64),
-		textCh:           make(chan common.STTEvent, 32),
-		audioDone:        make(chan struct{}),
+		text:              text,
+		translation:       translation,
+		targetLang:        targetLang,
+		audioCh:           make(chan []byte, 64),
+		textCh:            make(chan common.STTEvent, 32),
+		audioDone:         make(chan struct{}),
 		ConnectDelay:      defaultConnectDelay,
 		InterimDelay:      defaultInterimDelay,
 		FinalDelay:        defaultFinalDelay,

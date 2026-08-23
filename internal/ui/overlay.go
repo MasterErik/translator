@@ -29,7 +29,7 @@ type Overlay struct {
 	mu       sync.RWMutex
 	shutdown chan struct{}
 
-	invalidate  func()
+	invalidate    func()
 	prevTransLen  int // для автоскролла переводов
 	prevTranscLen int // для автоскролла транскрипций
 
@@ -39,8 +39,9 @@ type Overlay struct {
 	answersList       layout.List
 
 	// Для тестов: позиция скролла после последнего кадра.
-	TranslationAtEnd   bool
-	TranscriptionAtEnd bool
+	// Защищено mu — читать только через геттеры (см. ниже).
+	translationAtEnd   bool
+	transcriptionAtEnd bool
 
 	sessLog logger.SessionLogger
 }
@@ -144,6 +145,30 @@ func (o *Overlay) GetMessages() []UIMessage {
 	return out
 }
 
+// TranslationAtEnd — доскроллена ли зона переводов до конца после последнего кадра.
+// Потокобезопасно; для тестов.
+func (o *Overlay) TranslationAtEnd() bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.translationAtEnd
+}
+
+// TranscriptionAtEnd — доскроллена ли зона транскрипций до конца после последнего кадра.
+// Потокобезопасно; для тестов.
+func (o *Overlay) TranscriptionAtEnd() bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.transcriptionAtEnd
+}
+
+// TranscriptionScrollLen — длина списка транскрипций после последнего кадра (prevTranscLen).
+// Потокобезопасно; для тестов.
+func (o *Overlay) TranscriptionScrollLen() int {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.prevTranscLen
+}
+
 // ── GioUI Window ──
 
 func (o *Overlay) Run(ctx context.Context) error {
@@ -237,6 +262,8 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	o.mu.RUnlock()
 
 	// Автоскролл: раздельные счётчики для зоны 2 (переводы) и 3 (транскрипции).
+	// Состояние скролла читается тестами из другой горутины — под блокировкой.
+	o.mu.Lock()
 	needScrollTrans := len(translations) > o.prevTransLen
 	if needScrollTrans {
 		o.prevTransLen = len(translations)
@@ -245,8 +272,9 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	if needScrollHist {
 		o.prevTranscLen = len(history)
 	}
-	o.TranslationAtEnd = len(translations) > 0
-	o.TranscriptionAtEnd = len(history) > 0
+	o.translationAtEnd = len(translations) > 0
+	o.transcriptionAtEnd = len(history) > 0
+	o.mu.Unlock()
 
 	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
 	paintBackground(gtx, bg)

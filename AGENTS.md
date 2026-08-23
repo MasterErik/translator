@@ -1,82 +1,65 @@
 # AGENTS.md — Translator Project Code Requirements
 
-## Документация
-
-Вся архитектура, диаграммы, интерфейсы, конфигурация, shutdown, Gladia API, LLM — в одном файле:
+## Документация (on-demand, не в постоянный context)
 
 | Файл | Содержание |
 |---|---|
-| `docs/ARCHITECTURE.md` | **Единый источник правды:** диаграмма потока, Gladia v2, LLM, Dispatcher, конфигурация, shutdown |
-| `docs/TESTING.md` | Интеграционные тесты, SLA & Performance Test Constraints |
-| `docs/UI.md` | Четырёхзонный layout, параметры окна, автоскролл |
-| `docs/gladia-flow.md` | Детальная схема Gladia WebSocket (двухфазный коннект) |
-| `docs/qa-architecture.md` | Архитектура ответов на вопросы (LLM QA): Candidate/Conversation context, F1-F4/Esc, retrieval |
-| `.env.example` | Шаблон переменных окружения |
-| `config.yaml` | Несекретные параметры |
+| `docs/ARCHITECTURE.md` | Единый источник правды: поток, Gladia v2, LLM, Dispatcher, shutdown |
+| `docs/TESTING.md` | Интеграционные тесты, SLA |
+| `docs/UI.md` | Layout, окно, автоскролл |
+| `docs/gladia-flow.md` | Gladia WebSocket (двухфазный коннект) |
+| `docs/qa-architecture.md` | LLM QA: Candidate/Conversation, F1-F4/Esc |
+| `docs/candidate-context-architecture.md` | Candidate context: fact-level retrieval (пакет `internal/context`) |
+| `docs/candidate-context-format.md` | Формат candidate context: manifest.json, index.json, markers |
+| `.env.example` / `config.yaml` | Шаблон окружения / несекретные параметры |
 
 ## Ключевые пакеты
 
 ```
 internal/
-├── pipeline/     # Оркестратор: New(), Run(), shutdown, делегаты → dispatcher
-├── dispatcher/   # Маршрутизация STT-событий → UI + LLM (выделен 2026-07-31)
+├── pipeline/     # оркестратор New/Run/shutdown, делегаты → dispatcher
+├── dispatcher/   # STT-события → UI + LLM
 ├── capture/      # malgo WASAPI: 80ms фреймы, 48k→16k ресемплинг
 ├── stt/          # GladiaProvider: двухфазный WS, writePump/readPump
 ├── translator/   # LLMProvider, OpenAIProvider, IsQuestion, промпты
-├── ui/           # GioUI v0.10.1: 4 зоны, автоскролл, WS_EX_NOACTIVATE
+├── ui/           # GioUI v0.10.1: 4 зоны, WS_EX_NOACTIVATE
 ├── logger/       # CSV-лог + MP3 аудио, VAD-светофор
+├── context/      # candidate context: fact-level lexical retrieval (index/score/budget)
 └── common/       # Config, STTEvent, UIEvent
-
-## Инструменты анализа кода (CodeGraph MCP)
-
-- ✅ **ВСЕГДА первым** вызывай `codegraph_explore` — он возвращает verbatim source с номерами строк. Эквивалент `read_file` + `search_files` в одном вызове
-- `read_file` — только для не-кода: документация (`.md`), конфигурация (`.yaml`, `.env`), скрипты (`.py`, `.sh`)
-- `search_files` — только для поиска не-Go файлов
-- CodeGraph автосинхронизирует индекс через `serve --mcp` (встроенный file watcher) — ручной `codegraph sync` не нужен
+```
 
 ## Язык и стиль
 
-- Документация — на русском
-- Код, имена переменных, функций, типов — на английском
+- Документация — на русском; код, имена переменных, функций, типов — на английском.
 
-## Go-специфичные требования
+## Go-требования
 
-- **Версия:** Go 1.22+
-- **Форматирование:** `gofmt` / `goimports` перед коммитом
-- **Линтинг:** `go vet ./...` — ноль предупреждений
-- **Структура:** Standard Go project layout (`test/`, `internal/`)
-- **Пакеты:** Один пакет — одна ответственность. Нет циклических зависимостей
+- Go 1.22+; `gofmt` / `goimports` перед коммитом; `go vet ./...` — ноль предупреждений.
+- Standard project layout (`test/`, `internal/`); один пакет — одна ответственность; нет циклических зависимостей.
 
 ## Concurrency & Safety (ОБЯЗАТЕЛЬНО)
 
-- **Shared state:** `sync.Mutex` / `sync.RWMutex` или каналы
-- **Context:** каждая долгоживущая горутина принимает `context.Context`; соблюдает `ctx.Done()`
-- **Graceful shutdown:** SIGINT/SIGTERM → cancel context → drain channels → close resources → flush logs
-- **Goroutine leaks:** каждый `go` statement имеет ясный путь выхода
-- **Channel discipline:** отправитель закрывает канал; буферизация обоснована; только `select`
+- Shared state: `sync.Mutex` / `sync.RWMutex` или каналы.
+- Каждая долгоживущая горутина принимает `context.Context`, соблюдает `ctx.Done()`.
+- Graceful shutdown: SIGINT/SIGTERM → cancel context → drain channels → close resources → flush logs.
+- Goroutine leaks: каждый `go` statement имеет ясный путь выхода.
+- Channel discipline: отправитель закрывает канал; буферизация обоснована; только `select`.
 
 ## Обработка ошибок
 
-- **Никаких `panic()`** в production-коде
-- **Каждая ошибка:** `fmt.Errorf("context: %w", err)`
-- **Сетевые вызовы:** `context.WithTimeout`; exponential backoff при реконнектах
-- **Логирование:** `log/slog` (structured logging)
-- `_ = err` — только с комментарием
+- Никаких `panic()` в production-коде.
+- Каждая ошибка: `fmt.Errorf("context: %w", err)`.
+- Сетевые вызовы: `context.WithTimeout`; exponential backoff при реконнектах.
+- Логирование: `log/slog` (structured logging); `_ = err` — только с комментарием.
 
 ## Тестирование
 
-- Каждый пакет имеет `<name>_test.go`
-- Покрытие: минимум 90% для `internal/`
-- Моки через ручные stub'ы (предпочтительно) или `gomock`
-- Table-driven tests для чистых функций
-- Интеграционные тесты: `*_integration_test.go` с билд-тегом `//go:build integration`
+- Каждый пакет имеет `<name>_test.go`; покрытие минимум 90% для `internal/`.
+- Моки через ручные stub'ы или gomock; table-driven tests для чистых функций.
+- Интеграционные тесты: `*_integration_test.go` с билд-тегом `//go:build integration`.
 
-## Зависимости
+## Зависимости и Git
 
-- Точные версии в `go.mod`; `go mod tidy` перед коммитом
-
-## Git workflow
-
-- **main** — стабильная ветка; **feat/<name>** — фичи
-- Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
-- Pre-commit: `go fmt ./... && go vet ./... && go test ./...`
+- Точные версии в `go.mod`; `go mod tidy` перед коммитом.
+- main — стабильная ветка; feat/<name> — фичи; Conventional commits.
+- Pre-commit: `go fmt ./... && go vet ./... && go test ./...`.

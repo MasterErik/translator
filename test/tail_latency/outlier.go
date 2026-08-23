@@ -7,7 +7,7 @@ import (
 
 // outlierDetector выполняет детекцию выбросов двумя методами: IQR и Z-score.
 type outlierDetector struct {
-	iqrMultiplier  float64 // обычно 1.5
+	iqrMultiplier   float64 // обычно 1.5
 	zscoreThreshold float64 // обычно 3.0
 }
 
@@ -21,10 +21,10 @@ func newOutlierDetector() *outlierDetector {
 
 // OutlierResult — результат детекции для одного значения.
 type OutlierResult struct {
-	Value     time.Duration
-	IsIQR     bool // выброс по IQR
-	IsZScore  bool // выброс по Z-score
-	ZScore    float64
+	Value    time.Duration
+	IsIQR    bool // выброс по IQR
+	IsZScore bool // выброс по Z-score
+	ZScore   float64
 }
 
 // Detect возвращает результаты детекции для слайса значений.

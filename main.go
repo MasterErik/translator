@@ -45,6 +45,7 @@ func main() {
 		LLMModel:             cfg.LLMModel,
 		MaxTokens:            cfg.MaxTokens,
 		CandidateContextFile: cfg.CandidateContextFile,
+		CandidateContext:     cfg.CandidateContext,
 		RecentTurns:          cfg.Conversation.RecentTurns,
 		MaxContextTokens:     cfg.Conversation.MaxContextTokens,
 		OverlayCfg: ui.OverlayConfig{

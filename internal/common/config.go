@@ -46,6 +46,9 @@ type Config struct {
 	// Candidate context file (база CV) — путь к текстовому файлу с фактами кандидата.
 	CandidateContextFile string `yaml:"CANDIDATE_CONTEXT_FILE"`
 
+	// Candidate context — fact-level retrieval (каталог с manifest.json + sections/).
+	CandidateContext CandidateContextConfig `yaml:"candidate_context"`
+
 	// Conversation context — ограничение истории интервью.
 	Conversation ConversationConfig `yaml:"conversation"`
 }
@@ -54,6 +57,15 @@ type Config struct {
 type ConversationConfig struct {
 	RecentTurns      int `yaml:"recent_turns"`       // максимум turns в context
 	MaxContextTokens int `yaml:"max_context_tokens"` // лимит размера context
+}
+
+// CandidateContextConfig — параметры fact-level candidate context retrieval.
+type CandidateContextConfig struct {
+	Dir              string  `yaml:"dir"`                // каталог candidate_context (manifest.json + sections/)
+	MaxTokens        int     `yaml:"max_tokens"`         // бюджет токенов на факты
+	MaxProfileTokens int     `yaml:"max_profile_tokens"` // бюджет токенов на профиль
+	MinScore         float64 `yaml:"min_score"`          // минимальный score отобранного факта
+	TopK             int     `yaml:"top_k"`              // максимум отобранных фактов
 }
 
 func setDefault[T comparable](v *T, def T) {
@@ -72,6 +84,10 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.LogLevel, "info")
 	setDefault(&c.Conversation.RecentTurns, 6)
 	setDefault(&c.Conversation.MaxContextTokens, 4000)
+	setDefault(&c.CandidateContext.MaxTokens, 2000)
+	setDefault(&c.CandidateContext.MaxProfileTokens, 150)
+	setDefault(&c.CandidateContext.MinScore, 0.0)
+	setDefault(&c.CandidateContext.TopK, 5)
 }
 
 // loadFromEnv loads .env via godotenv, then reads environment variables
@@ -94,6 +110,32 @@ func (c *Config) loadFromEnv() {
 	if v := os.Getenv("CONVERSATION_MAX_CONTEXT_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Conversation.MaxContextTokens = n
+		}
+	}
+
+	// Вложенная секция candidate_context — env-override вручную
+	// (reflection не заходит во вложенные структуры и не поддерживает float64).
+	if v := os.Getenv("CANDIDATE_CONTEXT_DIR"); v != "" {
+		c.CandidateContext.Dir = v
+	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.CandidateContext.MaxTokens = n
+		}
+	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.CandidateContext.MaxProfileTokens = n
+		}
+	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_MIN_SCORE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			c.CandidateContext.MinScore = f
+		}
+	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_TOP_K"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.CandidateContext.TopK = n
 		}
 	}
 }

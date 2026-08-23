@@ -988,6 +988,53 @@ func TestDispatcher_LogTranslationSurvivesShutdown(t *testing.T) {
 	}
 }
 
+// TestDispatcherCandidateContextFn — CandidateContextFn используется вместо
+// legacy CandidateContext string при генерации ответа.
+func TestDispatcherCandidateContextFn(t *testing.T) {
+	engine := &mockEngine{answers: []string{"ответ"}}
+	overlay := &mockOverlay{}
+	logger := &mockLogger{}
+	cfg := DefaultConfig()
+	cfg.AnswerQueueSize = -1
+	cfg.CandidateContext = "legacy should be ignored"
+	cfg.CandidateContextFn = func(question string) string {
+		return "FN:" + question
+	}
+	d := New(overlay, engine, logger, cfg)
+
+	d.GenerateAnswers("What is Redis?")
+
+	reqs := engine.Reqs()
+	if len(reqs) != 1 {
+		t.Fatalf("ожидался 1 запрос, получено %d", len(reqs))
+	}
+	if reqs[0].CandidateContext != "FN:What is Redis?" {
+		t.Errorf("CandidateContext: got %q, want %q", reqs[0].CandidateContext, "FN:What is Redis?")
+	}
+}
+
+// TestDispatcherCandidateContextLegacy — без CandidateContextFn используется
+// legacy CandidateContext string (обратная совместимость).
+func TestDispatcherCandidateContextLegacy(t *testing.T) {
+	engine := &mockEngine{answers: []string{"ответ"}}
+	overlay := &mockOverlay{}
+	logger := &mockLogger{}
+	cfg := DefaultConfig()
+	cfg.AnswerQueueSize = -1
+	cfg.CandidateContext = "legacy context"
+	d := New(overlay, engine, logger, cfg)
+
+	d.GenerateAnswers("What is Redis?")
+
+	reqs := engine.Reqs()
+	if len(reqs) != 1 {
+		t.Fatalf("ожидался 1 запрос, получено %d", len(reqs))
+	}
+	if reqs[0].CandidateContext != "legacy context" {
+		t.Errorf("CandidateContext: got %q, want %q", reqs[0].CandidateContext, "legacy context")
+	}
+}
+
 // ── Вспомогательные моки ──────────────────────────────────────────────
 
 // mockErrorLogger — логгер, возвращающий ошибку из LogTranslation.

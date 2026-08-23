@@ -1,0 +1,12 @@
+{
+  "queries": [
+    {"question": "Have you worked with Oracle?", "relevant_fact_ids": ["skills-data"]},
+    {"question": "What is your approach to SQL versus ORM?", "relevant_fact_ids": ["sum-overview"]},
+    {"question": "Describe your experience with PHP.", "relevant_fact_ids": ["exp-dev-ai-transformation"]},
+    {"question": "Tell me about the healthcare platform migration.", "relevant_fact_ids": ["exp-software-engineer-data"]},
+    {"question": "Do you have experience with RabbitMQ?", "relevant_fact_ids": ["skills-streaming"]},
+    {"question": "What publications do you have?", "relevant_fact_ids": ["pub-publications"]},
+    {"question": "Tell me about your work with Virtual Threads.", "relevant_fact_ids": ["exp-java-head"]},
+    {"question": "Do you have open source projects?", "relevant_fact_ids": ["pub-opensource"]}
+  ]
+}
