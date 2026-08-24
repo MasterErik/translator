@@ -144,6 +144,8 @@ func (m *mockOverlay) AddMessage(msg ui.UIMessage) {
 	m.mu.Unlock()
 }
 
+func (m *mockOverlay) ToggleTranscriptionHistory() {}
+
 func (m *mockOverlay) GetMessages() []ui.UIMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -38,6 +38,10 @@ type Overlay struct {
 	transcriptionList layout.List
 	answersList       layout.List
 
+	// historyVisible — видимость зоны TranscriptionHistory (F9).
+	// Начальное состояние — скрыта. Доступ под mu.
+	historyVisible bool
+
 	// Для тестов: позиция скролла после последнего кадра.
 	// Защищено mu — читать только через геттеры (см. ниже).
 	translationAtEnd   bool
@@ -215,6 +219,22 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 func (o *Overlay) WaitShutdown() { <-o.shutdown }
 
+// ToggleTranscriptionHistory переключает видимость зоны TranscriptionHistory (F9).
+// Потокобезопасно: вызывается из горутины hotkeys.
+func (o *Overlay) ToggleTranscriptionHistory() {
+	o.mu.Lock()
+	o.historyVisible = !o.historyVisible
+	o.mu.Unlock()
+	o.invalidateIf()
+}
+
+// TranscriptionVisible — видима ли зона TranscriptionHistory. Для тестов.
+func (o *Overlay) TranscriptionVisible() bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.historyVisible
+}
+
 func (o *Overlay) applyWindowStyles() {
 	// Gio создаёт нативное окно асинхронно — ждём до 3 секунд с экспоненциальной задержкой.
 	if !tryApplyStyles(findWindowByPID, 3*time.Second, 50*time.Millisecond) {
@@ -259,6 +279,7 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	answers, hasAnswers := o.lastAnswers()
 	translations := o.translationMessages()
 	history := o.historyMessages()
+	historyVisible := o.historyVisible
 	o.mu.RUnlock()
 
 	// Автоскролл: раздельные счётчики для зоны 2 (переводы) и 3 (транскрипции).
@@ -281,7 +302,12 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 
 	fs := o.cfg.FontSize
 
-	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+	historyHeight := historyVisibleHeightPx(fs)
+
+	// Собираем children один раз: зоны 1–3 постоянны, зона 4 (история)
+	// добавляется только при historyVisible — при скрытом состоянии она
+	// и её separator отсутствуют в Flex и не занимают место в layout.
+	children := []layout.FlexChild{
 		// 1. Interim — речь, 2 строки, белый.
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layoutInterim(gtx, th, interim, fs)
@@ -294,22 +320,51 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 		}),
 		layout.Rigid(layoutZoneSeparator),
 
-		// 3. Transcription History — скролл, 8 строк, оригиналы.
-		layout.Flexed(0.35, func(gtx layout.Context) layout.Dimensions {
-			return layoutTranscriptionHistory(gtx, th, history, fs, &o.transcriptionList, needScrollHist)
-		}),
-		layout.Rigid(layoutZoneSeparator),
-
-		// 4. AnswerCandidates — скролл, подсказки (EN+RU).
-		layout.Flexed(0.20, func(gtx layout.Context) layout.Dimensions {
+		// 3. AnswerCandidates — основная зона ответов: всё оставшееся место
+		// (при скрытой истории — практически вся высота окна).
+		layout.Flexed(0.55, func(gtx layout.Context) layout.Dimensions {
 			if !hasAnswers {
 				return layout.Dimensions{}
 			}
 			return layoutAnswers(gtx, th, answers, fs, &o.answersList)
 		}),
-	)
+	}
+
+	// 4. TranscriptionHistory — внизу окна, только при historyVisible (F9).
+	// Высота — ровно historyVisibleLines строк текста.
+	if historyVisible {
+		children = append(children,
+			layout.Rigid(layoutZoneSeparator),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				maxX := gtx.Constraints.Max.X
+				if historyHeight > 0 && gtx.Constraints.Max.Y > historyHeight {
+					gtx.Constraints = layout.Constraints{Max: image.Pt(maxX, historyHeight)}
+				}
+				return layoutTranscriptionHistory(gtx, th, history, fs, &o.transcriptionList, needScrollHist)
+			}),
+		)
+	}
+
+	layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 
 	return layout.Dimensions{Size: gtx.Constraints.Max}
+}
+
+// lineHeightFactor — множитель размера шрифта для высоты строки текста.
+const lineHeightFactor = 1.2
+
+// historyVisibleLines — высота видимой области TranscriptionHistory в строках.
+const historyVisibleLines = 4
+
+// historyVisibleHeightPx — высота видимой области TranscriptionHistory в px:
+// ровно historyVisibleLines строк текста зоны истории (шрифт fs-2, не ниже 10).
+func historyVisibleHeightPx(fs int) int {
+	hfs := fs - 2
+	if hfs < 10 {
+		hfs = 10
+	}
+	lineHeight := int(float32(hfs) * lineHeightFactor)
+	return lineHeight * historyVisibleLines
 }
 
 func (o *Overlay) lastInterim() UIMessage {

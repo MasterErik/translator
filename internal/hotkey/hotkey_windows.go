@@ -16,6 +16,7 @@ const (
 	vkF2  = 0x71
 	vkF3  = 0x72
 	vkF4  = 0x73
+	vkF9  = 0x78
 	vkEsc = 0x1B
 
 	wmHotkey = 0x0312
@@ -55,6 +56,7 @@ var bindings = []hotkeyBinding{
 	{int32(KeyF2), vkF2},
 	{int32(KeyF3), vkF3},
 	{int32(KeyF4), vkF4},
+	{int32(KeyF9), vkF9},
 	{int32(KeyEsc), vkEsc},
 }
 
@@ -92,7 +94,7 @@ func Run(ctx context.Context, onKey func(Key)) error {
 		}
 		if m.message == wmHotkey {
 			switch Key(m.wParam) {
-			case KeyF1, KeyF2, KeyF3, KeyF4, KeyEsc:
+			case KeyF1, KeyF2, KeyF3, KeyF4, KeyF9, KeyEsc:
 				onKey(Key(m.wParam))
 			}
 		}

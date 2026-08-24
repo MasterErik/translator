@@ -36,6 +36,7 @@ type Overlay interface {
 	GetMessages() []ui.UIMessage
 	Run(ctx context.Context) error
 	WaitShutdown()
+	ToggleTranscriptionHistory()
 }
 
 // --------------------------------------------------------------------------
@@ -535,21 +536,30 @@ func (p *Pipeline) runHotkeys(ctx context.Context) {
 }
 
 // handleHotkey маппит функциональную клавишу на команду генерации.
+// F9 (видимость TranscriptionHistory) работает без dispatcher и
+// маршрутизируется прямо в overlay.
 func (p *Pipeline) handleHotkey(k hotkey.Key) {
-	if p.dispatch == nil {
-		return
-	}
 	switch k {
-	case hotkey.KeyF1:
-		p.dispatch.HandleCommand(translator.CommandAnswer)
-	case hotkey.KeyF2:
-		p.dispatch.HandleCommand(translator.CommandThinkDeeper)
-	case hotkey.KeyF3:
-		p.dispatch.HandleCommand(translator.CommandMoreContext)
-	case hotkey.KeyF4:
-		p.dispatch.HandleCommand(translator.CommandSimplerEnglish)
-	case hotkey.KeyEsc:
-		p.dispatch.Cancel()
+	case hotkey.KeyF9:
+		if p.overlay != nil {
+			p.overlay.ToggleTranscriptionHistory()
+		}
+	case hotkey.KeyF1, hotkey.KeyF2, hotkey.KeyF3, hotkey.KeyF4, hotkey.KeyEsc:
+		if p.dispatch == nil {
+			return
+		}
+		switch k {
+		case hotkey.KeyF1:
+			p.dispatch.HandleCommand(translator.CommandAnswer)
+		case hotkey.KeyF2:
+			p.dispatch.HandleCommand(translator.CommandThinkDeeper)
+		case hotkey.KeyF3:
+			p.dispatch.HandleCommand(translator.CommandMoreContext)
+		case hotkey.KeyF4:
+			p.dispatch.HandleCommand(translator.CommandSimplerEnglish)
+		case hotkey.KeyEsc:
+			p.dispatch.Cancel()
+		}
 	}
 }
 

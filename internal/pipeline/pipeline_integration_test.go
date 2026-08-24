@@ -112,6 +112,8 @@ func (o *countingOverlay) AddMessage(msg ui.UIMessage) {
 	o.mu.Unlock()
 }
 
+func (o *countingOverlay) ToggleTranscriptionHistory() {}
+
 func (o *countingOverlay) GetMessages() []ui.UIMessage {
 	o.mu.Lock()
 	defer o.mu.Unlock()

@@ -10,5 +10,6 @@ const (
 	KeyF2
 	KeyF3
 	KeyF4
+	KeyF9 // переключение видимости TranscriptionHistory (overlay)
 	KeyEsc
 )
