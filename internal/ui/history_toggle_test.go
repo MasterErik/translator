@@ -82,9 +82,9 @@ func TestHistoryVisibleHeightPx(t *testing.T) {
 		fs   int
 		want int
 	}{
-		{fs: 18, want: 52},  // hfs=16, 16*0.85=13.6 → 13 px/строка → 52
-		{fs: 10, want: 32},  // hfs=8 <10 → 10, 10*0.85=8.5 → 8 → 32
-		{fs: 24, want: 72},  // hfs=22, 22*0.85=18.7 → 18 → 72
+		{fs: 18, want: 71}, // hfs=16, advance≈17.75 → 17.75*4 ≈ 71
+		{fs: 10, want: 46}, // hfs=8 <10 → 10, advance≈11.38 → 11.38*4 ≈ 46
+		{fs: 24, want: 96}, // hfs=22, advance≈24.0 → 24*4 = 96
 	}
 	for _, tt := range tests {
 		got := historyVisibleHeightPx(tt.fs)
@@ -92,10 +92,9 @@ func TestHistoryVisibleHeightPx(t *testing.T) {
 			t.Errorf("historyVisibleHeightPx(%d) = %d, want %d", tt.fs, got, tt.want)
 		}
 	}
-	// floor-кейс: fs=10 → hfs=10 (минимум), не 8.
-	lh := lineHeightAt(10)
-	if got := historyVisibleHeightPx(10); got != lh*historyVisibleLines {
-		t.Errorf("historyVisibleHeightPx(10) = %d, want floor по hfs=10", got)
+	// floor-кейс: fs=10 → hfs=10 (минимум), не 8; высота = advance(10) × 4 строки.
+	if got := historyVisibleHeightPx(10); got != int(measuredLineAdvancePx(10)*historyVisibleLines+0.5) {
+		t.Errorf("historyVisibleHeightPx(10) = %d, want advance(hfs=10)×4", got)
 	}
 }
 

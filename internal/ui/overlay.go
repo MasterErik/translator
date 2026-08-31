@@ -356,11 +356,6 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
 
-// lineHeightFactor — множитель размера шрифта для расчётной высоты строки
-// (каркасные высоты пустых зон, высота зоны 4). Синхронизирован с
-// lineHeightCompact.
-const lineHeightFactor = 0.85
-
 // lineHeightCompact — множитель размера шрифта для базовой высоты строки в
 // overlayLabel (baseline до baseline). Дефолтное межстрочное продвижение Gio
 // = 1.0em (замер: 5 слов в 10 строк, 224px ≈ 10×fs при fs=18), глиф-бокс
@@ -373,11 +368,13 @@ const lineHeightCompact = 0.85
 // interimVisibleLines — высота зоны Interim (пустая) в строках — стартовый каркас.
 const interimVisibleLines = 2
 
-// lineHeightAt — целочисленная высота строки (baseline до baseline) для
-// размера шрифта fs в px. Общая точка расчёта для emptyZoneHeight и
-// historyVisibleHeightPx.
+// lineHeightAt — целочисленная высота строки (baseline до baseline) в px для
+// размера шрифта fs — ИЗМЕРЕННЫЙ advance однострочного рендера через
+// overlayLabel, а не эмпирический множитель. Общая точка расчёта для
+// emptyZoneHeight и historyVisibleHeightPx; каркасные высоты совпадают с тем,
+// куда зоны придут при появлении текста.
 func lineHeightAt(fs int) int {
-	return int(float32(fs) * lineHeightFactor)
+	return measuredLineAdvance(fs)
 }
 
 // emptyZoneHeight — высота одной строки зоны в px при заданном размере шрифта.
@@ -397,14 +394,60 @@ func emptyZoneDims(gtx layout.Context, height int) layout.Dimensions {
 const historyVisibleLines = 4
 
 // historyVisibleHeightPx — высота видимой области TranscriptionHistory в px:
-// ровно historyVisibleLines строк текста зоны истории (шрифт fs-2, не ниже 10).
+// ровно historyVisibleLines строк текста зоны истории (шрифт fs-2, не ниже 10),
+// причём высота строки — измеренный advance (не множитель).
 func historyVisibleHeightPx(fs int) int {
 	hfs := fs - 2
 	if hfs < 10 {
 		hfs = 10
 	}
-	lineHeight := int(float32(hfs) * lineHeightFactor)
-	return lineHeight * historyVisibleLines
+	return int(measuredLineAdvancePx(hfs)*float64(historyVisibleLines) + 0.5)
+}
+
+// lineAdvanceCache — кэш измеренного advance по размеру шрифта: offscreen-замер
+// детерминирован (шрифт Go, метрика шрифта не зависит от темы), поэтому
+// измеряем один раз на fs. Защищён мьютексом (вызывается из render-горутины
+// и тестов).
+var lineAdvanceCache = struct {
+	sync.Mutex
+	m map[int]float64
+}{m: make(map[int]float64)}
+
+// measuredLineAdvancePx — фактическое межстрочное продвижение (advance) строки
+// в px (float, с учётом ascent-добавки Gio), отрисованной через overlayLabel.
+func measuredLineAdvancePx(fs int) float64 {
+	lineAdvanceCache.Lock()
+	defer lineAdvanceCache.Unlock()
+	if v, ok := lineAdvanceCache.m[fs]; ok {
+		return v
+	}
+	th := material.NewTheme()
+	lines := "Hg\nHg\nHg\nHg\nHg\nHg\nHg\nHg"
+	advance := measuringLineAdvance(th, fs, lines, 8)
+	lineAdvanceCache.m[fs] = advance
+	return advance
+}
+
+// measuredLineAdvance — округлённый advance строки (px) для размера шрифта fs.
+func measuredLineAdvance(fs int) int {
+	return int(measuredLineAdvancePx(fs) + 0.5)
+}
+
+// measuringLineAdvance — offscreen-замер advance строки: высота label (8 явных
+// строк, ширина достаточна, текст не переносится) / 8.
+func measuringLineAdvance(th *material.Theme, fs int, text string, nLines int) float64 {
+	l := overlayLabel(th, unit.Sp(fs), text)
+	ops := new(op.Ops)
+	gtx := layout.Context{
+		Ops: ops,
+		Constraints: layout.Constraints{
+			Min: image.Pt(0, 0),
+			Max: image.Pt(500, 100000),
+		},
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	h := l.Layout(gtx).Size.Y
+	return float64(h) / float64(nLines)
 }
 
 func (o *Overlay) lastInterim() UIMessage {
