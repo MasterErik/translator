@@ -562,7 +562,7 @@ func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 			l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		}
 		l.Alignment = text.Start
-		return l.Layout(gtx)
+		return compactLineBox(gtx, l, afs)
 	})
 }
 
@@ -595,7 +595,7 @@ func layoutTranslationHistory(gtx layout.Context, th *material.Theme, messages [
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 2
-		return l.Layout(gtx)
+		return compactLineBox(gtx, l, hfs)
 	})
 }
 
@@ -618,8 +618,21 @@ func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history 
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 8
-		return l.Layout(gtx)
+		return compactLineBox(gtx, l, hfs)
 	})
+}
+
+// compactLineBox — рендерит строку списка с высотой, ограниченной компактным
+// межстрочным интервалом (lineHeightAt): List раскладывает элементы по их
+// заявленной высоте, а глиф-бокс Go-шрифта ~1.33em даёт визуально большой
+// зазор. Явная высота прижимает строки списка друг к другу.
+func compactLineBox(gtx layout.Context, label material.LabelStyle, fs int) layout.Dimensions {
+	dims := label.Layout(gtx)
+	h := lineHeightAt(fs)
+	if h > 0 && dims.Size.Y > h {
+		dims.Size.Y = h
+	}
+	return dims
 }
 
 // ── Helpers ──
