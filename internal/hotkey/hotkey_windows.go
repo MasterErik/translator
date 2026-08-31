@@ -55,7 +55,6 @@ var bindings = []hotkeyBinding{
 	{int32(KeyF2), vkF2},
 	{int32(KeyF3), vkF3},
 	{int32(KeyF4), vkF4},
-	{int32(KeyF4), vkF4},
 	{int32(KeyEsc), vkEsc},
 }
 
