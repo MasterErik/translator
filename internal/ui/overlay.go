@@ -332,10 +332,7 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 		// 3. AnswerCandidates — основная зона ответов: всё оставшееся место
 		// (при скрытой истории — практически вся высота окна).
 		layout.Flexed(0.55, func(gtx layout.Context) layout.Dimensions {
-			if !hasAnswers {
-				return layout.Dimensions{}
-			}
-			return layoutAnswers(gtx, th, answers, fs, &o.answersList)
+			return o.layoutAnswersZone(gtx, th, answers, hasAnswers, fs)
 		}),
 	}
 
@@ -361,6 +358,22 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 
 // lineHeightFactor — множитель размера шрифта для высоты строки текста.
 const lineHeightFactor = 1.2
+
+// interimVisibleLines — высота зоны Interim (пустая) в строках — стартовый каркас.
+const interimVisibleLines = 2
+
+// emptyZoneHeight — высота одной строки зоны в px при заданном размере шрифта.
+// Используется для резервирования высоты пустых зон стартового каркаса.
+func emptyZoneHeight(fs int) int {
+	return int(float32(fs) * lineHeightFactor)
+}
+
+// emptyZoneDims — размеры пустой зоны: ширина окна, высота ровно height px.
+// Стартовый каркас: пустые зоны резервируют высоту, чтобы separator-линии
+// были видны до появления текста.
+func emptyZoneDims(gtx layout.Context, height int) layout.Dimensions {
+	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, height)}
+}
 
 // historyVisibleLines — высота видимой области TranscriptionHistory в строках.
 const historyVisibleLines = 4
@@ -428,7 +441,7 @@ func layoutZoneSeparator(gtx layout.Context) layout.Dimensions {
 
 func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
 	if msg.Text == "" {
-		return layout.Dimensions{Size: gtx.Constraints.Max}
+		return emptyZoneDims(gtx, emptyZoneHeight(fs)*interimVisibleLines)
 	}
 	label := material.Label(th, unit.Sp(fs), msg.Text)
 	label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
@@ -441,6 +454,15 @@ func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 type answerLine struct {
 	text string
 	isRU bool
+}
+
+// layoutAnswersZone — зона AnswerCandidates: при отсутствии ответов резервирует
+// одну строку каркаса (чтобы separator-линии были видны), иначе — скролл ответов.
+func (o *Overlay) layoutAnswersZone(gtx layout.Context, th *material.Theme, msg UIMessage, has bool, fs int) layout.Dimensions {
+	if !has {
+		return emptyZoneDims(gtx, emptyZoneHeight(fs))
+	}
+	return layoutAnswers(gtx, th, msg, fs, &o.answersList)
 }
 
 // layoutAnswers — подсказки с EN и RU на отдельных строках, с вертикальным скроллом.
@@ -486,7 +508,7 @@ func splitBilingual(s string) (en, ru string) {
 // layoutTranslationHistory — скролл переводов из Translation-сообщений (10 строк).
 func layoutTranslationHistory(gtx layout.Context, th *material.Theme, messages []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if len(messages) == 0 {
-		return layout.Dimensions{}
+		return emptyZoneDims(gtx, emptyZoneHeight(fs))
 	}
 
 	hfs := fs - 2
