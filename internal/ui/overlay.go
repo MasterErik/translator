@@ -39,7 +39,7 @@ type Overlay struct {
 	answersList       layout.List
 
 	// historyVisible — видимость зоны TranscriptionHistory (F4).
-	// Начальное состояние — видна (все зоны и separator'ы с запуска). Доступ под mu.
+	// Начальное состояние — скрыта (зона 4 и её separator отсутствуют до F4). Доступ под mu.
 	historyVisible bool
 
 	// Для тестов: позиция скролла после последнего кадра.
@@ -67,7 +67,7 @@ func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 		translationList:   layout.List{Axis: layout.Vertical},
 		transcriptionList: layout.List{Axis: layout.Vertical},
 		answersList:       layout.List{Axis: layout.Vertical},
-		historyVisible:    true,
+		historyVisible:    false,
 		sessLog:           sessLog,
 	}
 }
