@@ -25,26 +25,32 @@ func newTestContext(width, height int) (layout.Context, *op.Ops) {
 	return gtx, ops
 }
 
-// TestHistoryInitiallyHidden — начальное состояние TranscriptionHistory: скрыта.
-func TestHistoryInitiallyHidden(t *testing.T) {
+// TestHistoryInitiallyVisible — начальное состояние TranscriptionHistory: видна
+// (все 4 зоны и separator-линии отрисовываются с запуска).
+func TestHistoryInitiallyVisible(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
-	if o.TranscriptionVisible() {
-		t.Error("начальное состояние TranscriptionVisible = true, want false")
+	if !o.HistoryVisible() {
+		t.Error("начальное состояние HistoryVisible = false, want true")
 	}
 }
 
-// TestToggleTranscriptionHistory — F9-переключение: скрыт → показан → скрыт.
+// TestToggleTranscriptionHistory — F4-переключение: виден → скрыт → виден.
 func TestToggleTranscriptionHistory(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
 
-	o.ToggleTranscriptionHistory()
-	if !o.TranscriptionVisible() {
-		t.Error("после 1-го toggle TranscriptionVisible = false, want true")
+	// Начальное состояние — виден.
+	if !o.HistoryVisible() {
+		t.Fatal("начальное состояние HistoryVisible = false, want true")
 	}
 
 	o.ToggleTranscriptionHistory()
-	if o.TranscriptionVisible() {
-		t.Error("после 2-го toggle TranscriptionVisible = true, want false")
+	if o.HistoryVisible() {
+		t.Error("после 1-го toggle HistoryVisible = true, want false")
+	}
+
+	o.ToggleTranscriptionHistory()
+	if !o.HistoryVisible() {
+		t.Error("после 2-го toggle HistoryVisible = false, want true")
 	}
 }
 
@@ -96,6 +102,7 @@ func TestHistoryVisibleHeightPx(t *testing.T) {
 // ограничивает зону истории нулём: separator и зона отсутствуют.
 func TestRenderHistoryHiddenOccupiesNoSpace(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
+	o.ToggleTranscriptionHistory() // скрыть (по умолчанию видна)
 	for i := 1; i <= 10; i++ {
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("line %d", i)})
 	}
@@ -111,7 +118,7 @@ func TestRenderHistoryHiddenOccupiesNoSpace(t *testing.T) {
 	if dims.Size.X != 800 || dims.Size.Y != 650 {
 		t.Errorf("render size = %v, want 800x650", dims.Size)
 	}
-	if o.TranscriptionVisible() {
+	if o.HistoryVisible() {
 		t.Error("historyVisible не должен меняться рендером")
 	}
 }
@@ -123,7 +130,7 @@ func TestRenderHistoryVisibleCappedAt4Lines(t *testing.T) {
 	for i := 1; i <= 40; i++ {
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("line %d", i)})
 	}
-	o.ToggleTranscriptionHistory() // показать
+	// historyVisible уже true из конструктора — зона сразу видима.
 
 	gtx, _ := newTestContext(800, 650)
 	th := material.NewTheme()
@@ -153,6 +160,8 @@ func TestRenderInterimTranslationRegression(t *testing.T) {
 	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта", MsgStatus: "done"})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"EN: a | RU: б"}})
 
+	o.ToggleTranscriptionHistory() // скрыть (по умолчанию видна) для ветки false
+
 	th := material.NewTheme()
 
 	for _, visible := range []bool{false, true} {
@@ -178,7 +187,7 @@ func TestRenderInterimTranslationRegression(t *testing.T) {
 // история при visible: рендер не паникует.
 func TestRenderEmptyAnswersAndNoHistory(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
-	o.ToggleTranscriptionHistory() // visible, но история пуста
+	// historyVisible уже true из конструктора — visible, но история пуста.
 
 	gtx, _ := newTestContext(800, 650)
 	th := material.NewTheme()
