@@ -151,7 +151,7 @@ conversation:
 
 ## LLM
 
-OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1 — обычный ответ, F2 — think deeper, F3 — больше контекста, F4 — проще английский, Esc — отмена очереди.
+OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1 — обычный ответ, F2 — больше контекста, F3 — проще английский, F4 — окно оригиналов (тумблер), Esc — отмена очереди.
 
 **Подробнее:** `docs/qa-architecture.md`
 
@@ -263,9 +263,10 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 
 **Управление генерацией (функциональные клавиши F1–F4, Esc):**
 
-- `commandCh` (chan `GenerationCommand`) — команды F1–F4 из глобальных hotkeys (`internal/hotkey/`, Win32 `RegisterHotKey`).
+- `commandCh` (chan `GenerationCommand`) — команды F1–F3 из глобальных hotkeys (`internal/hotkey/`, Win32 `RegisterHotKey`).
 - `cancelCh` — Esc: отменяет активную генерацию (`activeCancel`) и очищает очередь (`cancelled` + `dropQueue`).
-- F1 (`CommandAnswer`) — обычная генерация; F2–F4 — regeneration на текущий вопрос без нового turn (последняя версия становится текущим ответом).
+- F1 (`CommandAnswer`) — обычная генерация; F2–F3 — regeneration на текущий вопрос без нового turn (последняя версия становится текущим ответом).
+- F4 — тумблер зоны 4 (окно оригиналов): идёт в `overlay.ToggleTranscriptionHistory()` напрямую, **мимо dispatcher**. Зона 4 и её separator-линия видны при старте (`historyVisible=true`); F4 прячет/показывает.
 - Один `answerWorker` обрабатывает и вопросы, и команды **последовательно** (FIFO) — без параллельных LLM-запросов.
 
 ### Логирование
