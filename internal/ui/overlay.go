@@ -220,7 +220,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 func (o *Overlay) WaitShutdown() { <-o.shutdown }
 
-// ToggleTranscriptionHistory переключает видимость зоны TranscriptionHistory (F9).
+// ToggleTranscriptionHistory переключает видимость зоны TranscriptionHistory (F4).
 // Потокобезопасно: вызывается из горутины hotkeys.
 func (o *Overlay) ToggleTranscriptionHistory() {
 	o.mu.Lock()
@@ -339,7 +339,7 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 		}),
 	}
 
-	// 4. TranscriptionHistory — внизу окна, только при historyVisible (F9).
+	// 4. TranscriptionHistory — внизу окна, только при historyVisible (F4).
 	// Высота — ровно historyVisibleLines строк текста.
 	if historyVisible {
 		children = append(children,
