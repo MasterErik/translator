@@ -357,7 +357,16 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 }
 
 // lineHeightFactor — множитель размера шрифта для высоты строки текста.
-const lineHeightFactor = 1.2
+// После уменьшения межстрочного интервала вдвое компактная высота строки
+// задаётся через overlayLabel (LineHeight = sp*lineHeightCompact, строгий масштаб).
+// Значение 0.7 эмпирически даёт высоту строки ≈ fs*0.7 (≈ 13px при fs=18)
+// против дефолтных ~26px — ровно половина.
+const lineHeightFactor = 0.7
+
+// lineHeightCompact — множитель размера шрифта для компактной высоты строки
+// в overlayLabel (baseline до baseline). Дефолтная метрика Gio ~1.44 em (H0≈26px
+// при fs=18); 0.7 даёт ~13px — уменьшение вдвое.
+const lineHeightCompact = 0.7
 
 // interimVisibleLines — высота зоны Interim (пустая) в строках — стартовый каркас.
 const interimVisibleLines = 2
@@ -443,7 +452,7 @@ func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 	if msg.Text == "" {
 		return emptyZoneDims(gtx, emptyZoneHeight(fs)*interimVisibleLines)
 	}
-	label := material.Label(th, unit.Sp(fs), msg.Text)
+	label := overlayLabel(th, unit.Sp(fs), msg.Text)
 	label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 	label.Alignment = text.Start
 	label.MaxLines = 2
@@ -484,7 +493,7 @@ func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 
 	return list.Layout(gtx, len(items), func(gtx layout.Context, idx int) layout.Dimensions {
 		line := items[idx]
-		l := material.Label(th, unit.Sp(afs), line.text)
+		l := overlayLabel(th, unit.Sp(afs), line.text)
 		if line.isRU {
 			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
 		} else {
@@ -520,7 +529,7 @@ func layoutTranslationHistory(gtx layout.Context, th *material.Theme, messages [
 		list.ScrollTo(len(messages) - 1)
 	}
 	return list.Layout(gtx, len(messages), func(gtx layout.Context, i int) layout.Dimensions {
-		l := material.Label(th, unit.Sp(hfs), messages[i].Text)
+		l := overlayLabel(th, unit.Sp(hfs), messages[i].Text)
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 2
@@ -543,7 +552,7 @@ func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history 
 		list.ScrollTo(len(history) - 1)
 	}
 	return list.Layout(gtx, len(history), func(gtx layout.Context, i int) layout.Dimensions {
-		l := material.Label(th, unit.Sp(hfs), history[i].Text)
+		l := overlayLabel(th, unit.Sp(hfs), history[i].Text)
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 8
@@ -552,6 +561,17 @@ func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history 
 }
 
 // ── Helpers ──
+
+// overlayLabel — единая точка создания текстовой строки в oверлее.
+// Задаёт компактный межстрочный интервал: LineHeight = sp*lineHeightCompact,
+// LineHeightScale = 1 (строгий — не умножается на дефолтные 1.2), что даёт
+// высоту строки ≈ половину от дефолтной метрики Gio (~26px → ~13px при fs=18).
+func overlayLabel(th *material.Theme, sp unit.Sp, text string) material.LabelStyle {
+	l := material.Label(th, sp, text)
+	l.LineHeight = unit.Sp(float32(sp) * lineHeightCompact)
+	l.LineHeightScale = 1.0
+	return l
+}
 
 func paintBackground(gtx layout.Context, c color.NRGBA) {
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()

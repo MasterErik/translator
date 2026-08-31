@@ -82,9 +82,9 @@ func TestHistoryVisibleHeightPx(t *testing.T) {
 		fs   int
 		want int
 	}{
-		{fs: 18, want: 76},  // hfs=16, 16*1.2=19.2 → 19 px/строка → 76
-		{fs: 10, want: 48},  // hfs=8 <10 → 10, 10*1.2=12 → 48
-		{fs: 24, want: 104}, // hfs=22, 22*1.2=26.4 → 26 → 104
+		{fs: 18, want: 44},  // hfs=16, 16*0.7=11.2 → 11 px/строка → 44
+		{fs: 10, want: 28},  // hfs=8 <10 → 10, 10*0.7=7 → 28
+		{fs: 24, want: 60},  // hfs=22, 22*0.7=15.4 → 15 → 60
 	}
 	for _, tt := range tests {
 		got := historyVisibleHeightPx(tt.fs)
