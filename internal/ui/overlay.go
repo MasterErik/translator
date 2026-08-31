@@ -527,11 +527,11 @@ type answerLine struct {
 	isRU bool
 }
 
-// layoutAnswersZone — зона AnswerCandidates: при отсутствии ответов резервирует
-// одну строку каркаса (чтобы separator-линии были видны), иначе — скролл ответов.
+// layoutAnswersZone — зона AnswerCandidates: при отсутствии ответов занимает
+// всю выделенную Flexed-высоту (каркас), иначе — скролл ответов.
 func (o *Overlay) layoutAnswersZone(gtx layout.Context, th *material.Theme, msg UIMessage, has bool, fs int) layout.Dimensions {
 	if !has {
-		return emptyZoneDims(gtx, emptyZoneHeight(fs))
+		return emptyZoneDims(gtx, gtx.Constraints.Max.Y)
 	}
 	return layoutAnswers(gtx, th, msg, fs, &o.answersList)
 }
@@ -579,7 +579,7 @@ func splitBilingual(s string) (en, ru string) {
 // layoutTranslationHistory — скролл переводов из Translation-сообщений (10 строк).
 func layoutTranslationHistory(gtx layout.Context, th *material.Theme, messages []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if len(messages) == 0 {
-		return emptyZoneDims(gtx, emptyZoneHeight(fs))
+		return emptyZoneDims(gtx, gtx.Constraints.Max.Y)
 	}
 
 	hfs := fs - 2

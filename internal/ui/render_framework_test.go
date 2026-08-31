@@ -36,22 +36,24 @@ func TestRenderEmptyFrameworkSeparatorsVisible(t *testing.T) {
 		t.Errorf("layoutInterim (пустой): height = %d, want %d (%d строк)", dims.Size.Y, want, interimVisibleLines)
 	}
 
-	// Зона 2 — TranslationHistory: пустые messages резервируют 1 строку.
+	// Зона 2 — TranslationHistory: пустые messages занимают всю выделенную
+	// Flexed-высоту (каркас: gtx.Constraints.Max.Y).
 	dims = layoutTranslationHistory(gtx, th, nil, fs, &o.translationList, false)
 	if dims.Size.X != gtx.Constraints.Max.X {
 		t.Errorf("layoutTranslationHistory (пусто): width = %d, want %d", dims.Size.X, gtx.Constraints.Max.X)
 	}
-	if dims.Size.Y != oneLine {
-		t.Errorf("layoutTranslationHistory (пусто): height = %d, want %d (1 строка)", dims.Size.Y, oneLine)
+	if want := gtx.Constraints.Max.Y; dims.Size.Y != want {
+		t.Errorf("layoutTranslationHistory (пусто): height = %d, want %d (вся Flexed-высота)", dims.Size.Y, want)
 	}
 
-	// Зона 3 — AnswerCandidates без ответов (render-ветка !hasAnswers) резервирует 1 строку.
+	// Зона 3 — AnswerCandidates без ответов (render-ветка !hasAnswers) занимает
+	// всю выделенную Flexed-высоту.
 	dims = o.layoutAnswersZone(gtx, th, UIMessage{}, false, fs)
 	if dims.Size.X != gtx.Constraints.Max.X {
 		t.Errorf("layoutAnswers (без ответов): width = %d, want %d", dims.Size.X, gtx.Constraints.Max.X)
 	}
-	if dims.Size.Y != oneLine {
-		t.Errorf("layoutAnswers (без ответов): height = %d, want %d (1 строка)", dims.Size.Y, oneLine)
+	if want := gtx.Constraints.Max.Y; dims.Size.Y != want {
+		t.Errorf("layoutAnswers (без ответов): height = %d, want %d (вся Flexed-высота)", dims.Size.Y, want)
 	}
 
 	// Separator — один из двух между зонами 1–2 и 2–3; ровно 3px.
