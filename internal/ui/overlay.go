@@ -356,25 +356,34 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
 
-// lineHeightFactor — множитель размера шрифта для высоты строки текста.
-// После уменьшения межстрочного интервала вдвое компактная высота строки
-// задаётся через overlayLabel (LineHeight = sp*lineHeightCompact, строгий масштаб).
-// Значение 0.7 эмпирически даёт высоту строки ≈ fs*0.7 (≈ 13px при fs=18)
-// против дефолтных ~26px — ровно половина.
-const lineHeightFactor = 0.7
+// lineHeightFactor — множитель размера шрифта для расчётной высоты строки
+// (каркасные высоты пустых зон, высота зоны 4). Синхронизирован с
+// lineHeightCompact.
+const lineHeightFactor = 0.85
 
-// lineHeightCompact — множитель размера шрифта для компактной высоты строки
-// в overlayLabel (baseline до baseline). Дефолтная метрика Gio ~1.44 em (H0≈26px
-// при fs=18); 0.7 даёт ~13px — уменьшение вдвое.
-const lineHeightCompact = 0.7
+// lineHeightCompact — множитель размера шрифта для базовой высоты строки в
+// overlayLabel (baseline до baseline). Дефолтное межстрочное продвижение Gio
+// = 1.0em (замер: 5 слов в 10 строк, 224px ≈ 10×fs при fs=18), глиф-бокс
+// ≈ 1.33em (~24px). Значение 0.85 уменьшает межстрочный интервал на ~15%
+// (лёгкое перекрытие глифов ~2.6px между соседними строками — визуально
+// плотный текст), НЕ масштабируя шрифт: размеры однострочного label
+// идентичны дефолтным (тест TestOverlayLabelSingleLineUnscaled).
+const lineHeightCompact = 0.85
 
 // interimVisibleLines — высота зоны Interim (пустая) в строках — стартовый каркас.
 const interimVisibleLines = 2
 
+// lineHeightAt — целочисленная высота строки (baseline до baseline) для
+// размера шрифта fs в px. Общая точка расчёта для emptyZoneHeight и
+// historyVisibleHeightPx.
+func lineHeightAt(fs int) int {
+	return int(float32(fs) * lineHeightFactor)
+}
+
 // emptyZoneHeight — высота одной строки зоны в px при заданном размере шрифта.
 // Используется для резервирования высоты пустых зон стартового каркаса.
 func emptyZoneHeight(fs int) int {
-	return int(float32(fs) * lineHeightFactor)
+	return lineHeightAt(fs)
 }
 
 // emptyZoneDims — размеры пустой зоны: ширина окна, высота ровно height px.
@@ -562,14 +571,13 @@ func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history 
 
 // ── Helpers ──
 
-// overlayLabel — единая точка создания текстовой строки в oверлее.
-// Задаёт компактный межстрочный интервал: LineHeight = sp*lineHeightCompact,
-// LineHeightScale = 1 (строгий — не умножается на дефолтные 1.2), что даёт
-// высоту строки ≈ половину от дефолтной метрики Gio (~26px → ~13px при fs=18).
+// overlayLabel — единая точка создания текстовой строки в оверлее.
+// Задаёт компактный межстрочный интервал: LineHeight = sp*lineHeightCompact
+// при дефолтном LineHeightScale — шрифт НЕ масштабируется (размер глифов
+// прежний), строки прижаты к глиф-боксу (зазор ~1px против дефолтных ~2px).
 func overlayLabel(th *material.Theme, sp unit.Sp, text string) material.LabelStyle {
 	l := material.Label(th, sp, text)
 	l.LineHeight = unit.Sp(float32(sp) * lineHeightCompact)
-	l.LineHeightScale = 1.0
 	return l
 }
 

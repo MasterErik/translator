@@ -10,11 +10,10 @@ import (
 	"gioui.org/widget/material"
 )
 
-// measureLineHeight — высота строки Label в px при заданной ширине (w) и
-// опциональной настройке label. При w=200 текст не переносится (одна строка,
-// высота = глиф-бокс); при узкой ширине текст переносится — высота = сумма
-// межстрочных продвижений, где и проявляется LineHeight.
-func measureLineHeight(th *material.Theme, fs, w int, text string, configure func(*material.LabelStyle)) int {
+// measureLabel — размеры Label в px при заданной ширине (w) и опциональной
+// настройке. При w=200 текст не переносится (одна строка); при узкой ширине
+// текст переносится — высота = сумма межстрочных продвижений (LineHeight).
+func measureLabel(th *material.Theme, fs, w int, text string, configure func(*material.LabelStyle)) image.Point {
 	l := material.Label(th, unit.Sp(fs), text)
 	if configure != nil {
 		configure(&l)
@@ -28,51 +27,61 @@ func measureLineHeight(th *material.Theme, fs, w int, text string, configure fun
 		},
 		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
 	}
-	return l.Layout(gtx).Size.Y
+	return l.Layout(gtx).Size
 }
 
-// TestBaselineLineHeight — база: высота одной (неперенесённой) строки Label при
-// fs=18 — глиф-бокс (ascent+descent), H0 ≈ 26px.
-func TestBaselineLineHeight(t *testing.T) {
+// TestOverlayLabelSingleLineUnscaled — шрифт НЕ уменьшен: однострочный label
+// через overlayLabel имеет те же размеры, что дефолтный material.Label
+// (LineHeightScale не переопределяется, глифы не масштабируются и не режутся).
+func TestOverlayLabelSingleLineUnscaled(t *testing.T) {
 	th := material.NewTheme()
-	h0 := measureLineHeight(th, 18, 200, "Hg", nil)
-	t.Logf("H0 (глиф-бокс строки fs=18) = %d px", h0)
-	if h0 <= 0 {
-		t.Fatalf("H0 = %d, ожидалась > 0", h0)
-	}
-	if h0 > 100 {
-		t.Fatalf("H0 = %d — подозрительно велико", h0)
-	}
-}
+	const fs = 18
+	text := "Hg"
 
-// TestOverlayLabelCompactLineHeight — межстрочный интервал уменьшен вдвое:
-// при переносе на несколько строк (узкая ширина) высота label'а из helper
-// overlayLabel должна быть ≤ (H0_def * N) * 0.7 + допуск, где H0_def — высота
-// по дефолтной метрике. Проще и нагляднее: компактный многострочный label
-// ниже дефолтного при одинаковом тексте, и выигрыш ≈ половина прироста.
-func TestOverlayLabelCompactLineHeight(t *testing.T) {
-	th := material.NewTheme()
-	const (
-		fs = 18
-		w  = 40 // узкая ширина -> перенос на 3+ строки
-	)
-	text := "word word word word"
-
-	// Дефолтная метрика: много строк, каждая продвигает baseline на ~1.44em.
-	def := measureLineHeight(th, fs, w, text, func(l *material.LabelStyle) {})
-	got := measureLineHeight(th, fs, w, text, func(l *material.LabelStyle) {
+	def := measureLabel(th, fs, 200, text, nil)
+	got := measureLabel(th, fs, 200, text, func(l *material.LabelStyle) {
 		*l = overlayLabel(th, unit.Sp(fs), l.Text)
 	})
 
-	t.Logf("multi-line default = %d px, compact = %d px", def, got)
-	if def <= 0 {
-		t.Fatal("базовая высота многострочного label = 0")
+	t.Logf("single-line: default %v, overlay %v", def, got)
+	if got != def {
+		t.Errorf("single-line overlay = %v, want %v (шрифт не должен масштабироваться)", got, def)
 	}
-	// Компактный многострочный label ниже дефолтного как минимум на 20%.
-	if got >= def*80/100 {
-		t.Errorf("compact = %d, want < %d (80%% от дефолта %d)", got, def*80/100, def)
+}
+
+// TestOverlayLabelMultiLineCompact — многострочный label через overlayLabel
+// ниже дефолтного (межстрочный зазор сокращён), но строки не обрезаются:
+// высота ≥ (число строк) × (высота глиф-бокса однострочного label).
+func TestOverlayLabelMultiLineCompact(t *testing.T) {
+	th := material.NewTheme()
+	const (
+		fs = 18
+		w  = 40 // узкая ширина -> перенос
+	)
+	text := "word word word word word"
+
+	glyphBox := measureLabel(th, fs, 200, "Hg", nil).Y
+
+	def := measureLabel(th, fs, w, text, nil)
+	got := measureLabel(th, fs, w, text, func(l *material.LabelStyle) {
+		*l = overlayLabel(th, unit.Sp(fs), l.Text)
+	})
+
+	lines := def.Y / glyphBox
+	t.Logf("glyph-box=%d, default=%d, overlay=%d, lines≈%d", glyphBox, def.Y, got.Y, lines)
+
+	if lines < 3 {
+		t.Fatalf("тест некорректен: перенос не произошёл (lines=%d)", lines)
 	}
-	if got <= 0 {
-		t.Errorf("compact = %d, ожидалась > 0", got)
+	// Интервал сокращён: компактный ниже дефолтного.
+	if got.Y >= def.Y {
+		t.Errorf("overlay multi-line = %d, want < default %d (интервал должен сократиться)", got.Y, def.Y)
+	}
+	// Строки не схлопываются и перекрытие глифов ограничено: фактический
+	// advance на строку (высота/кол-во строк) ≥ 80% дефолтного продвижения.
+	adv := float32(got.Y) / float32(lines)
+	defAdv := float32(def.Y) / float32(lines)
+	if adv < defAdv*0.8 {
+		t.Errorf("advance/строку = %.1f < 80%% дефолтного %.1f — чрезмерное перекрытие", adv, defAdv)
 	}
 }
