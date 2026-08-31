@@ -73,14 +73,6 @@ func TestBuildAnswerPrompt_CommandModifiers(t *testing.T) {
 		t.Fatal("F1 prompt must not be empty")
 	}
 
-	f2 := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Command: CommandThinkDeeper})
-	if !strings.Contains(f2, "Think more deeply") {
-		t.Error("F2 must add Think Deeper instruction")
-	}
-	if strings.Contains(f2, "Do not reveal your reasoning") == false {
-		t.Error("F2 must instruct not to reveal reasoning")
-	}
-
 	f3 := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Command: CommandMoreContext})
 	if !strings.Contains(f3, "more detailed") {
 		t.Error("F3 must add more detailed instruction")

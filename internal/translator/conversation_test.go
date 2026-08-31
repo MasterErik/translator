@@ -130,7 +130,6 @@ func TestConversationHistoryRegenerationDoesNotAddTurn(t *testing.T) {
 func TestGenerationCommandString(t *testing.T) {
 	cases := map[GenerationCommand]string{
 		CommandAnswer:         "Answer",
-		CommandThinkDeeper:    "ThinkDeeper",
 		CommandMoreContext:    "MoreContext",
 		CommandSimplerEnglish: "SimplerEnglish",
 	}

@@ -66,24 +66,6 @@ func TestCommandF1GiveAnswer(t *testing.T) {
 	}
 }
 
-// Test 8 — F2 повторная генерация с ThinkDeeper.
-func TestCommandF2ThinkDeeper(t *testing.T) {
-	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
-	d, textStream, cancel := startDispatcher(t, engine)
-	defer cancel()
-
-	textStream <- question("Tell me about Project X.")
-	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
-
-	d.HandleCommand(translator.CommandThinkDeeper)
-	waitFor(t, func() bool { return len(engine.Calls()) == 2 }, 2*time.Second)
-
-	reqs := engine.Reqs()
-	if reqs[1].Command != translator.CommandThinkDeeper {
-		t.Errorf("F2 должен быть CommandThinkDeeper, получено %v", reqs[1].Command)
-	}
-}
-
 // Test 9 — F3 повторная генерация с большим контекстом.
 func TestCommandF3MoreContext(t *testing.T) {
 	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}

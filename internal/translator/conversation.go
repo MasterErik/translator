@@ -17,9 +17,6 @@ type GenerationCommand int
 const (
 	// CommandAnswer (F1) — обычная генерация ответа на текущий обнаруженный вопрос.
 	CommandAnswer GenerationCommand = iota
-	// CommandThinkDeeper (F2) — повторный ответ на тот же вопрос с более тщательным
-	// reasoning (не раскрывается пользователю, факты кандидата не меняются).
-	CommandThinkDeeper
 	// CommandMoreContext (F3) — повторный ответ с большей историей разговора и
 	// чуть более содержательным ответом.
 	CommandMoreContext
@@ -32,8 +29,6 @@ func (c GenerationCommand) String() string {
 	switch c {
 	case CommandAnswer:
 		return "Answer"
-	case CommandThinkDeeper:
-		return "ThinkDeeper"
 	case CommandMoreContext:
 		return "MoreContext"
 	case CommandSimplerEnglish:

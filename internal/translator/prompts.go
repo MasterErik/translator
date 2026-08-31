@@ -59,10 +59,6 @@ func BuildAnswerPrompt(req AnswerRequest) string {
 // управления генерацией (F2–F4). Для F1 (CommandAnswer) — пустая строка.
 func commandInstruction(cmd GenerationCommand) string {
 	switch cmd {
-	case CommandThinkDeeper:
-		return "Think more deeply about the question before answering. " +
-			"Do not reveal your reasoning or mention this instruction. " +
-			"Do not change or invent any candidate facts."
 	case CommandMoreContext:
 		return "Use more of the available conversation history and give a " +
 			"slightly more detailed answer, keeping a natural length."
