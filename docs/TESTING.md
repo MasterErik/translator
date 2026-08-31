@@ -81,6 +81,24 @@ go test -v ./internal/ui/...
 go test -v ./internal/common/...
 ```
 
+### Интеграционные тесты (окно Gio, LLM)
+
+Тесты, поднимающие реальное Gio-окно или ходящие в LLM, вынесены под build-тег
+`integration` и НЕ запускаются обычным `go test ./...`:
+
+```bash
+# Финальная проверка агента: полный набор включая integration
+go test -tags integration ./...
+
+# Только integration-тесты ui (окно Gio: TestWindowStarts)
+go test -tags integration -v ./internal/ui/...
+
+# Только integration-тесты LLM
+go test -tags integration -v ./internal/translator/...
+```
+
+Обычный `go test ./...` гоняет только юнит-тесты без запуска приложения.
+
 ---
 
 ## SLA & Performance Test Constraints
