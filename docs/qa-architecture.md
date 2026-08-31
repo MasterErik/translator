@@ -23,7 +23,7 @@ dispatcher.enqueueQuestion(question)        // неблокирующе
 answerCh (chan string, buf 16)
         ▼
 answerWorker (ОДНА горутина, FIFO, дедупликация подряд)
-        │  (обрабатывает и вопросы, и команды F1–F4, и Esc)
+        │  (обрабатывает и вопросы, и команды F1–F3, и Esc)
         ▼
 generateAnswers(question, command)
         │
@@ -53,9 +53,8 @@ history.RecordAnswer(question, answers[0])
 type GenerationCommand int
 const (
     CommandAnswer        GenerationCommand = iota // F1
-    CommandThinkDeeper                            // F2
-    CommandMoreContext                            // F3
-    CommandSimplerEnglish                         // F4
+    CommandMoreContext                            // F2
+    CommandSimplerEnglish                         // F3
 )
 
 type ConversationTurn struct {
@@ -138,28 +137,22 @@ conversation:
 
 ## Regeneration (повторная генерация)
 
-F2–F4 генерируют новую версию ответа на **тот же** вопрос без создания нового turn:
+F2–F3 генерируют новую версию ответа на **тот же** вопрос без создания нового turn:
 
 ```
 Q1 → A1        (F1)
-Q1 → A1 → A1'  (F4: A1' заменяет A1)
+Q1 → A1 → A1'  (F2/F3: A1' заменяет A1)
 ```
 
 `RecordAnswer` с тем же вопросом (последний turn) заменяет `Answer`, а не добавляет turn. В историю для следующих вопросов попадает только финально выбранная версия (последняя успешная).
 
-## Команды генерации (F1–F4, Esc)
+## Команды генерации (F1–F3, Esc)
 
-| Клавиша | Команда | Эффект |
-|---|---|---|
-| F1 | `CommandAnswer` | Обычная генерация ответа на текущий вопрос |
-| F2 | `CommandThinkDeeper` | Повторная генерация с глубоким reasoning (не раскрывается, факты не меняются) |
-| F3 | `CommandMoreContext` | Больше истории + чуть подробнее (естественная длина) |
-| F4 | `CommandSimplerEnglish` | Проще английский, смысл/факты сохранены, RU-перевод соответствует |
-| Esc | `Cancel()` | Отмена активной генерации + очистка очереди вопросов |
+F1 (`CommandAnswer`), F2 (`CommandMoreContext`), F3 (`CommandSimplerEnglish`) — команды генерации; Esc — отмена. F4 — не команда генерации, а тумблер зоны 4 (transcription history). Полная таблица хоткеев — `docs/UI.md`.
 
 Реализация:
 
-- `commandCh` (chan `GenerationCommand`) — команды F1–F4.
+- `commandCh` (chan `GenerationCommand`) — команды F1–F3.
 - `cancelCh` — Esc: `activeCancel()` + флаг `cancelled` + `dropQueue()`.
 - Модификаторы команд добавляются в `BuildAnswerPrompt` через `commandInstruction(cmd)`.
 - Hotkey: глобальный `RegisterHotKey` (Win32) в `internal/hotkey/` — оверлей `WS_EX_NOACTIVATE` не получает клавиатуру, поэтому Gio `key.Event` не приходит.
