@@ -536,15 +536,16 @@ func (p *Pipeline) runHotkeys(ctx context.Context) {
 }
 
 // handleHotkey маппит функциональную клавишу на команду генерации.
-// F9 (видимость TranscriptionHistory) работает без dispatcher и
-// маршрутизируется прямо в overlay.
+// Раскладка: F1 — CommandAnswer, F2 — CommandMoreContext,
+// F3 — CommandSimplerEnglish, F4 — тумблер окна истории оригиналов.
+// F4 работает без dispatcher и маршрутизируется прямо в overlay.
 func (p *Pipeline) handleHotkey(k hotkey.Key) {
 	switch k {
-	case hotkey.KeyF9:
+	case hotkey.KeyF4:
 		if p.overlay != nil {
 			p.overlay.ToggleTranscriptionHistory()
 		}
-	case hotkey.KeyF1, hotkey.KeyF2, hotkey.KeyF3, hotkey.KeyF4, hotkey.KeyEsc:
+	case hotkey.KeyF1, hotkey.KeyF2, hotkey.KeyF3, hotkey.KeyEsc:
 		if p.dispatch == nil {
 			return
 		}
@@ -552,10 +553,8 @@ func (p *Pipeline) handleHotkey(k hotkey.Key) {
 		case hotkey.KeyF1:
 			p.dispatch.HandleCommand(translator.CommandAnswer)
 		case hotkey.KeyF2:
-			p.dispatch.HandleCommand(translator.CommandThinkDeeper)
-		case hotkey.KeyF3:
 			p.dispatch.HandleCommand(translator.CommandMoreContext)
-		case hotkey.KeyF4:
+		case hotkey.KeyF3:
 			p.dispatch.HandleCommand(translator.CommandSimplerEnglish)
 		case hotkey.KeyEsc:
 			p.dispatch.Cancel()

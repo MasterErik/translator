@@ -17,10 +17,10 @@ type GenerationCommand int
 const (
 	// CommandAnswer (F1) — обычная генерация ответа на текущий обнаруженный вопрос.
 	CommandAnswer GenerationCommand = iota
-	// CommandMoreContext (F3) — повторный ответ с большей историей разговора и
+	// CommandMoreContext (F2) — повторный ответ с большей историей разговора и
 	// чуть более содержательным ответом.
 	CommandMoreContext
-	// CommandSimplerEnglish (F4) — переформулировка текущего ответа проще по
+	// CommandSimplerEnglish (F3) — переформулировка текущего ответа проще по
 	// английскому без изменения смысла и фактов.
 	CommandSimplerEnglish
 )
@@ -65,7 +65,7 @@ type AnswerRequest struct {
 // сгенерированный ответ сохраняется; текущий вопрос и ответ становятся частью
 // context для следующих вопросов.
 //
-// Regeneration (F2–F4) НЕ создаёт новый turn: последняя успешно сгенерированная
+// Regeneration (F2–F3) НЕ создаёт новый turn: последняя успешно сгенерированная
 // версия ответа заменяет предыдущую для того же вопроса.
 type ConversationHistory struct {
 	mu               sync.Mutex
@@ -92,7 +92,7 @@ func NewConversationHistory(recentTurns, maxContextTokens int) *ConversationHist
 // RecordAnswer сохраняет финальный ответ на вопрос.
 //
 // Если последний turn в истории имеет тот же вопрос — заменяет его ответ
-// (regeneration F2–F4). Иначе добавляет новый turn в конец истории.
+// (regeneration F2–F3). Иначе добавляет новый turn в конец истории.
 // При превышении recentTurns самые старые turns удаляются, чтобы история
 // не росла бесконечно.
 func (h *ConversationHistory) RecordAnswer(question, answer string) {
