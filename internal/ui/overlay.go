@@ -309,6 +309,9 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
 	paintBackground(gtx, bg)
 
+	// Сбрасываем счётчик separator-линий на каждый кадр (метрика для тестов).
+	zoneSeparatorCount = 0
+
 	fs := o.cfg.FontSize
 
 	historyHeight := historyVisibleHeightPx(fs)
@@ -491,8 +494,15 @@ func (o *Overlay) translationMessages() []UIMessage {
 
 // ── Zone renderers ──
 
+// zoneSeparatorCount — число separator-линий, нарисованных в последнем кадре.
+// Метрика для тестов (сбрасывается в начале render): 2 при historyVisible=false
+// (зоны 1–3), 3 при historyVisible=true (добавляется separator зоны 4). Render
+// выполняется в одной горутине, поэтому счётчик безопасен без mutex.
+var zoneSeparatorCount int
+
 // layoutZoneSeparator — разделитель между зонами (3px).
 func layoutZoneSeparator(gtx layout.Context) layout.Dimensions {
+	zoneSeparatorCount++
 	h := 3
 	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, h)}
 	defer rect.Push(gtx.Ops).Pop()
