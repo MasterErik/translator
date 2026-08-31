@@ -4,31 +4,75 @@
 ┌──────────────────────────┐
 │ I have five years of...  │ ← Зона 1: Interim (речь, 2 строки, белый текст)
 ├──────────────────────────┤ separator 3px
-│ EN: We use Redis for...  │ ← Зона 2: TranslationHistory (скролл, макс 10 строк)
-│ RU: Мы используем Redis  │           оригинал + перевод от Gladia
+│ EN: We use Redis for...  │ ← Зона 2: TranslationHistory (скролл переводов)
+│ RU: Мы используем Redis  │           оригинал + перевод, формат EN/RU
 ├──────────────────────────┤ separator 3px
-│ We use Redis for caching │ ← Зона 3: TranscriptionHistory (скролл, макс 5 строк)
-│ and message brokering    │           оригинал речи на английском
+│ EN: Redis is...          │ ← Зона 3: AnswerCandidates (подсказки, скролл)
+│ RU: Redis — это...       │           только по вопросам, формат EN/RU
 ├──────────────────────────┤ separator 3px
-│ EN: Redis is...          │ ← Зона 4: AnswerCandidates (1 подсказка, только вопросы)
-│ RU: Redis — это...       │           формат: EN: ... | RU: ...
+│ We use Redis for caching │ ← Зона 4: TranscriptionHistory (скролл, 4 строки,
+│ and message brokering    │           шрифт fs-2) — тумблер F4 (F4)
 └──────────────────────────┘
 ```
 
+**Зоны (3 постоянные + 1 тумблер):**
+
+| Зона | Тип | Описание |
+|------|-----|----------|
+| 1: Interim | `Interim` | Текущая речь (верх). 2 строки, белый текст. Замена — только последний. |
+| 2: TranslationHistory | `Translation` (`done`) | Переводы (EN + RU). Скролл, `Flexed 0.45`. `pending`/`streaming` заменяют последний, `done` — append. |
+| 3: AnswerCandidates | `AnswerCandidates` | Подсказки ответов (EN + RU). Скролл, `Flexed 0.55`. Замена — только последний. |
+| 4: TranscriptionHistory | `History` | Оригиналы речи (EN). Нижняя зона, высота ровно 4 строки, шрифт `fs-2`. Только append. Тумблер — **F4**. |
+
+- Зона 4 **видна при старте** (`historyVisible: true` в конструкторе `NewOverlay`) — все
+  separator-линии рисуются с запуска.
+- **F4** прячет/показывает зону 4: когда скрыта, её separator и сама зона отсутствуют
+  в `Flex` и не занимают место — высоту освобождённую получают зоны 2–3.
+- Только зоны 2 и 3 постоянны в layout; зона 4 добавляется при `historyVisible`.
+
 **Параметры окна:**
-- Размер: 800×650 (из `.env`: `OVERLAY_WIDTH`, `OVERLAY_HEIGHT`)
-- Заголовок: пустой (screen sharing privacy)
-- Заголовки зон: **отсутствуют** — только разделители 3px между зонами
-- Позиционирование: `app.TopMost(true)` — поверх других окон
-- Стили: **без** `WS_EX_LAYERED`/`WS_EX_TRANSPARENT` (ломают рендеринг Gio)
-- Win32: `WS_EX_NOACTIVATE` через `findWindowByPID`
-- Принцип: минимальные решения, без лишних HWND-стилей — `TopMost(true)` достаточно
+
+- Размер: из `.env` (`OVERLAY_WIDTH`, `OVERLAY_HEIGHT`), по умолчанию **800×650**.
+  В коде (`NewOverlay`) zero-value дефолты — `Width 1200`, `Height 650`, `FontSize 18`.
+- `app.Size(unit.Dp(...))` — размер в dp, `app.Title("")` — пустой заголовок (screen sharing privacy).
+- Заголовки зон: **отсутствуют** — только разделители 3px между зонами.
+- Позиционирование: `app.TopMost(true)` — поверх других окон.
+- Win32: через `findWindowByPID` применяются `WS_EX_NOACTIVATE` и `WS_EX_TRANSPARENT`
+  (`setNoActivate`) — окно не крадёт фокус и не ловит мышь. `WS_EX_LAYERED` **не** используется.
+- Стили применяются асинхронно после появления нативного окна (`tryApplyStyles`, до 3 с,
+  экспоненциальная задержка от 50 мс).
 
 **Автоскролл:**
-- `prevHistLen` — сохраняется предыдущая длина списка
-- `layout.List` — персистентный, не пересоздаётся
-- При добавлении элемента: `ScrollTo(n-1)` — прокрутка к последнему
 
-**Запуск:** `app.Main()` **не используется** — вместо него кастомный event loop.
+- `prevTransLen` — счётчик длины зоны 2 (переводы), `prevTranscLen` — зоны 4 (транскрипции).
+  Раздельные.
+- `layout.List` персистентны (поля `translationList`, `transcriptionList`, `answersList`),
+  хранят позицию скролла между кадрами, не пересоздаются.
+- При добавлении элемента (`len > prev`) вызывается `ScrollTo(len-1)` — прокрутка к последнему.
 
-**Тест:** `TestWindowStarts` — 40 строк, проверка первого и последнего элемента списка.
+**Кастомный event loop:**
+
+- `app.Main()` **не используется**. `Overlay.Run` вручную дергает `app.Window.Event()`
+  в цикле `select` с проверкой `ctx.Done()`.
+- На `app.DestroyEvent` — завершение; на `app.FrameEvent` — `render` + `e.Frame`.
+- `ctx.Done()` → `w.Perform(system.ActionClose)` и ожидание `app.DestroyEvent` для чистого выхода.
+- Запуск всех горутин — в `Pipeline.Run`: capture, STT, dispatch, UI, hotkeys; оверлей
+  блокируется до отмены контекста или закрытия окна (`WaitShutdown`).
+
+**Хоткеи:**
+
+| Клавиша | Команда | Действие |
+|---------|---------|----------|
+| F1 | `CommandAnswer` | Обычный ответ на обнаруженный вопрос. |
+| F2 | `CommandMoreContext` | Повторный ответ с большей историей разговора/контекстом. |
+| F3 | `CommandSimplerEnglish` | Переформулировка последнего ответа проще по-английски. |
+| F4 | — | Тумблер зоны 4 TranscriptionHistory (показ/скрытие). |
+| Esc | `Cancel` | Отмена текущей генерации. |
+
+- F1–F3 и Esc маршрутизируются через `dispatcher.HandleCommand` / `Cancel`.
+- F4 обходит dispatcher — `overlay.ToggleTranscriptionHistory()` вызывается напрямую.
+
+**Тест:** `TestWindowStarts` — интеграционный: создаёт оверлей 1200×650, наполняет все 4 зоны
+(включая 40 строк в History для проверки скролла), запускает `Run`, проверяет что каждая зона
+получила данные, положение скролла (`TranscriptionScrollLen == 40`, `TranslationAtEnd`,
+`TranscriptionAtEnd`), размеры окна и флаги final-состояния.
