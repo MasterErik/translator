@@ -953,9 +953,7 @@ func TestEndOfTurnCycle(t *testing.T) {
 		case ui.History:
 			historyCount++
 		case ui.Translation:
-			if m.MsgStatus == "done" {
-				translationDone++
-			}
+			translationDone++
 		case ui.AnswerCandidates:
 			answerCount++
 		}

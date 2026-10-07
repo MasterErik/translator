@@ -38,10 +38,6 @@ type UIMessage struct {
 	Answers   []Answer
 	Timestamp time.Time
 
-	// MsgStatus — устаревшее поле, оставлено для совместимости: Translation
-	// теперь append-only, статус больше не участвует в фильтрации.
-	MsgStatus string
-
 	// Translation — перевод для History-сообщений (чтобы показывать и оригинал, и перевод).
 	Translation string
 }

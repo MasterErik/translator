@@ -196,7 +196,7 @@ func TestAddMessageGetMessages(t *testing.T) {
 
 // TestTranslationAppendOnly — Translation стал append-only (Task 1.1, P1):
 // streaming-ветка удалена, dispatcher шлёт только "done". Все Translation
-// сообщения накапливаются независимо от MsgStatus, фильтра нет.
+// сообщения накапливаются без фильтра по статусу.
 func TestTranslationAppendOnly(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -206,24 +206,24 @@ func TestTranslationAppendOnly(t *testing.T) {
 		{
 			name: "pending appends like done",
 			messages: []UIMessage{
-				{Type: Translation, Text: "first", MsgStatus: "pending"},
-				{Type: Translation, Text: "second", MsgStatus: "streaming"},
-				{Type: Translation, Text: "third", MsgStatus: "done"},
+				{Type: Translation, Text: "first"},
+				{Type: Translation, Text: "second"},
+				{Type: Translation, Text: "third"},
 			},
 			wantTexts: []string{"first", "second", "third"},
 		},
 		{
 			name: "done only unaffected",
 			messages: []UIMessage{
-				{Type: Translation, Text: "a", MsgStatus: "done"},
-				{Type: Translation, Text: "b", MsgStatus: "done"},
+				{Type: Translation, Text: "a"},
+				{Type: Translation, Text: "b"},
 			},
 			wantTexts: []string{"a", "b"},
 		},
 		{
 			name: "empty status appends",
 			messages: []UIMessage{
-				{Type: Translation, Text: "x", MsgStatus: ""},
+				{Type: Translation, Text: "x"},
 			},
 			wantTexts: []string{"x"},
 		},
@@ -353,7 +353,7 @@ func TestHistoryMessages(t *testing.T) {
 	// Добавляем mixed — фильтрует только History.
 	o.AddMessage(UIMessage{Type: Interim, Text: "interim"})
 	o.AddMessage(UIMessage{Type: History, Text: "h1", Translation: "п1"})
-	o.AddMessage(UIMessage{Type: Translation, Text: "tr", MsgStatus: "done"})
+	o.AddMessage(UIMessage{Type: Translation, Text: "tr"})
 	o.AddMessage(UIMessage{Type: History, Text: "h2"})
 
 	h := o.historyMessages()

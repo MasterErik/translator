@@ -27,7 +27,7 @@ func TestHistoryDataDoesNotShowZone4(t *testing.T) {
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("history line %d", i), Translation: fmt.Sprintf("перевод %d", i)})
 	}
 	o.AddMessage(UIMessage{Type: Interim, Text: "interim text"})
-	o.AddMessage(UIMessage{Type: Translation, Text: "готовый перевод", MsgStatus: "done"})
+	o.AddMessage(UIMessage{Type: Translation, Text: "готовый перевод"})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: yes | RU: да")})
 
 	if o.HistoryVisible() {
@@ -63,7 +63,7 @@ func TestHistoryDataDoesNotLeakIntoZones(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("h%d", i), Translation: fmt.Sprintf("t%d", i)})
 	}
-	o.AddMessage(UIMessage{Type: Translation, Text: "реальный перевод", MsgStatus: "done"})
+	o.AddMessage(UIMessage{Type: Translation, Text: "реальный перевод"})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: a | RU: б")})
 
 	// Зона 2 (переводы) видит только Translation done, не History.

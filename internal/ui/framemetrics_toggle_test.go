@@ -17,7 +17,7 @@ func TestToggleHistoryFrameMetricsTogether(t *testing.T) {
 	// Данные во всех зонах; история заведомо длиннее видимой высоты (Section 4).
 	o.AddMessage(UIMessage{Type: Interim, Text: "I have five years of experience"})
 	for i := 1; i <= 20; i++ {
-		o.AddMessage(UIMessage{Type: Translation, Text: fmt.Sprintf("перевод %d", i), MsgStatus: "done"})
+		o.AddMessage(UIMessage{Type: Translation, Text: fmt.Sprintf("перевод %d", i)})
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("original %d", i)})
 	}
 	for i := 1; i <= 20; i++ {

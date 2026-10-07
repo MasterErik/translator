@@ -171,7 +171,7 @@ internal/
 ├── ui/              # GioUI overlay: 4 зоны, автоскролл, HWND-стили
 ├── logger/          # Запись сессии: CSV-лог, аудио MP3, VAD-светофор
 ├── context/         # Candidate context: fact-level lexical retrieval (index/score/budget)
-└── common/          # Config, STTEvent, UIEvent, общие типы
+└── common/          # Config, STTEvent, общие типы
 ```
 
 ### Многопоточная архитектура (10 горутин)

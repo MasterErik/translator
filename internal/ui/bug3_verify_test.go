@@ -58,9 +58,8 @@ func TestBug3_TranslationInHistory(t *testing.T) {
 	// 4. Translation done + History — не конфликтуют.
 	ov2 := NewOverlay(OverlayConfig{Width: 800, Height: 400, FontSize: 14}, logger.NewNopSessionLogger())
 	ov2.AddMessage(UIMessage{
-		Type:      Translation,
-		Text:      "Привет мир",
-		MsgStatus: "done",
+		Type: Translation,
+		Text: "Привет мир",
 	})
 	ov2.AddMessage(UIMessage{
 		Type:        History,
@@ -89,7 +88,7 @@ func filterHistory(msgs []UIMessage) []UIMessage {
 
 func hasTranslationDone(msgs []UIMessage) bool {
 	for _, m := range msgs {
-		if m.Type == Translation && m.MsgStatus == "done" && strings.Contains(m.Text, "Привет") {
+		if m.Type == Translation && strings.Contains(m.Text, "Привет") {
 			return true
 		}
 	}

@@ -23,7 +23,7 @@ func TestWindowStarts(t *testing.T) {
 
 	// Добавляем сообщения во все 4 зоны.
 	o.AddMessage(UIMessage{Type: Interim, Text: "I have five years of..."})
-	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта...", MsgStatus: "done"})
+	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта..."})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("Yes, I agree", "No, thanks", "Let me think")})
 
 	// Добавляем 40 строк в историю перевода (>10 — проверка скролла).

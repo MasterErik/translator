@@ -63,7 +63,7 @@ func TestRenderHistoryHiddenOccupiesNoSpace(t *testing.T) {
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("line %d", i)})
 	}
 	o.AddMessage(UIMessage{Type: Interim, Text: "interim text"})
-	o.AddMessage(UIMessage{Type: Translation, Text: "перевод", MsgStatus: "done"})
+	o.AddMessage(UIMessage{Type: Translation, Text: "перевод"})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: yes | RU: да")})
 
 	gtx, _ := newTestContext(800, 650)
@@ -120,7 +120,7 @@ func TestRenderHistoryVisibleCappedAt4Lines(t *testing.T) {
 func TestRenderInterimTranslationRegression(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
 	o.AddMessage(UIMessage{Type: Interim, Text: "I have five years of experience"})
-	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта", MsgStatus: "done"})
+	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта"})
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: a | RU: б")})
 
 	th := material.NewTheme()

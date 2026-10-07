@@ -20,7 +20,7 @@ func TestAutoScrollZone2AlwaysToEnd(t *testing.T) {
 
 	// Достаточно переводов, чтобы контент заведомо превышал высоту зоны 2.
 	for i := 1; i <= 20; i++ {
-		o.AddMessage(UIMessage{Type: Translation, Text: fmt.Sprintf("перевод номер %d", i), MsgStatus: "done"})
+		o.AddMessage(UIMessage{Type: Translation, Text: fmt.Sprintf("перевод номер %d", i)})
 	}
 
 	gtx, _ := newTestContext(800, 650)

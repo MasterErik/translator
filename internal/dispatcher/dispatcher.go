@@ -217,7 +217,6 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			Type:      ui.Translation,
 			Text:      event.Text,
 			Timestamp: event.Timestamp,
-			MsgStatus: "done",
 		})
 
 		// Логирование — асинхронно, не блокирует dispatcher.

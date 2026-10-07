@@ -408,7 +408,7 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 		InterimAtEnd:       needScrollInterim && !o.interimList.Position.BeforeEnd,
 		TranslationsAtEnd:  needScrollTrans && !o.translationList.Position.BeforeEnd,
 		AnswersAtEnd:       needScrollAnswers && !o.answersList.Position.BeforeEnd,
-		TranscriptionAtEnd: needScrollHist && !o.transcriptionList.Position.BeforeEnd,
+		TranscriptionAtEnd: historyVisible && needScrollHist && !o.transcriptionList.Position.BeforeEnd,
 	}
 }
 
