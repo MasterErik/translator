@@ -20,16 +20,26 @@ const (
 	AnswerCandidates UIMessageType = "AnswerCandidates" // подсказки (нижняя зона)
 	History          UIMessageType = "History"          // история оригиналов (нижняя зона, скролл)
 	Status           UIMessageType = "Status"           // статус (для тестов)
+	Error            UIMessageType = "Error"            // сообщение об ошибке генерации (зона 3)
 )
+
+// Answer is a single generated hint: the answer in the source language and its
+// translation into the target language. The pair of languages is configurable
+// (see common.Config.SourceLang/TargetLang), so the fields carry neutral names.
+type Answer struct {
+	Source string
+	Target string
+}
 
 // UIMessage represents a single message displayed in the overlay.
 type UIMessage struct {
 	Type      UIMessageType
 	Text      string
-	Answers   []string
+	Answers   []Answer
 	Timestamp time.Time
 
-	// MsgStatus: "pending" | "streaming" | "done" | "" — для Translation.
+	// MsgStatus — устаревшее поле, оставлено для совместимости: Translation
+	// теперь append-only, статус больше не участвует в фильтрации.
 	MsgStatus string
 
 	// Translation — перевод для History-сообщений (чтобы показывать и оригинал, и перевод).

@@ -188,6 +188,8 @@ func TestParseAnswerHints(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
+		src   string
+		tgt   string
 		want  []string
 	}{
 		{
@@ -260,11 +262,25 @@ func TestParseAnswerHints(t *testing.T) {
 			input: "<think>\nLet me analyze the format.\n- EN: should not leak",
 			want:  nil,
 		},
+		{
+			name:  "parameterized de target tag en/de",
+			input: "- EN: A cache | DE: Ein Cache\n- EN: Second | DE: Zweite",
+			src:   "en",
+			tgt:   "de",
+			want:  []string{"EN: A cache | DE: Ein Cache", "EN: Second | DE: Zweite"},
+		},
+		{
+			name:  "en/ru hint rejected when target tag is de",
+			input: "- EN: A cache | RU: кэш",
+			src:   "en",
+			tgt:   "de",
+			want:  nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseAnswerHints(tt.input)
+			got := parseAnswerHints(tt.input, tt.src, tt.tgt)
 
 			if len(got) != len(tt.want) {
 				t.Fatalf("parseAnswerHints() length = %d, want %d. Got: %v", len(got), len(tt.want), got)
@@ -280,6 +296,7 @@ func TestParseAnswerHints(t *testing.T) {
 }
 
 func TestBuildSystemPrompt(t *testing.T) {
+	defaultPrompt := BuildSystemPrompt("en", "ru")
 	tests := []struct {
 		name      string
 		cvContext string
@@ -289,8 +306,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 			name:      "empty cv uses only format rules",
 			cvContext: "",
 			check: func(t *testing.T, prompt string) {
-				if prompt != SystemPromptAnswerGen {
-					t.Error("buildSystemPrompt(\"\") should equal SystemPromptAnswerGen")
+				if prompt != defaultPrompt {
+					t.Error("buildSystemPrompt(\"\") should equal BuildSystemPrompt(en,ru)")
 				}
 			},
 		},
@@ -299,8 +316,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 			cvContext: "Senior Go developer, 5 years",
 			check: func(t *testing.T, prompt string) {
 				// Формат ВСЕГДА идёт первым — корень бага: раньше cvContext затирал его.
-				if !strings.HasPrefix(prompt, SystemPromptAnswerGen) {
-					t.Error("prompt must start with SystemPromptAnswerGen (format rules)")
+				if !strings.HasPrefix(prompt, defaultPrompt) {
+					t.Error("prompt must start with BuildSystemPrompt (format rules)")
 				}
 				if !strings.Contains(prompt, "Candidate context:\nSenior Go developer, 5 years") {
 					t.Errorf("prompt must contain CV context section, got: %q", prompt)
@@ -311,8 +328,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 			name:      "format rules always present regardless of cv",
 			cvContext: "Some arbitrary resume text without any format rules",
 			check: func(t *testing.T, prompt string) {
-				if !strings.Contains(prompt, "EN:") || !strings.Contains(prompt, "RU:") || !strings.Contains(prompt, "|") {
-					t.Error("prompt must always contain EN:/RU:/| format rules")
+				if !strings.Contains(prompt, "EN:") || !strings.Contains(prompt, "| RU:") {
+					t.Error("prompt must always contain EN:/| RU: format rules")
 				}
 			},
 		},
@@ -320,20 +337,20 @@ func TestBuildSystemPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.check(t, buildSystemPrompt(tt.cvContext))
+			tt.check(t, buildSystemPrompt(tt.cvContext, "", ""))
 		})
 	}
 }
 
 // TestBuildSystemPromptCandidateContext — секция candidate context добавляется
-// ТОЛЬКО при непустом значении; правила формата (SystemPromptAnswerGen) всегда
+// ТОЛЬКО при непустом значении; правила формата (BuildSystemPrompt) всегда
 // идут первыми, а пустой candidate context секцию не порождает.
 func TestBuildSystemPromptCandidateContext(t *testing.T) {
 	const candidate = "some candidate context"
 
-	got := buildSystemPrompt(candidate)
-	if !strings.HasPrefix(got, SystemPromptAnswerGen) {
-		t.Errorf("buildSystemPrompt(%q) должен начинаться с SystemPromptAnswerGen, got:\n%s", candidate, got)
+	got := buildSystemPrompt(candidate, "", "")
+	if !strings.HasPrefix(got, BuildSystemPrompt("en", "ru")) {
+		t.Errorf("buildSystemPrompt(%q) должен начинаться с правил формата, got:\n%s", candidate, got)
 	}
 	if !strings.Contains(got, candidate) {
 		t.Errorf("buildSystemPrompt(%q) должен содержать candidate context, got:\n%s", candidate, got)
@@ -342,8 +359,14 @@ func TestBuildSystemPromptCandidateContext(t *testing.T) {
 		t.Errorf("buildSystemPrompt(%q) должен содержать секцию «Candidate context:», got:\n%s", candidate, got)
 	}
 
-	if got := buildSystemPrompt(""); got != SystemPromptAnswerGen {
-		t.Errorf("buildSystemPrompt(\"\") должен быть равен SystemPromptAnswerGen без секции candidate context, got:\n%s", got)
+	if got := buildSystemPrompt("", "", ""); got != BuildSystemPrompt("en", "ru") {
+		t.Errorf("buildSystemPrompt(\"\") должен быть равен формату без секции candidate context, got:\n%s", got)
+	}
+
+	// Параметризованные языки доходят до правил формата.
+	deGot := buildSystemPrompt(candidate, "en", "de")
+	if !strings.Contains(deGot, "| DE:") || strings.Contains(deGot, "RU") {
+		t.Errorf("buildSystemPrompt(_, en, de) должен содержать | DE: и не содержать RU, got:\n%s", deGot)
 	}
 }
 
@@ -407,17 +430,12 @@ func TestNewChatProvider_CustomBaseURL(t *testing.T) {
 	}
 }
 
-// TestNewChatProvider_DefaultModel проверяет, что модель берётся из конфигурации
-// (без хардкода — пустая модель остаётся пустой).
-func TestNewChatProvider_DefaultModel(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer server.Close()
+// TestChatProvider_ImplementsStreaming удалён: `var _ StreamingAnswersProvider =
+// provider` дублирует compile-time ассерт в production-коде
+// (openai.go: `var _ StreamingAnswersProvider = (*ChatProvider)(nil)`).
 
-	provider := NewChatProvider(server.URL+"/v1", "sk-key", "")
-	if provider.model != "" {
-		t.Errorf("model should be empty when not provided, got %q", provider.model)
-	}
-}
+// TestNewChatProvider_DefaultModel удалён: ассертил, что пустая модель остаётся
+// пустой (прямая передача аргумента конструктором без логики).
 
 // TestStreamingGenerateAnswers проверяет стриминговую генерацию с mock SSE сервером.
 func TestStreamingGenerateAnswers(t *testing.T) {
@@ -532,17 +550,12 @@ func TestStreamingGenerateAnswers_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestChatProvider_ImplementsStreaming проверяет, что ChatProvider
-// реализует интерфейс StreamingAnswersProvider.
-func TestChatProvider_ImplementsStreaming(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer server.Close()
+// TestChatProvider_ImplementsStreaming удалён: `var _ StreamingAnswersProvider =
+// provider` дублирует compile-time ассерт в production-коде
+// (openai.go: `var _ StreamingAnswersProvider = (*ChatProvider)(nil)`).
 
-	provider := newTestChatProvider(server, "gpt-4o-mini")
-
-	// Compile-time check: provider satisfies StreamingAnswersProvider.
-	var _ StreamingAnswersProvider = provider
-}
+// TestNewChatProvider_DefaultModel удалён: ассертил, что пустая модель остаётся
+// пустой (прямая передача аргумента конструктором без логики).
 
 // TestStreamingGenerateAnswers_StreamError проверяет ошибку mid-stream.
 func TestStreamingGenerateAnswers_StreamError(t *testing.T) {
@@ -587,9 +600,6 @@ func TestChatProvider_SetMaxTokens(t *testing.T) {
 	}
 
 	provider.SetMaxTokens(256)
-	if provider.maxTokens != 256 {
-		t.Errorf("maxTokens = %d, want 256", provider.maxTokens)
-	}
 	if provider.maxTokens != 256 {
 		t.Errorf("maxTokens = %d, want 256", provider.maxTokens)
 	}

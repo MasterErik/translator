@@ -114,7 +114,8 @@ LOOPBACK_DEVICE=CABLE Input (VB-Audio Virtual Cable)
 MIC_DEVICE=Microphone (Realtek)
 SAVE_AUDIO=false
 
-# Язык
+# Языки (ISO 639-1; пусто = дефолт)
+SOURCE_LANG=en
 TARGET_LANG=ru
 ```
 
@@ -151,7 +152,7 @@ conversation:
 
 ## LLM
 
-OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `EN: <...> | RU: <...>`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md).
+OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`), строится `BuildSystemPrompt(sourceLang, targetLang)`. Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
 
 **Подробнее:** `docs/qa-architecture.md`
 
@@ -239,19 +240,27 @@ internal/
 
 ```
 event.ChannelID == "translation"
-    → UI TranslationHistory (зона 2, перевод)
+    → UI TranslationHistory (зона 2, перевод)   [append-only]
 
 event.Event == EventUpdate
     → UI Interim (зона 1)
 
 event.Event == EventEndOfTurn && ChannelID != "translation"
-    → UI TranscriptionHistory (зона 3, оригинал)
+    → UI TranscriptionHistory (зона 4, оригинал)
     → IsQuestion(event.Text)?
          да → enqueueQuestion(question)
          нет → ничего
 ```
 
-Зоны 2 и 3 питаются из разных типов сообщений: Translation и History.
+Зона 2 (Translation) и зона 4 (History) питаются из разных типов сообщений: `Translation` и `History`.
+
+**Контракт UI-сообщений (`internal/ui`):**
+
+- `UIMessage.Answers []Answer`, где `Answer{Source, Target}` — пара «ответ в исходном языке / перевод в целевом». Поля нейтральны, т.к. языковая пара настраиваема.
+- Формат строки подсказки: `SRC: <…> | TGT: <…>`. Разбор — `translator.ParseAnswer(s, srcTag, tgtTag)`; теги — `strings.ToUpper(SOURCE_LANG/TARGET_LANG)`.
+- **Параметризация языков:** `Config.SourceLang/TargetLang` (из `SOURCE_LANG`/`TARGET_LANG`, ISO 639-1, дефолт **en→ru**) прокидывается через dispatcher в `ParseAnswer` и `BuildSystemPrompt`. Пустые значения трактуются как дефолт.
+- **Тип `Error`:** ошибка движка генерации отправляется как `UIMessage{Type: Error}` (не как строка в `Answers`); рисуется красным в зоне 3 и имеет приоритет над подсказками. `AddMessage(Error)` заменяет предыдущую ошибку.
+- **Переводы — без стриминга:** зона 2 — только `append` финальных переводов; ветки `pending`/`streaming` (`MsgStatus`) удалены, dispatcher шлёт только `done`. `Translation` в pipeline не стримится.
 
 **Очередь подсказок (answerQueue):**
 
@@ -289,7 +298,7 @@ type STTProvider interface {
 }
 
 type LLMProvider interface {
-    GenerateAnswers(ctx context.Context, question string, cvContext string) ([]string, error)
+    GenerateAnswers(ctx context.Context, req AnswerRequest) ([]string, error)
 }
 
 type SessionLogger interface {

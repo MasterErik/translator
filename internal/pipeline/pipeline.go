@@ -207,6 +207,8 @@ func New(cfg Config) (*Pipeline, error) {
 				CandidateContextFn: candidateContextFn,
 				RecentTurns:        cfg.RecentTurns,
 				MaxContextTokens:   cfg.MaxContextTokens,
+				SourceLang:         cfg.SourceLang,
+				TargetLang:         cfg.TargetLang,
 			},
 		),
 	}

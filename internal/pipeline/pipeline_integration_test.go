@@ -563,7 +563,7 @@ func TestPipelineStreamingTokensArrive(t *testing.T) {
 	msgs := ovl.GetMessages()
 	t.Logf("Total UI messages: %d", len(msgs))
 
-	var answerCandidates []string
+	var answerCandidates []ui.Answer
 	for _, m := range msgs {
 		if m.Type == ui.AnswerCandidates {
 			answerCandidates = append(answerCandidates, m.Answers...)

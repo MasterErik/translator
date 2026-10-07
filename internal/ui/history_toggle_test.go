@@ -2,39 +2,17 @@ package ui
 
 import (
 	"fmt"
-	"image"
 	"testing"
 
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
 	"gioui.org/widget/material"
 
 	"github.com/mastererik/translator/internal/logger"
 )
 
-// newTestContext — layout.Context с фиксированными размерами окна,
-// без реального окна (для юнит-тестов render).
-func newTestContext(width, height int) (layout.Context, *op.Ops) {
-	ops := new(op.Ops)
-	gtx := layout.Context{
-		Ops:         ops,
-		Constraints: layout.Exact(image.Pt(width, height)),
-		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
-	}
-	return gtx, ops
-}
+// newTestContext/newLabelContext/renderFrame вынесены в testhelpers_test.go (DRY).
 
-// TestHistoryInitiallyVisible — начальное состояние TranscriptionHistory: скрыта
-// (зона 4 и её separator отсутствуют до нажатия F4).
-func TestHistoryInitiallyVisible(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
-	if o.HistoryVisible() {
-		t.Error("начальное состояние HistoryVisible = true, want false")
-	}
-}
-
-// TestToggleTranscriptionHistory — F4-переключение: скрыт → виден → скрыт.
+// TestToggleTranscriptionHistory — F4-переключение: скрыт → виден → скрыт
+// (включая начальное состояние — скрыта).
 func TestToggleTranscriptionHistory(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
 
@@ -76,28 +54,6 @@ func TestToggleTranscriptionHistoryConcurrent(t *testing.T) {
 	_ = o.TranscriptionVisible()
 }
 
-// TestHistoryVisibleHeightPx — высота видимой области истории: ровно 4 строки.
-func TestHistoryVisibleHeightPx(t *testing.T) {
-	tests := []struct {
-		fs   int
-		want int
-	}{
-		{fs: 18, want: 71}, // hfs=16, advance≈17.75 → 17.75*4 ≈ 71
-		{fs: 10, want: 46}, // hfs=8 <10 → 10, advance≈11.38 → 11.38*4 ≈ 46
-		{fs: 24, want: 96}, // hfs=22, advance≈24.0 → 24*4 = 96
-	}
-	for _, tt := range tests {
-		got := historyVisibleHeightPx(tt.fs)
-		if got != tt.want {
-			t.Errorf("historyVisibleHeightPx(%d) = %d, want %d", tt.fs, got, tt.want)
-		}
-	}
-	// floor-кейс: fs=10 → hfs=10 (минимум), не 8; высота = advance(10) × 4 строки.
-	if got := historyVisibleHeightPx(10); got != int(measuredLineAdvancePx(10)*historyVisibleLines+0.5) {
-		t.Errorf("historyVisibleHeightPx(10) = %d, want advance(hfs=10)×4", got)
-	}
-}
-
 // TestRenderHistoryHiddenOccupiesNoSpace — при скрытой истории рендер
 // ограничивает зону истории нулём: separator и зона отсутствуют.
 func TestRenderHistoryHiddenOccupiesNoSpace(t *testing.T) {
@@ -108,15 +64,15 @@ func TestRenderHistoryHiddenOccupiesNoSpace(t *testing.T) {
 	}
 	o.AddMessage(UIMessage{Type: Interim, Text: "interim text"})
 	o.AddMessage(UIMessage{Type: Translation, Text: "перевод", MsgStatus: "done"})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"EN: yes | RU: да"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: yes | RU: да")})
 
 	gtx, _ := newTestContext(800, 650)
 	th := material.NewTheme()
 
 	// Скрытая история — рендер не должен паниковать; Layout занимает всё окно.
-	dims := o.render(gtx, th)
-	if dims.Size.X != 800 || dims.Size.Y != 650 {
-		t.Errorf("render size = %v, want 800x650", dims.Size)
+	o.render(gtx, th)
+	if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+		t.Errorf("render занимает %v, want 800x650", gtx.Constraints.Max)
 	}
 	if o.HistoryVisible() {
 		t.Error("historyVisible не должен меняться рендером")
@@ -137,19 +93,25 @@ func TestRenderHistoryVisibleCappedAt4Lines(t *testing.T) {
 	th := material.NewTheme()
 
 	dims := o.render(gtx, th)
-	if dims.Size.X != 800 || dims.Size.Y != 650 {
-		t.Errorf("render size = %v, want 800x650", dims.Size)
+	_ = dims
+	if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+		t.Errorf("render занимает %v, want 800x650", gtx.Constraints.Max)
 	}
 
-	// Позиция скролла обновилась — зона отрендерилась и проскроллилась.
-	if o.TranscriptionScrollLen() != 40 {
-		t.Errorf("prevTranscLen = %d, want 40 — зона истории не отрендерилась при visible", o.TranscriptionScrollLen())
+	// Зона 4 отрендерилась и доскроллена к концу (автоскролл «всегда в конец»).
+	if !dims.TranscriptionAtEnd {
+		t.Errorf("TranscriptionAtEnd = false, want true — зона истории не доскроллена (Position.BeforeEnd=%v)",
+			o.transcriptionList.Position.BeforeEnd)
 	}
 
 	wantHeight := historyVisibleHeightPx(18)
 	t.Logf("высота видимой области истории: %d px (4 строки при fs=18)", wantHeight)
 	if wantHeight <= 0 || wantHeight >= 650 {
 		t.Errorf("historyVisibleHeightPx(18) = %d — вне разумных границ", wantHeight)
+	}
+	// Каркас — ровно 4 × emptyZoneHeight(fs) (Task 3.0: простой множитель).
+	if want := emptyZoneHeight(18) * historyVisibleLines; wantHeight != want {
+		t.Errorf("historyVisibleHeightPx(18) = %d, want 4 × emptyZoneHeight(18) = %d", wantHeight, want)
 	}
 }
 
@@ -159,7 +121,7 @@ func TestRenderInterimTranslationRegression(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
 	o.AddMessage(UIMessage{Type: Interim, Text: "I have five years of experience"})
 	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта", MsgStatus: "done"})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"EN: a | RU: б"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: a | RU: б")})
 
 	th := material.NewTheme()
 
@@ -170,9 +132,9 @@ func TestRenderInterimTranslationRegression(t *testing.T) {
 			o.ToggleTranscriptionHistory()
 		}
 		gtx, _ := newTestContext(800, 650)
-		dims := o.render(gtx, th)
-		if dims.Size.X != 800 || dims.Size.Y != 650 {
-			t.Errorf("historyVisible=%v: render size = %v, want 800x650", visible, dims.Size)
+		o.render(gtx, th)
+		if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+			t.Errorf("historyVisible=%v: render занимает %v, want 800x650", visible, gtx.Constraints.Max)
 		}
 		// Данные зон не изменились от рендера и toggle.
 		if m := o.lastInterim(); m.Text != "I have five years of experience" {
@@ -192,15 +154,15 @@ func TestRenderEmptyAnswersAndNoHistory(t *testing.T) {
 
 	gtx, _ := newTestContext(800, 650)
 	th := material.NewTheme()
-	dims := o.render(gtx, th)
-	if dims.Size.X != 800 || dims.Size.Y != 650 {
-		t.Errorf("render size = %v, want 800x650", dims.Size)
+	o.render(gtx, th)
+	if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+		t.Errorf("render занимает %v, want 800x650", gtx.Constraints.Max)
 	}
 
 	// Видимая история с пустым буфером тоже не паникует.
 	o.ToggleTranscriptionHistory()
-	dims = o.render(gtx, th)
-	if dims.Size.X != 800 || dims.Size.Y != 650 {
-		t.Errorf("render size (visible) = %v, want 800x650", dims.Size)
+	o.render(gtx, th)
+	if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+		t.Errorf("render занимает %v (visible), want 800x650", gtx.Constraints.Max)
 	}
 }

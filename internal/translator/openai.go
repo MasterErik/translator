@@ -39,12 +39,12 @@ func (p *ChatProvider) SetMaxTokens(n int) {
 }
 
 // buildSystemPrompt собирает system-промпт: правила формата подсказки
-// (SystemPromptAnswerGen) всегда идут первыми. Candidate context добавляется
+// (BuildSystemPrompt) всегда идут первыми. Candidate context добавляется
 // отдельной секцией для персонализации — он НЕ затирает правила формата.
-// Раньше непустой cvContext полностью заменял SystemPromptAnswerGen, из-за чего
-// модель отвечала без «EN: … | RU: …» и parseAnswerHints отбрасывал всё.
-func buildSystemPrompt(candidateContext string) string {
-	prompt := SystemPromptAnswerGen
+// Раньше непустой cvContext полностью заменял правила, из-за чего модель
+// отвечала без «SRC: … | TGT: …» и parseAnswerHints отбрасывал всё.
+func buildSystemPrompt(candidateContext, sourceLang, targetLang string) string {
+	prompt := BuildSystemPrompt(sourceLang, targetLang)
 	if candidateContext != "" {
 		prompt += "\n\nCandidate context:\n" + candidateContext
 	}
@@ -57,7 +57,7 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) (
 
 	userPrompt := BuildAnswerPrompt(req)
 
-	systemPrompt := buildSystemPrompt(req.CandidateContext)
+	systemPrompt := buildSystemPrompt(req.CandidateContext, req.SourceLang, req.TargetLang)
 
 	chatReq := openai.ChatCompletionRequest{
 		Model: p.model,
@@ -77,14 +77,14 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) (
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("generate answers: no choices in response")
 	}
-	return parseAnswerHints(resp.Choices[0].Message.Content), nil
+	return parseAnswerHints(resp.Choices[0].Message.Content, req.SourceLang, req.TargetLang), nil
 }
 
 func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, req AnswerRequest) (<-chan string, error) {
 	tokenCh := make(chan string, 64)
 	userPrompt := BuildAnswerPrompt(req)
 
-	systemPrompt := buildSystemPrompt(req.CandidateContext)
+	systemPrompt := buildSystemPrompt(req.CandidateContext, req.SourceLang, req.TargetLang)
 
 	p.mu.Lock()
 	maxTok := p.maxTokens
@@ -177,7 +177,12 @@ func isRateLimitError(err error) bool {
 // десятки строк вместо одной.
 const maxAnswerHints = 3
 
-func parseAnswerHints(raw string) []string {
+// parseAnswerHints разбирает сырой ответ LLM и оставляет строки-подсказки в
+// формате «<SRC>: … | <TGT>: …» для настроенной пары языков. Пустые теги
+// трактуются как дефолт en/ru.
+func parseAnswerHints(raw, srcLang, tgtLang string) []string {
+	srcTag, tgtTag := langTags(srcLang, tgtLang)
+
 	// Удаляем reasoning-блок Groq (<think>…</think>) целиком. Внутри него
 	// строки могут содержать «EN:», «RU:» и «|» (модель рассуждает о формате),
 	// поэтому построчная фильтрация по формату не справится — блок вырезаем.
@@ -195,8 +200,8 @@ func parseAnswerHints(raw string) []string {
 			continue
 		}
 		// Отбрасываем reasoning-мусор (chain-of-thought): оставляем только
-		// строки в формате подсказки «EN: <English> | RU: <Russian>».
-		if !isHintLine(clean) {
+		// строки в формате подсказки «SRC: <source> | TGT: <target>».
+		if !isHintLine(clean, srcTag, tgtTag) {
 			continue
 		}
 		hints = append(hints, clean)
@@ -206,6 +211,17 @@ func parseAnswerHints(raw string) []string {
 		hints = hints[:maxAnswerHints]
 	}
 	return hints
+}
+
+// langTags возвращает верхнерегистровые теги языков для формата подсказки.
+func langTags(srcLang, tgtLang string) (srcTag, tgtTag string) {
+	if srcLang == "" {
+		srcLang = DefaultSourceLang
+	}
+	if tgtLang == "" {
+		tgtLang = DefaultTargetLang
+	}
+	return strings.ToUpper(srcLang), strings.ToUpper(tgtLang)
 }
 
 // stripThinking удаляет из ответа все блоки <think>…</think>. Groq для
@@ -229,9 +245,9 @@ func stripThinking(s string) string {
 }
 
 // isHintLine определяет, соответствует ли строка формату подсказки
-// «EN: <English> | RU: <Russian>» (см. SystemPromptAnswerGen и CandidateContext).
+// «<SRC>: <source> | <TGT>: <target>» для заданных тегов языков.
 // Reasoning-строки (chain-of-thought) такого формата не содержат и отбрасываются.
-func isHintLine(line string) bool {
+func isHintLine(line, srcTag, tgtTag string) bool {
 	// Groq для qwen3.6-27b кладёт reasoning (chain-of-thought) прямо в
 	// content внутри тегов <think>…</think>. Отбрасываем такие строки явно —
 	// они точно не являются подсказкой, даже если случайно содержат «|».
@@ -242,7 +258,8 @@ func isHintLine(line string) bool {
 		return false
 	}
 	upper := strings.ToUpper(line)
-	return strings.Contains(upper, "EN:") && strings.Contains(upper, "RU:")
+	return strings.Contains(upper, srcTag+":") &&
+		strings.Contains(upper, tgtTag+":")
 }
 
 func stripBulletPrefix(s string) string {

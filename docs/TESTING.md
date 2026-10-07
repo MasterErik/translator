@@ -99,6 +99,14 @@ go test -tags integration -v ./internal/translator/...
 
 Обычный `go test ./...` гоняет только юнит-тесты без запуска приложения.
 
+Юнит-тесты `internal/ui` (без окна, offscreen `render()` + `FrameMetrics`):
+`overlay_test.go`, `interim_zone_test.go`, `overlay_label_test.go`, `autoscroll_test.go`,
+`separator_count_test.go`, `history_toggle_test.go`, `render_framework_test.go`,
+`zone4_hidden_test.go`, `bug3_verify_test.go`, `window_test.go`. Общие хелперы —
+`testhelpers_test.go` (`answersFrom`, `newTestContext`, `newLabelContext`).
+Автоскролл проверяется через `FrameMetrics{…AtEnd}`; удалённых геттеров
+(`TranscriptionScrollLen`, `TranslationAtEnd`, `*AtEnd`-методы) больше нет.
+
 ---
 
 ## SLA & Performance Test Constraints

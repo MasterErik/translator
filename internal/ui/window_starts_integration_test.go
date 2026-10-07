@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/widget/material"
+
 	"github.com/mastererik/translator/internal/logger"
 )
 
@@ -22,7 +24,7 @@ func TestWindowStarts(t *testing.T) {
 	// Добавляем сообщения во все 4 зоны.
 	o.AddMessage(UIMessage{Type: Interim, Text: "I have five years of..."})
 	o.AddMessage(UIMessage{Type: Translation, Text: "У меня пять лет опыта...", MsgStatus: "done"})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"Yes, I agree", "No, thanks", "Let me think"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("Yes, I agree", "No, thanks", "Let me think")})
 
 	// Добавляем 40 строк в историю перевода (>10 — проверка скролла).
 	for i := 1; i <= 40; i++ {
@@ -82,16 +84,20 @@ func TestWindowStarts(t *testing.T) {
 		t.Errorf("first translation = %q, want %q", hist[0].Translation, "Перевод строки 1")
 	}
 
-	// Проверяем скролл: prevTranscLen должен обновиться = 40 строк.
-	if o.TranscriptionScrollLen() != 40 {
-		t.Errorf("prevTranscLen = %d, want 40 — скролл не сработал (needScrollHist=false?)", o.TranscriptionScrollLen())
+	// Проверяем автоскролл: рендерим кадр как в Run() и читаем FrameMetrics.
+	// Раньше проверялись геттеры TranscriptionScrollLen/TranslationAtEnd/
+	// TranscriptionAtEnd — теперь метрики кадра возвращает сам render().
+	th := material.NewTheme()
+	gtx, _ := newTestContext(1200, 650)
+	m := o.render(gtx, th)
+	if !m.TranslationsAtEnd {
+		t.Error("Translation History: скролл НЕ в конце (TranslationsAtEnd=false)")
 	}
-	// Флаги конца — производная проверка.
-	if !o.TranslationAtEnd() {
-		t.Error("Translation History: скролл НЕ в конце")
+	if !m.TranscriptionAtEnd {
+		t.Error("Transcription History: скролл НЕ в конце (TranscriptionAtEnd=false)")
 	}
-	if !o.TranscriptionAtEnd() {
-		t.Error("Transcription History: скролл НЕ в конце")
+	if !m.InterimAtEnd {
+		t.Error("Interim: скролл НЕ в конце (InterimAtEnd=false)")
 	}
 
 	// Проверяем размеры окна.

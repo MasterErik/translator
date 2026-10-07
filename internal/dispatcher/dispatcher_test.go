@@ -207,20 +207,97 @@ func TestDispatcherFinalTranscript(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// После финального транскрипта сразу идёт History в overlay.
+	// После финального транскрипта: History (зона 4) + Interim с ФИНАЛЬНЫМ
+	// текстом (зона 1 — заменяет последний partial, Task 1.2).
 	msgs := overlay.GetMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("ожидалось 1 сообщение (History), получено %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("ожидалось 2 сообщения (History + Interim), получено %d", len(msgs))
 	}
 	if msgs[0].Type != ui.History {
 		t.Errorf("ожидался History, получен %v", msgs[0].Type)
 	}
 	if msgs[0].Text != "I have five years of experience" {
-		t.Errorf("текст: %q", msgs[0].Text)
+		t.Errorf("текст History: %q", msgs[0].Text)
+	}
+	if msgs[1].Type != ui.Interim {
+		t.Errorf("ожидался Interim (финал в зоне 1), получен %v", msgs[1].Type)
+	}
+	if msgs[1].Text != "I have five years of experience" {
+		t.Errorf("финальный Interim: %q, want полный текст фразы", msgs[1].Text)
 	}
 
 	cancel()
 	<-done
+}
+
+// TestDispatcherFinalTranscriptReplacesPartial — Task 1.2 (RED→GREEN):
+// скриптованный поток interim → EndOfTurn: mock overlay получает Interim с
+// ФИНАЛЬНЫМ (полным/исправленным) текстом реплики, заменяя последний partial
+// в зоне 1, И History. Финальный текст не только в скрытой зоне 4.
+func TestDispatcherFinalTranscriptReplacesPartial(t *testing.T) {
+	overlay := &mockOverlay{}
+	engine := &mockEngine{}
+	logger := &mockLogger{}
+	cfg := DefaultConfig()
+	cfg.AnswerQueueSize = -1
+	d := New(overlay, engine, logger, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	textStream := make(chan common.STTEvent, 8)
+	done := make(chan struct{}, 1)
+
+	go d.Run(ctx, textStream, done)
+
+	// 1. Partial interim — зона 1 показывает неполную фразу.
+	textStream <- common.STTEvent{
+		Event:     common.EventUpdate,
+		ChannelID: "speaker",
+		Text:      "I have five",
+		Timestamp: time.Now(),
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// 2. EndOfTurn — финальная полная/исправленная версия фразы.
+	textStream <- common.STTEvent{
+		Event:     common.EventEndOfTurn,
+		ChannelID: "speaker",
+		Text:      "I have five years of experience",
+		Timestamp: time.Now(),
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	<-done
+
+	msgs := overlay.GetMessages()
+	// mockOverlay append-only (реальная замена Interim — в Overlay.AddMessage):
+	// ожидаем 2 Interim (partial + финал) и 1 History; ПОСЛЕДНИЙ Interim несёт
+	// финальный текст — это контракт dispatcher → UI для зоны 1.
+	var interimTexts []string
+	var historyCount int
+	for _, m := range msgs {
+		switch m.Type {
+		case ui.Interim:
+			interimTexts = append(interimTexts, m.Text)
+		case ui.History:
+			historyCount++
+		}
+	}
+
+	if len(interimTexts) != 2 {
+		t.Fatalf("Interim count = %d, want 2 (partial + финал)", len(interimTexts))
+	}
+	if interimTexts[0] != "I have five" {
+		t.Errorf("первый Interim (partial) = %q, want %q", interimTexts[0], "I have five")
+	}
+	if last := interimTexts[len(interimTexts)-1]; last != "I have five years of experience" {
+		t.Errorf("последний Interim = %q, want финальный полный текст %q", last, "I have five years of experience")
+	}
+	if historyCount != 1 {
+		t.Errorf("History count = %d, want 1 (финал уходит и в историю)", historyCount)
+	}
 }
 
 func TestDispatcherTranslationPaired(t *testing.T) {
@@ -260,8 +337,9 @@ func TestDispatcherTranslationPaired(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	msgs := overlay.GetMessages()
-	if len(msgs) != 2 {
-		t.Fatalf("ожидалось 2 сообщения (History + Translation), получено %d", len(msgs))
+	// 3 сообщения: History (default) + Interim (финал в зоне 1, Task 1.2) + Translation.
+	if len(msgs) != 3 {
+		t.Fatalf("ожидалось 3 сообщения (History + Interim + Translation), получено %d", len(msgs))
 	}
 
 	// Первое — History (оригинал без перевода, сразу после финального транскрипта).
@@ -275,12 +353,20 @@ func TestDispatcherTranslationPaired(t *testing.T) {
 		t.Errorf("не должно быть перевода в первом History: %q", msgs[0].Translation)
 	}
 
-	// Второе — Translation.
-	if msgs[1].Type != ui.Translation {
-		t.Errorf("ожидался Translation, получен %v", msgs[1].Type)
+	// Второе — Interim с финальным текстом (заменяет partial в зоне 1).
+	if msgs[1].Type != ui.Interim {
+		t.Errorf("ожидался Interim, получен %v", msgs[1].Type)
 	}
-	if msgs[1].Text != "У меня пять лет опыта" {
-		t.Errorf("текст перевода: %q", msgs[1].Text)
+	if msgs[1].Text != "I have five years of experience" {
+		t.Errorf("финальный Interim: %q", msgs[1].Text)
+	}
+
+	// Третье — Translation.
+	if msgs[2].Type != ui.Translation {
+		t.Errorf("ожидался Translation, получен %v", msgs[2].Type)
+	}
+	if msgs[2].Text != "У меня пять лет опыта" {
+		t.Errorf("текст перевода: %q", msgs[2].Text)
 	}
 }
 
@@ -337,6 +423,65 @@ func TestDispatcherQuestionTriggersAnswers(t *testing.T) {
 	}
 	if !found {
 		t.Error("AnswerCandidates не найдены в сообщениях UI")
+	}
+}
+
+// TestDispatcherParsesAnswersForConfiguredLangs — скриптованный ответ LLM в
+// формате EN/DE при TargetLang=de превращается в структурированные Answer,
+// и Source/Target доходят до overlay без строкового парсинга в UI.
+func TestDispatcherParsesAnswersForConfiguredLangs(t *testing.T) {
+	overlay := &mockOverlay{}
+	engine := &mockEngine{
+		answers: []string{"EN: Redis is a cache | DE: Redis ist ein Cache"},
+	}
+	cfg := DefaultConfig()
+	cfg.AnswerQueueSize = -1
+	cfg.SourceLang = "en"
+	cfg.TargetLang = "de"
+	d := New(overlay, engine, &mockLogger{}, cfg)
+
+	d.GenerateAnswers("What is Redis?")
+
+	msgs := overlay.GetMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("ожидалось 1 сообщение, получено %d", len(msgs))
+	}
+	if len(msgs[0].Answers) != 1 {
+		t.Fatalf("ожидалась 1 подсказка, получено %d", len(msgs[0].Answers))
+	}
+	got := msgs[0].Answers[0]
+	if got.Source != "EN: Redis is a cache" {
+		t.Errorf("Source = %q, want %q", got.Source, "EN: Redis is a cache")
+	}
+	if got.Target != "Redis ist ein Cache" {
+		t.Errorf("Target = %q, want %q", got.Target, "Redis ist ein Cache")
+	}
+}
+
+// TestDispatcherParseAnswersKeepsUnparsableText — строка без целевого
+// разделителя сохраняется целиком как Source, текст не теряется.
+func TestDispatcherParseAnswersKeepsUnparsableText(t *testing.T) {
+	overlay := &mockOverlay{}
+	engine := &mockEngine{
+		answers: []string{"plain answer without separator", "EN: kept | RU: кэш"},
+	}
+	cfg := DefaultConfig()
+	cfg.AnswerQueueSize = -1
+	cfg.SourceLang = "en"
+	cfg.TargetLang = "de" // строки с RU не парсятся для de
+	d := New(overlay, engine, &mockLogger{}, cfg)
+
+	d.GenerateAnswers("Q?")
+
+	msgs := overlay.GetMessages()
+	if len(msgs) != 1 || len(msgs[0].Answers) != 2 {
+		t.Fatalf("ожидалось 1 сообщение с 2 подсказками, получено %+v", msgs)
+	}
+	if got := msgs[0].Answers[0]; got.Source != "plain answer without separator" || got.Target != "" {
+		t.Errorf("непарсящаяся строка: got %+v, want Source=raw Target=\"\"", got)
+	}
+	if got := msgs[0].Answers[1]; got.Source != "EN: kept | RU: кэш" || got.Target != "" {
+		t.Errorf("строка с чужим тегом: got %+v, want Source=raw Target=\"\"", got)
 	}
 }
 
@@ -720,17 +865,44 @@ func TestDispatcherGenerateAnswersError(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("ожидалось 1 сообщение об ошибке, получено %d", len(msgs))
 	}
-	if msgs[0].Type != ui.AnswerCandidates {
-		t.Errorf("ожидался AnswerCandidates, получен %v", msgs[0].Type)
+	if msgs[0].Type != ui.Error {
+		t.Errorf("ожидался Error, получен %v", msgs[0].Type)
 	}
-	if len(msgs[0].Answers) != 1 {
-		t.Fatalf("ожидался 1 ответ с ошибкой, получено %d", len(msgs[0].Answers))
-	}
-	if !stringsContains(msgs[0].Answers[0], "⚠️") && !stringsContains(msgs[0].Answers[0], "Ошибка") {
-		t.Errorf("сообщение об ошибке не содержит ⚠️ или 'Ошибка': %q", msgs[0].Answers[0])
+	if !stringsContains(msgs[0].Text, "LLM timeout") {
+		t.Errorf("текст ошибки не содержит причину: %q", msgs[0].Text)
 	}
 	if !logger.HasDebug("генерация подсказок не удалась") {
 		t.Error("ожидался debug-лог об ошибке генерации")
+	}
+}
+
+// TestDispatcherGenerateAnswersCancelledSilent — отмена генерации
+// (Esc / истёкший AnswerTimeout) не должна показывать ошибку в UI: ветка
+// ansCtx.Err() != nil возвращается тихо, только с debug-логом «отменена».
+// Контраст к TestDispatcherGenerateAnswersError (реальная ошибка → ui.Error).
+func TestDispatcherGenerateAnswersCancelledSilent(t *testing.T) {
+	engine := &mockEngine{
+		delay: 5 * time.Second, // дольше AnswerTimeout → ctx истечёт
+	}
+	overlay := &mockOverlay{}
+	logger := &mockLogger{}
+	cfg := DefaultConfig()
+	cfg.AnswerQueueSize = -1
+	cfg.AnswerTimeout = 30 * time.Millisecond // быстро отменяем
+	d := New(overlay, engine, logger, cfg)
+
+	d.GenerateAnswers("What is Redis?")
+
+	// UI НЕ должен получить Error — отмена тихая.
+	if msgs := overlay.GetMessages(); len(msgs) != 0 {
+		t.Fatalf("при отмене генерации ожидалось 0 UI-сообщений, получено %d: %v", len(msgs), msgs)
+	}
+	// Должен быть debug-лог об отмене, а не об ошибке.
+	if !logger.HasDebug("генерация отменена") {
+		t.Errorf("ожидался debug-лог «генерация отменена», получено: %v", logger.DebugLogs())
+	}
+	if logger.HasDebug("генерация подсказок не удалась") {
+		t.Error("отмена не должна логироваться как ошибка генерации")
 	}
 }
 

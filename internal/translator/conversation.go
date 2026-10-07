@@ -57,6 +57,10 @@ type AnswerRequest struct {
 	ConversationContext string
 	// Command — управляющая команда генерации (F1–F4).
 	Command GenerationCommand
+	// SourceLang/TargetLang — пара языков для формата ответа
+	// (ISO 639-1). Пустые значения трактуются как дефолт en/ru.
+	SourceLang string
+	TargetLang string
 }
 
 // ConversationHistory хранит историю turns текущего интервью.

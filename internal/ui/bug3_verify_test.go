@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"github.com/mastererik/translator/internal/logger"
 	"strings"
 	"testing"
@@ -93,10 +92,6 @@ func hasTranslationDone(msgs []UIMessage) bool {
 		if m.Type == Translation && m.MsgStatus == "done" && strings.Contains(m.Text, "Привет") {
 			return true
 		}
-	}
-	fmt.Println("DEBUG hasTranslationDone: no match found")
-	for i, m := range msgs {
-		fmt.Printf("  msg[%d]: type=%s status=%s text=%q\n", i, m.Type, m.MsgStatus, m.Text)
 	}
 	return false
 }

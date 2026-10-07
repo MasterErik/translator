@@ -20,11 +20,5 @@ func TestSetNoActivate_InvalidHWND(t *testing.T) {
 	}
 }
 
-func TestWindowConstants(t *testing.T) {
-	if wsExTransparent != 0x00000020 {
-		t.Errorf("WS_EX_TRANSPARENT = 0x%08x, want 0x00000020", wsExTransparent)
-	}
-	if wsExNoactivate != 0x08000000 {
-		t.Errorf("WS_EX_NOACTIVATE = 0x%08x, want 0x08000000", wsExNoactivate)
-	}
-}
+// TestWindowConstants удалён: ассертил литералы Win32-констант
+// (wsExTransparent == 0x20) — зеркалит объявления, компилятор и так гарантирует.

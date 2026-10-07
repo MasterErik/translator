@@ -59,7 +59,7 @@ func TestGroqHints_RealAnswers(t *testing.T) {
 		} {
 			t.Run(q, func(t *testing.T) {
 				raw := rawContent(t, ctx, prov, model, q, "", maxTokens)
-				hints := parseAnswerHints(raw)
+				hints := parseAnswerHints(raw, "", "")
 				t.Logf("parseAnswerHints: %d подсказок: %v", len(hints), hints)
 
 				answers, err := prov.GenerateAnswers(ctx, AnswerRequest{Question: q})
@@ -83,7 +83,7 @@ func TestGroqHints_RealAnswers(t *testing.T) {
 		q := "Tell me about a project where you used microservices."
 
 		raw := rawContent(t, ctx, prov, model, q, cv, maxTokens)
-		hints := parseAnswerHints(raw)
+		hints := parseAnswerHints(raw, "", "")
 		t.Logf("parseAnswerHints: %d подсказок: %v", len(hints), hints)
 
 		answers, err := prov.GenerateAnswers(ctx, AnswerRequest{Question: q, CandidateContext: cv})
@@ -106,7 +106,7 @@ func rawContent(t *testing.T, ctx context.Context, prov *ChatProvider, model, qu
 	req := openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: buildSystemPrompt(cvContext)},
+			{Role: openai.ChatMessageRoleSystem, Content: buildSystemPrompt(cvContext, "en", "ru")},
 			{Role: openai.ChatMessageRoleUser, Content: BuildAnswerPrompt(AnswerRequest{Question: question, CandidateContext: cvContext})},
 		},
 		Temperature: 0.3,

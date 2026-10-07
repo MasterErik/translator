@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,10 @@ type Config struct {
 
 	// AnswerQueueSize — размер буфера очереди вопросов (default 16).
 	AnswerQueueSize int
+
+	// SourceLang/TargetLang — пара языков подсказок (ISO 639-1, default en/ru).
+	SourceLang string
+	TargetLang string
 
 	// CandidateContext — постоянные факты кандидата (база CV).
 	CandidateContext string
@@ -85,6 +90,10 @@ type Dispatcher struct {
 	candidateContext   string
 	candidateContextFn func(string) string
 
+	// Пара языков подсказок (ISO 639-1) — для формата промпта и разбора ответа.
+	srcLang string
+	tgtLang string
+
 	// Текущий обнаруженный вопрос (для F1–F4 regeneration).
 	currentQuestion string
 	currentMu       sync.Mutex
@@ -117,6 +126,12 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 	if cfg.CommandBufferSize <= 0 {
 		cfg.CommandBufferSize = 16
 	}
+	if cfg.SourceLang == "" {
+		cfg.SourceLang = translator.DefaultSourceLang
+	}
+	if cfg.TargetLang == "" {
+		cfg.TargetLang = translator.DefaultTargetLang
+	}
 
 	answerCh := make(chan string, cfg.AnswerQueueSize)
 
@@ -132,6 +147,8 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 		history:            translator.NewConversationHistory(cfg.RecentTurns, cfg.MaxContextTokens),
 		candidateContext:   cfg.CandidateContext,
 		candidateContextFn: cfg.CandidateContextFn,
+		srcLang:            cfg.SourceLang,
+		tgtLang:            cfg.TargetLang,
 	}
 }
 
@@ -235,6 +252,15 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 
 		d.overlay.AddMessage(ui.UIMessage{
 			Type:      ui.History,
+			Text:      event.Text,
+			Timestamp: event.Timestamp,
+		})
+
+		// Финальная (полная/исправленная) версия фразы заменяет последний
+		// partial в зоне 1 — фраза выведена целиком до начала следующей
+		// (механизм замены Interim уже есть в AddMessage). Зона 1 не очищается.
+		d.overlay.AddMessage(ui.UIMessage{
+			Type:      ui.Interim,
 			Text:      event.Text,
 			Timestamp: event.Timestamp,
 		})
@@ -420,6 +446,8 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		CandidateContext:    cc,
 		ConversationContext: d.history.BuildContext(),
 		Command:             cmd,
+		SourceLang:          d.srcLang,
+		TargetLang:          d.tgtLang,
 	}
 
 	ansCtx, ansCancel := context.WithTimeout(context.Background(), d.cfg.AnswerTimeout)
@@ -448,9 +476,8 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		}
 		if d.overlay != nil {
 			d.overlay.AddMessage(ui.UIMessage{
-				Type:      ui.AnswerCandidates,
-				Text:      question,
-				Answers:   []string{fmt.Sprintf("\u26a0\ufe0f Ошибка: %v", err)},
+				Type:      ui.Error,
+				Text:      fmt.Sprintf("%v", err),
 				Timestamp: time.Now(),
 			})
 		}
@@ -464,22 +491,45 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		return
 	}
 
+	// Парсим сырые строки LLM в структурированные пары ДО добавления в UI.
+	// Непарсящиеся строки сохраняются целиком как Source (текст не теряем).
+	parsed := d.parseAnswers(answers)
+
 	if d.overlay != nil {
 		d.overlay.AddMessage(ui.UIMessage{
 			Type:      ui.AnswerCandidates,
 			Text:      question,
-			Answers:   answers,
+			Answers:   parsed,
 			Timestamp: time.Now(),
 		})
 	}
 
 	if d.sessLog != nil {
-		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: подсказки сгенерированы: question=%v, command=%v, count=%v", question, cmd, len(answers)))
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: подсказки сгенерированы: question=%v, command=%v, count=%v", question, cmd, len(parsed)))
 	}
 
 	// Сохраняем финальный ответ в историю. Regeneration (F2–F4) заменяет
 	// последнюю версию ответа на тот же вопрос (не создаёт новый turn).
-	d.history.RecordAnswer(question, answers[0])
+	d.history.RecordAnswer(question, parsed[0].Source)
+}
+
+// parseAnswers превращает сырые строки ответа LLM в структурированные пары
+// Source/Target для настроенной пары языков. Строка без разделителя с целевым
+// тегом сохраняется целиком как Source (текст никогда не теряется).
+func (d *Dispatcher) parseAnswers(raw []string) []ui.Answer {
+	srcTag := strings.ToUpper(d.srcLang)
+	tgtTag := strings.ToUpper(d.tgtLang)
+
+	out := make([]ui.Answer, 0, len(raw))
+	for _, s := range raw {
+		ans, ok := translator.ParseAnswer(s, srcTag, tgtTag)
+		if !ok {
+			// Нет целевой части — оставляем исходную строку целиком.
+			ans = ui.Answer{Source: strings.TrimSpace(s)}
+		}
+		out = append(out, ans)
+	}
+	return out
 }
 
 func (d *Dispatcher) ReportDrop(channel string) {

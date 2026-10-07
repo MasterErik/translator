@@ -28,7 +28,7 @@ func TestHistoryDataDoesNotShowZone4(t *testing.T) {
 	}
 	o.AddMessage(UIMessage{Type: Interim, Text: "interim text"})
 	o.AddMessage(UIMessage{Type: Translation, Text: "готовый перевод", MsgStatus: "done"})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"EN: yes | RU: да"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: yes | RU: да")})
 
 	if o.HistoryVisible() {
 		t.Fatal("historyVisible должен быть false по умолчанию")
@@ -37,20 +37,20 @@ func TestHistoryDataDoesNotShowZone4(t *testing.T) {
 	gtx, _ := newTestContext(800, 650)
 	th := material.NewTheme()
 
-	dims := o.render(gtx, th)
-	if dims.Size.X != 800 || dims.Size.Y != 650 {
-		t.Fatalf("render size = %v, want 800x650", dims.Size)
+	m := o.render(gtx, th)
+	if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+		t.Fatalf("render занимает %v, want 800x650", gtx.Constraints.Max)
 	}
 
-	if got := zoneSeparatorCount; got != 2 {
+	if got := m.SeparatorCount; got != 2 {
 		t.Errorf("separator count = %d, want 2 (зона 4 и её separator отсутствуют при historyVisible=false)", got)
 	}
 
 	// Контраст: при F4 (historyVisible=true) появляется третий separator.
 	o.ToggleTranscriptionHistory()
 	gtx2, _ := newTestContext(800, 650)
-	o.render(gtx2, th)
-	if got := zoneSeparatorCount; got != 3 {
+	m2 := o.render(gtx2, th)
+	if got := m2.SeparatorCount; got != 3 {
 		t.Errorf("separator count (visible) = %d, want 3 (зона 4 добавлена)", got)
 	}
 }
@@ -64,7 +64,7 @@ func TestHistoryDataDoesNotLeakIntoZones(t *testing.T) {
 		o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("h%d", i), Translation: fmt.Sprintf("t%d", i)})
 	}
 	o.AddMessage(UIMessage{Type: Translation, Text: "реальный перевод", MsgStatus: "done"})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"EN: a | RU: б"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("EN: a | RU: б")})
 
 	// Зона 2 (переводы) видит только Translation done, не History.
 	if tr := o.translationMessages(); len(tr) != 1 || tr[0].Text != "реальный перевод" {
@@ -76,7 +76,7 @@ func TestHistoryDataDoesNotLeakIntoZones(t *testing.T) {
 	}
 	// Зона 3 (ответы) видит только AnswerCandidates.
 	answers, ok := o.lastAnswers()
-	if !ok || len(answers.Answers) != 1 || answers.Answers[0] != "EN: a | RU: б" {
+	if !ok || len(answers.Answers) != 1 || answers.Answers[0].Source != "EN: a | RU: б" {
 		t.Errorf("lastAnswers = %v ok=%v, want только [EN: a | RU: б]", answers.Answers, ok)
 	}
 }

@@ -836,15 +836,15 @@ func TestGenerateAnswersAsync_LLMError(t *testing.T) {
 	msgs := ovl.GetMessages()
 	found := false
 	for _, m := range msgs {
-		if m.Type == ui.AnswerCandidates {
+		if m.Type == ui.Error {
 			found = true
-			if len(m.Answers) == 0 || m.Answers[0] == "" {
-				t.Error("AnswerCandidates при ошибке должны содержать сообщение об ошибке")
+			if m.Text == "" {
+				t.Error("Error при ошибке LLM должен содержать текст причины")
 			}
 		}
 	}
 	if !found {
-		t.Error("ожидались AnswerCandidates с ошибкой при сбое LLM")
+		t.Error("ожидался Error при сбое LLM")
 	}
 }
 

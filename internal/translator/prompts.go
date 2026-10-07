@@ -7,19 +7,38 @@ import (
 	"strings"
 )
 
-// SystemPromptAnswerGen is the prompt used for generating interview answer
-// hints. It instructs the model to produce 1 concise bullet-point answer
-// in Russian, leveraging the provided CV/resume context for personalization.
-const SystemPromptAnswerGen = `
-Answer from the candidate's perspective, in first person.
-Use only information available in the provided candidate context.
-Do not invent experience, projects, technologies, responsibilities, or years.
-Keep answers brief, natural, conversational, and suitable for speaking aloud.
-Use IT terminology in English in both languages.
-Response format:
-- EN: <answer in English> | RU: <Russian translation>
-Do not include explanations, instructions, reminders, or meta-comments.
-`
+// DefaultSourceLang/DefaultTargetLang are the language pair used when a caller
+// passes empty strings to BuildSystemPrompt.
+const (
+	DefaultSourceLang = "en"
+	DefaultTargetLang = "ru"
+)
+
+// BuildSystemPrompt builds the system prompt for answer generation, templated
+// from the configured language pair. The response format is
+// "<SRC>: <answer in source> | <TGT>: <translation in target>" where the tags
+// are the uppercased ISO 639-1 codes (EN:, RU:, DE:, FR:). Empty langs fall
+// back to the defaults (en/ru), so the default en→ru behaviour is unchanged.
+func BuildSystemPrompt(sourceLang, targetLang string) string {
+	if sourceLang == "" {
+		sourceLang = DefaultSourceLang
+	}
+	if targetLang == "" {
+		targetLang = DefaultTargetLang
+	}
+	srcTag := strings.ToUpper(sourceLang)
+	tgtTag := strings.ToUpper(targetLang)
+
+	return "\n" +
+		"Answer from the candidate's perspective, in first person.\n" +
+		"Use only information available in the provided candidate context.\n" +
+		"Do not invent experience, projects, technologies, responsibilities, or years.\n" +
+		"Keep answers brief, natural, conversational, and suitable for speaking aloud.\n" +
+		"Use IT terminology in English in both languages.\n" +
+		"Response format:\n" +
+		"- " + srcTag + ": <answer in the source language> | " + tgtTag + ": <translated into the target language>\n" +
+		"Do not include explanations, instructions, reminders, or meta-comments.\n"
+}
 
 // BuildAnswerPrompt constructs the full user prompt for generating interview
 // answer hints. It includes the conversation context (recent history) and the

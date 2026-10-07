@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"strings"
 	"sync"
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/io/event"
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -23,17 +23,32 @@ import (
 )
 
 // Overlay — прозрачное окно с четырьмя зонами.
+//
+// Состояние зон разделено по назначению (Task 2.2, P4): каждое поле хранит
+// сообщения ровно одного типа, AddMessage маршрутизирует по msg.Type, а render
+// читает поля напрямую (без фильтрации единого слайса). Все поля защищены mu.
 type Overlay struct {
-	cfg      OverlayConfig
-	messages []UIMessage
-	mu       sync.RWMutex
+	cfg OverlayConfig
+	mu  sync.RWMutex
+
+	// interimMsg — текущая речь (зона 1): хранится только последнее Interim.
+	interimMsg UIMessage
+	// translations — переводы (зона 2): append-only.
+	translations []UIMessage
+	// history — оригиналы речи (зона 4): append-only.
+	history []UIMessage
+	// answersHistory — история ВСЕХ AnswerCandidates (зона 3): рендерится
+	// последняя, остальные хранятся для будущей навигации по вопросам.
+	answersHistory []UIMessage
+	// errorMsg — последняя ошибка генерации (зона 3): хранится только последняя.
+	errorMsg UIMessage
+
 	shutdown chan struct{}
 
-	invalidate    func()
-	prevTransLen  int // для автоскролла переводов
-	prevTranscLen int // для автоскролла транскрипций
+	invalidate func()
 
 	// Персистентные списки — хранят позицию скролла между кадрами.
+	interimList       layout.List
 	translationList   layout.List
 	transcriptionList layout.List
 	answersList       layout.List
@@ -42,12 +57,25 @@ type Overlay struct {
 	// Начальное состояние — скрыта (зона 4 и её separator отсутствуют до F4). Доступ под mu.
 	historyVisible bool
 
-	// Для тестов: позиция скролла после последнего кадра.
-	// Защищено mu — читать только через геттеры (см. ниже).
-	translationAtEnd   bool
-	transcriptionAtEnd bool
-
 	sessLog logger.SessionLogger
+}
+
+// FrameMetrics — результат рендера кадра. Возвращается из render() вместо
+// глобального состояния (Task 3.1/3.2): метрики принадлежат КОНКРЕТНОМУ
+// оверлею и конкретному кадру, поэтому не текут между оверлеями и не требуют
+// глобальных переменных. Поля AtEnd заполняются в render() после layout.List
+// каждого скролла: true — список доскроллен до конца (Position.BeforeEnd=false).
+//
+// Вызывающий Run() значение игнорирует (метрики нужны только тестам);
+// тесты читают возвращённое значение напрямую.
+type FrameMetrics struct {
+	SeparatorCount int
+	InterimAtEnd   bool
+	AnswersAtEnd   bool
+	// TranslationsAtEnd / TranscriptionAtEnd — зоны 2/4; осмысленны только
+	// при наличии данных (пустой список → false).
+	TranslationsAtEnd  bool
+	TranscriptionAtEnd bool
 }
 
 func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
@@ -62,8 +90,12 @@ func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 	}
 	return &Overlay{
 		cfg:               cfg,
-		messages:          make([]UIMessage, 0),
+		interimMsg:        UIMessage{},
+		translations:      make([]UIMessage, 0),
+		history:           make([]UIMessage, 0),
+		answersHistory:    make([]UIMessage, 0),
 		shutdown:          make(chan struct{}),
+		interimList:       layout.List{Axis: layout.Vertical},
 		translationList:   layout.List{Axis: layout.Vertical},
 		transcriptionList: layout.List{Axis: layout.Vertical},
 		answersList:       layout.List{Axis: layout.Vertical},
@@ -72,57 +104,36 @@ func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 	}
 }
 
-// AddMessage — Interim и AnswerCandidates заменяются. Translation "done" добавляется,
-// pending/streaming заменяют последний незавершённый перевод. History — просто append.
+// AddMessage маршрутизирует сообщение сразу в поле своей зоны (Task 2.2, P4):
+// Interim/Error заменяются, Translation/History/AnswerCandidates накапливаются.
+// Все поля защищены mu.
 func (o *Overlay) AddMessage(msg UIMessage) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	switch msg.Type {
 	case Interim:
-		// Только последний interim.
-		for i := len(o.messages) - 1; i >= 0; i-- {
-			if o.messages[i].Type == Interim {
-				o.messages[i] = msg
-				o.invalidateIf()
-				return
-			}
-		}
-		o.messages = append(o.messages, msg)
+		// Только последняя текущая речь.
+		o.interimMsg = msg
 
 	case Translation:
-		if msg.MsgStatus == "done" {
-			// Удаляем pending/streaming, добавляем done.
-			o.removePendingTranslations()
-			o.messages = append(o.messages, msg)
-		} else {
-			// pending/streaming: заменяем последний незавершённый.
-			for i := len(o.messages) - 1; i >= 0; i-- {
-				if o.messages[i].Type == Translation && o.messages[i].MsgStatus != "done" {
-					o.messages[i] = msg
-					o.invalidateIf()
-					return
-				}
-			}
-			o.messages = append(o.messages, msg)
-		}
-
-	case AnswerCandidates:
-		for i := len(o.messages) - 1; i >= 0; i-- {
-			if o.messages[i].Type == AnswerCandidates {
-				o.messages[i] = msg
-				o.invalidateIf()
-				return
-			}
-		}
-		o.messages = append(o.messages, msg)
+		// Переводы финализированы: только append (как History).
+		o.translations = append(o.translations, msg)
 
 	case History:
-		// История: просто добавляем, не заменяем.
-		o.messages = append(o.messages, msg)
+		// История оригиналов: append-only.
+		o.history = append(o.history, msg)
+
+	case AnswerCandidates:
+		// История всех подсказок: append (рендерится последняя).
+		o.answersHistory = append(o.answersHistory, msg)
+
+	case Error:
+		// Последняя ошибка генерации (замена).
+		o.errorMsg = msg
 
 	default:
-		o.messages = append(o.messages, msg)
+		o.history = append(o.history, msg)
 	}
 
 	o.invalidateIf()
@@ -134,44 +145,23 @@ func (o *Overlay) invalidateIf() {
 	}
 }
 
-func (o *Overlay) removePendingTranslations() {
-	for i := len(o.messages) - 1; i >= 0; i-- {
-		if o.messages[i].Type == Translation && o.messages[i].MsgStatus != "done" {
-			o.messages = append(o.messages[:i], o.messages[i+1:]...)
-		}
-	}
-}
-
+// GetMessages — обратная совместимость (тесты, OverlayUI-интерфейс): возвращает
+// копию конкатенации всех полей в стабильном порядке: interim, translations,
+// history, answersHistory, error (последний — только при заданном типе).
 func (o *Overlay) GetMessages() []UIMessage {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	out := make([]UIMessage, len(o.messages))
-	copy(out, o.messages)
+	out := make([]UIMessage, 0, len(o.translations)+len(o.history)+len(o.answersHistory)+2)
+	if o.interimMsg.Type != "" {
+		out = append(out, o.interimMsg)
+	}
+	out = append(out, o.translations...)
+	out = append(out, o.history...)
+	out = append(out, o.answersHistory...)
+	if o.errorMsg.Type != "" {
+		out = append(out, o.errorMsg)
+	}
 	return out
-}
-
-// TranslationAtEnd — доскроллена ли зона переводов до конца после последнего кадра.
-// Потокобезопасно; для тестов.
-func (o *Overlay) TranslationAtEnd() bool {
-	o.mu.RLock()
-	defer o.mu.RUnlock()
-	return o.translationAtEnd
-}
-
-// TranscriptionAtEnd — доскроллена ли зона транскрипций до конца после последнего кадра.
-// Потокобезопасно; для тестов.
-func (o *Overlay) TranscriptionAtEnd() bool {
-	o.mu.RLock()
-	defer o.mu.RUnlock()
-	return o.transcriptionAtEnd
-}
-
-// TranscriptionScrollLen — длина списка транскрипций после последнего кадра (prevTranscLen).
-// Потокобезопасно; для тестов.
-func (o *Overlay) TranscriptionScrollLen() int {
-	o.mu.RLock()
-	defer o.mu.RUnlock()
-	return o.prevTranscLen
 }
 
 // ── GioUI Window ──
@@ -197,12 +187,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			w.Perform(system.ActionClose)
-			for {
-				evt := w.Event()
-				if _, ok := evt.(app.DestroyEvent); ok {
-					return ctx.Err()
-				}
-			}
+			return waitForDestroy(ctx, w.Event, destroyEventTimeout, o.sessLog)
 		default:
 		}
 
@@ -212,8 +197,57 @@ func (o *Overlay) Run(ctx context.Context) error {
 			return e.Err
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
-			o.render(gtx, th)
+			_ = o.render(gtx, th) // метрики кадра нужны только тестам
 			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+// destroyEventTimeout — сколько ждать app.DestroyEvent после ActionClose,
+// прежде чем завершиться принудительно (P7: не висеть вечно при shutdown).
+const destroyEventTimeout = 2 * time.Second
+
+// waitForDestroy ждёт app.DestroyEvent после запроса закрытия окна, но не дольше
+// timeout. Возвращает ctx.Err() если событие получено, nil — при истечении
+// таймаута (окно не ответило, выходим принудительно). Вынесено из Run, чтобы
+// тестировать без реального окна: nextEvent — блокирующий источник событий
+// (для реального окна — w.Event()).
+//
+// nextEvent опрашивается одной горутиной-насосом: она завершается, когда
+// возвращается nextEvent, либо когда waitForDestroy уходит по таймауту
+// (закрытие pumpDone) — при w.Event() Gio разблокирует её на следующем событии,
+// отдельного вечного ожидания не остаётся.
+func waitForDestroy(ctx context.Context, nextEvent func() event.Event, timeout time.Duration, sessLog logger.SessionLogger) error {
+	pumpDone := make(chan struct{})
+	events := make(chan event.Event, 1)
+	go func() {
+		defer close(events)
+		for {
+			evt := nextEvent()
+			select {
+			case events <- evt:
+			case <-pumpDone:
+				return
+			}
+		}
+	}()
+	defer close(pumpDone)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			sessLog.LogDebug(fmt.Sprintf("UI-оверлей: DestroyEvent не получен за %v, принудительное завершение", timeout))
+			return nil
+		case evt, ok := <-events:
+			if !ok {
+				// Источник событий закрылся без DestroyEvent — выходим принудительно.
+				return nil
+			}
+			if _, ok := evt.(app.DestroyEvent); ok {
+				return ctx.Err()
+			}
 		}
 	}
 }
@@ -282,35 +316,39 @@ func tryApplyStyles(finder func() (uintptr, error), deadline time.Duration, init
 
 // ── Rendering: четыре зоны ──
 
-func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensions {
+// render рисует кадр (четыре зоны) и возвращает FrameMetrics — метрики именно
+// этого кадра именно этого оверлея (Task 3.1/3.2). Никакого глобального
+// состояния: счётчик separator и флаги «список у конца» живут в возвращаемом
+// значении. Вызывающий Run() метрики игнорирует.
+func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 	o.mu.RLock()
 	interim := o.lastInterim()
 	answers, hasAnswers := o.lastAnswers()
 	translations := o.translationMessages()
 	history := o.historyMessages()
+	errorMsg := o.errorMsg
 	historyVisible := o.historyVisible
 	o.mu.RUnlock()
 
-	// Автоскролл: раздельные счётчики для зоны 2 (переводы) и 3 (транскрипции).
-	// Состояние скролла читается тестами из другой горутины — под блокировкой.
-	o.mu.Lock()
-	needScrollTrans := len(translations) > o.prevTransLen
-	if needScrollTrans {
-		o.prevTransLen = len(translations)
+	// Автоскролл «всегда в конец» (Task 3.1): зоны 2/3/4 скроллятся к концу в
+	// каждый кадр с данными, без счётчиков-дельта и needScroll-условий. Список
+	// зоны 1 (interimList) всегда прокручивается через ScrollToEnd при непустом
+	// тексте. Позиции layout.List общие для зон 2/3/4 (немедленное обновление).
+	needScrollInterim := interim.Text != ""
+	needScrollTrans := len(translations) > 0
+	needScrollHist := len(history) > 0
+	needScrollAnswers := len(answers.Answers) > 0
+
+	// separatorCount собирается layout-функцией separator'а в кадре (см. ниже);
+	// локальный счётчик не течёт между оверлеями/кадрами (Task 3.2).
+	separatorCount := 0
+	layoutZoneSeparator := func(gtx layout.Context) layout.Dimensions {
+		separatorCount++
+		return zoneSeparator(gtx)
 	}
-	needScrollHist := len(history) > o.prevTranscLen
-	if needScrollHist {
-		o.prevTranscLen = len(history)
-	}
-	o.translationAtEnd = len(translations) > 0
-	o.transcriptionAtEnd = len(history) > 0
-	o.mu.Unlock()
 
 	bg := color.NRGBA{R: 0, G: 0, B: 0, A: 180}
 	paintBackground(gtx, bg)
-
-	// Сбрасываем счётчик separator-линий на каждый кадр (метрика для тестов).
-	zoneSeparatorCount = 0
 
 	fs := o.cfg.FontSize
 
@@ -320,9 +358,15 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 	// добавляется только при historyVisible — при скрытом состоянии она
 	// и её separator отсутствуют в Flex и не занимают место в layout.
 	children := []layout.FlexChild{
-		// 1. Interim — речь, 2 строки, белый.
+		// 1. Interim — речь, фиксированная высота interimVisibleLines строк,
+		// внутри — вертикальный скролл (длинная фраза видна целиком). Белый.
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutInterim(gtx, th, interim, fs)
+			h := emptyZoneHeight(fs) * interimVisibleLines
+			maxX := gtx.Constraints.Max.X
+			if h > 0 && gtx.Constraints.Max.Y > h {
+				gtx.Constraints = layout.Constraints{Max: image.Pt(maxX, h)}
+			}
+			return layoutInterim(gtx, th, interim, fs, &o.interimList, needScrollInterim)
 		}),
 		layout.Rigid(layoutZoneSeparator),
 
@@ -333,9 +377,10 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 		layout.Rigid(layoutZoneSeparator),
 
 		// 3. AnswerCandidates — основная зона ответов: всё оставшееся место
-		// (при скрытой истории — практически вся высота окна).
+		// (при скрытой истории — практически вся высота окна). Ошибка
+		// генерации (Type=Error) рендерится в этой же зоне приоритетно.
 		layout.Flexed(0.55, func(gtx layout.Context) layout.Dimensions {
-			return o.layoutAnswersZone(gtx, th, answers, hasAnswers, fs)
+			return o.layoutAnswersZone(gtx, th, answers, hasAnswers, errorMsg, fs, needScrollAnswers)
 		}),
 	}
 
@@ -356,35 +401,28 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) layout.Dimensio
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 
-	return layout.Dimensions{Size: gtx.Constraints.Max}
+	// Метрики кадра: «список у конца» читаем из Position каждого списка после
+	// Layout. Пустой список → false (скроллить нечего).
+	return FrameMetrics{
+		SeparatorCount:     separatorCount,
+		InterimAtEnd:       needScrollInterim && !o.interimList.Position.BeforeEnd,
+		TranslationsAtEnd:  needScrollTrans && !o.translationList.Position.BeforeEnd,
+		AnswersAtEnd:       needScrollAnswers && !o.answersList.Position.BeforeEnd,
+		TranscriptionAtEnd: needScrollHist && !o.transcriptionList.Position.BeforeEnd,
+	}
 }
 
-// lineHeightCompact — множитель размера шрифта для базовой высоты строки в
-// overlayLabel (baseline до baseline). Дефолтное межстрочное продвижение Gio
-// = 1.0em (замер: 5 слов в 10 строк, 224px ≈ 10×fs при fs=18), глиф-бокс
-// ≈ 1.33em (~24px). Значение 0.85 уменьшает межстрочный интервал на ~15%
-// (лёгкое перекрытие глифов ~2.6px между соседними строками — визуально
-// плотный текст), НЕ масштабируя шрифт: размеры однострочного label
-// идентичны дефолтным (тест TestOverlayLabelSingleLineUnscaled).
-const lineHeightCompact = 0.85
+// lineSpacingScale — межстрочный интервал относительно дефолта Gio.
+// 1.0 = стандартный интервал; LineHeightScale масштабирует и шрифт, поэтому
+// трогать только осознанно (крутилка на будущее, дефолт = стандартный Gio).
+const lineSpacingScale = 1.0
 
 // interimVisibleLines — высота зоны Interim (пустая) в строках — стартовый каркас.
-const interimVisibleLines = 2
+const interimVisibleLines = 3
 
-// lineHeightAt — целочисленная высота строки (baseline до baseline) в px для
-// размера шрифта fs — ИЗМЕРЕННЫЙ advance однострочного рендера через
-// overlayLabel, а не эмпирический множитель. Общая точка расчёта для
-// emptyZoneHeight и historyVisibleHeightPx; каркасные высоты совпадают с тем,
-// куда зоны придут при появлении текста.
-func lineHeightAt(fs int) int {
-	return measuredLineAdvance(fs)
-}
-
-// emptyZoneHeight — высота одной строки зоны в px при заданном размере шрифта.
-// Используется для резервирования высоты пустых зон стартового каркаса.
-func emptyZoneHeight(fs int) int {
-	return lineHeightAt(fs)
-}
+// emptyZoneHeight — высота пустой строки для стартового каркаса: простой множитель
+// от fs (дефолтное межстрочное продвижение Gio ≈ 1.0em, глиф-бокс ≈ 1.25em).
+func emptyZoneHeight(fs int) int { return fs * 5 / 4 }
 
 // emptyZoneDims — размеры пустой зоны: ширина окна, высота ровно height px.
 // Стартовый каркас: пустые зоны резервируют высоту, чтобы separator-линии
@@ -397,112 +435,40 @@ func emptyZoneDims(gtx layout.Context, height int) layout.Dimensions {
 const historyVisibleLines = 4
 
 // historyVisibleHeightPx — высота видимой области TranscriptionHistory в px:
-// ровно historyVisibleLines строк текста зоны истории (шрифт fs-2, не ниже 10),
-// причём высота строки — измеренный advance (не множитель).
-func historyVisibleHeightPx(fs int) int {
-	hfs := fs - 2
-	if hfs < 10 {
-		hfs = 10
-	}
-	return int(measuredLineAdvancePx(hfs)*float64(historyVisibleLines) + 0.5)
-}
+// ровно historyVisibleLines строк текста зоны истории (единый шрифт fs).
+func historyVisibleHeightPx(fs int) int { return emptyZoneHeight(fs) * historyVisibleLines }
 
-// lineAdvanceCache — кэш измеренного advance по размеру шрифта: offscreen-замер
-// детерминирован (шрифт Go, метрика шрифта не зависит от темы), поэтому
-// измеряем один раз на fs. Защищён мьютексом (вызывается из render-горутины
-// и тестов).
-var lineAdvanceCache = struct {
-	sync.Mutex
-	m map[int]float64
-}{m: make(map[int]float64)}
-
-// measuredLineAdvancePx — фактическое межстрочное продвижение (advance) строки
-// в px (float, с учётом ascent-добавки Gio), отрисованной через overlayLabel.
-func measuredLineAdvancePx(fs int) float64 {
-	lineAdvanceCache.Lock()
-	defer lineAdvanceCache.Unlock()
-	if v, ok := lineAdvanceCache.m[fs]; ok {
-		return v
-	}
-	th := material.NewTheme()
-	lines := "Hg\nHg\nHg\nHg\nHg\nHg\nHg\nHg"
-	advance := measuringLineAdvance(th, fs, lines, 8)
-	lineAdvanceCache.m[fs] = advance
-	return advance
-}
-
-// measuredLineAdvance — округлённый advance строки (px) для размера шрифта fs.
-func measuredLineAdvance(fs int) int {
-	return int(measuredLineAdvancePx(fs) + 0.5)
-}
-
-// measuringLineAdvance — offscreen-замер advance строки: высота label (8 явных
-// строк, ширина достаточна, текст не переносится) / 8.
-func measuringLineAdvance(th *material.Theme, fs int, text string, nLines int) float64 {
-	l := overlayLabel(th, unit.Sp(fs), text)
-	ops := new(op.Ops)
-	gtx := layout.Context{
-		Ops: ops,
-		Constraints: layout.Constraints{
-			Min: image.Pt(0, 0),
-			Max: image.Pt(500, 100000),
-		},
-		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
-	}
-	h := l.Layout(gtx).Size.Y
-	return float64(h) / float64(nLines)
-}
-
+// lastInterim возвращает текущую речь (зона 1) — последнее Interim.
 func (o *Overlay) lastInterim() UIMessage {
-	for i := len(o.messages) - 1; i >= 0; i-- {
-		if o.messages[i].Type == Interim {
-			return o.messages[i]
-		}
-	}
-	return UIMessage{}
+	return o.interimMsg
 }
 
+// lastAnswers возвращает последние подсказки с непустым списком ответов
+// (зона 3). ok=false, если история пуста или в последнем элементе нет ответов.
 func (o *Overlay) lastAnswers() (UIMessage, bool) {
-	for i := len(o.messages) - 1; i >= 0; i-- {
-		if o.messages[i].Type == AnswerCandidates && len(o.messages[i].Answers) > 0 {
-			return o.messages[i], true
+	for i := len(o.answersHistory) - 1; i >= 0; i-- {
+		if len(o.answersHistory[i].Answers) > 0 {
+			return o.answersHistory[i], true
 		}
 	}
 	return UIMessage{}, false
 }
 
+// historyMessages возвращает оригиналы речи (зона 4) — прямое чтение поля.
 func (o *Overlay) historyMessages() []UIMessage {
-	var out []UIMessage
-	for _, m := range o.messages {
-		if m.Type == History {
-			out = append(out, m)
-		}
-	}
-	return out
+	return o.history
 }
 
-// translationMessages возвращает завершённые переводы (Type=Translation, MsgStatus="done").
+// translationMessages возвращает все переводы (зона 2) — append-only.
 func (o *Overlay) translationMessages() []UIMessage {
-	var out []UIMessage
-	for _, m := range o.messages {
-		if m.Type == Translation && m.MsgStatus == "done" {
-			out = append(out, m)
-		}
-	}
-	return out
+	return o.translations
 }
 
 // ── Zone renderers ──
 
-// zoneSeparatorCount — число separator-линий, нарисованных в последнем кадре.
-// Метрика для тестов (сбрасывается в начале render): 2 при historyVisible=false
-// (зоны 1–3), 3 при historyVisible=true (добавляется separator зоны 4). Render
-// выполняется в одной горутине, поэтому счётчик безопасен без mutex.
-var zoneSeparatorCount int
-
-// layoutZoneSeparator — разделитель между зонами (3px).
-func layoutZoneSeparator(gtx layout.Context) layout.Dimensions {
-	zoneSeparatorCount++
+// zoneSeparator — разделитель между зонами (3px). Рисует одну линию; счётчик
+// separator'ов кадра ведёт замыкание в render (Task 3.2 — без глобала).
+func zoneSeparator(gtx layout.Context) layout.Dimensions {
 	h := 3
 	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, h)}
 	defer rect.Push(gtx.Ops).Pop()
@@ -510,15 +476,25 @@ func layoutZoneSeparator(gtx layout.Context) layout.Dimensions {
 	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, h)}
 }
 
-func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
+// layoutInterim — зона 1 (речь): вертикальный скролл. Список персистентный
+// (позиция между кадрами). ОДИН элемент — whole-phrase label без MaxLines:
+// текст переносится по ширине и не обрезается; List даёт вертикальный скролл,
+// когда фраза выше фиксированной высоты зоны (interimVisibleLines строк).
+// Автоскролл к концу — через ScrollToEnd (последняя строка у нижней границы).
+func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if msg.Text == "" {
 		return emptyZoneDims(gtx, emptyZoneHeight(fs)*interimVisibleLines)
 	}
-	label := overlayLabel(th, unit.Sp(fs), msg.Text)
-	label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-	label.Alignment = text.Start
-	label.MaxLines = 2
-	return label.Layout(gtx)
+	list.Axis = layout.Vertical
+	if needScroll {
+		autoScrollBottom(list)
+	}
+	return list.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		l := overlayLabel(th, unit.Sp(fs), msg.Text)
+		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		l.Alignment = text.Start
+		return l.Layout(gtx)
+	})
 }
 
 // answerLine — одна строка в скролле подсказок: EN или RU.
@@ -527,124 +503,119 @@ type answerLine struct {
 	isRU bool
 }
 
-// layoutAnswersZone — зона AnswerCandidates: при отсутствии ответов занимает
-// всю выделенную Flexed-высоту (каркас), иначе — скролл ответов.
-func (o *Overlay) layoutAnswersZone(gtx layout.Context, th *material.Theme, msg UIMessage, has bool, fs int) layout.Dimensions {
-	if !has {
-		return emptyZoneDims(gtx, gtx.Constraints.Max.Y)
-	}
-	return layoutAnswers(gtx, th, msg, fs, &o.answersList)
-}
+// layoutErrorColor — цвет текста ошибки генерации (зона 3). Мягкий красный,
+// отличимый от белого (Interim/подсказки) и зелёного (перевод подсказки).
+var layoutErrorColor = color.NRGBA{R: 255, G: 96, B: 96, A: 255}
 
-// layoutAnswers — подсказки с EN и RU на отдельных строках, с вертикальным скроллом.
-func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List) layout.Dimensions {
-	afs := fs - 2
-	if afs < 10 {
-		afs = 10
-	}
-
-	// Собираем плоский список: EN (белый), RU (зелёный).
+// layoutAnswers — подсказки: Source и Target на отдельных строках, с вертикальным скроллом.
+// Шрифт единый — fs (Task 3.0: убран fs-2/floor). needScroll — автоскролл к концу (Task 3.1).
+func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
+	// Собираем плоский список: Source (белый), Target (зелёный).
 	items := make([]answerLine, 0, len(msg.Answers)*2)
 	for _, ans := range msg.Answers {
-		en, ru := splitBilingual(ans)
-		items = append(items, answerLine{text: en, isRU: false})
-		if ru != "" {
-			items = append(items, answerLine{text: ru, isRU: true})
+		items = append(items, answerLine{text: ans.Source, isRU: false})
+		if ans.Target != "" {
+			items = append(items, answerLine{text: ans.Target, isRU: true})
 		}
 	}
 
+	list.Axis = layout.Vertical
+	if needScroll && len(items) > 0 {
+		autoScrollBottom(list)
+	}
 	return list.Layout(gtx, len(items), func(gtx layout.Context, idx int) layout.Dimensions {
 		line := items[idx]
-		l := overlayLabel(th, unit.Sp(afs), line.text)
+		l := overlayLabel(th, unit.Sp(fs), line.text)
 		if line.isRU {
 			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
 		} else {
 			l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		}
 		l.Alignment = text.Start
-		return compactLineBox(gtx, l, afs)
+		return l.Layout(gtx)
 	})
 }
 
-// splitBilingual разбивает строку формата "EN: ... | RU: ..." на две части.
-func splitBilingual(s string) (en, ru string) {
-	parts := strings.SplitN(s, "| RU:", 2)
-	en = strings.TrimSpace(parts[0])
-	if len(parts) == 2 {
-		ru = "RU:" + parts[1]
-	}
-	return
-}
-
-// layoutTranslationHistory — скролл переводов из Translation-сообщений (10 строк).
+// layoutTranslationHistory — скролл переводов из Translation-сообщений.
+// Шрифт единый — fs (Task 3.0).
 func layoutTranslationHistory(gtx layout.Context, th *material.Theme, messages []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if len(messages) == 0 {
 		return emptyZoneDims(gtx, gtx.Constraints.Max.Y)
 	}
 
-	hfs := fs - 2
-	if hfs < 10 {
-		hfs = 10
-	}
 	list.Axis = layout.Vertical
 	if needScroll && len(messages) > 0 {
-		list.ScrollTo(len(messages) - 1)
+		autoScrollBottom(list)
 	}
 	return list.Layout(gtx, len(messages), func(gtx layout.Context, i int) layout.Dimensions {
-		l := overlayLabel(th, unit.Sp(hfs), messages[i].Text)
+		l := overlayLabel(th, unit.Sp(fs), messages[i].Text)
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 2
-		return compactLineBox(gtx, l, hfs)
+		return l.Layout(gtx)
 	})
 }
 
-// layoutTranscriptionHistory — скролл оригиналов речи из History (5 строк).
+// autoScrollBottom — единая точка автоскролла «всегда в конец» (Task 3.1):
+// ScrollToEnd + Position.BeforeEnd=false. Позиция обновляется немедленно, после
+// Layout список стоит у последнего элемента. Общий хелпер для зон 1–4 (DRY).
+func autoScrollBottom(list *layout.List) {
+	list.ScrollToEnd = true
+	list.Position.BeforeEnd = false
+}
+
+// layoutTranscriptionHistory — скролл оригиналов речи из History.
+// Шрифт единый — fs (Task 3.0).
 func layoutTranscriptionHistory(gtx layout.Context, th *material.Theme, history []UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if len(history) == 0 {
 		return layout.Dimensions{}
 	}
 
-	hfs := fs - 2
-	if hfs < 10 {
-		hfs = 10
-	}
 	list.Axis = layout.Vertical
 	if needScroll && len(history) > 0 {
-		list.ScrollTo(len(history) - 1)
+		autoScrollBottom(list)
 	}
 	return list.Layout(gtx, len(history), func(gtx layout.Context, i int) layout.Dimensions {
-		l := overlayLabel(th, unit.Sp(hfs), history[i].Text)
+		l := overlayLabel(th, unit.Sp(fs), history[i].Text)
 		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		l.Alignment = text.Start
 		l.MaxLines = 8
-		return compactLineBox(gtx, l, hfs)
+		return l.Layout(gtx)
 	})
-}
-
-// compactLineBox — рендерит строку списка с высотой, ограниченной компактным
-// межстрочным интервалом (lineHeightAt): List раскладывает элементы по их
-// заявленной высоте, а глиф-бокс Go-шрифта ~1.33em даёт визуально большой
-// зазор. Явная высота прижимает строки списка друг к другу.
-func compactLineBox(gtx layout.Context, label material.LabelStyle, fs int) layout.Dimensions {
-	dims := label.Layout(gtx)
-	h := lineHeightAt(fs)
-	if h > 0 && dims.Size.Y > h {
-		dims.Size.Y = h
-	}
-	return dims
 }
 
 // ── Helpers ──
 
 // overlayLabel — единая точка создания текстовой строки в оверлее.
-// Задаёт компактный межстрочный интервал: LineHeight = sp*lineHeightCompact
-// при дефолтном LineHeightScale — шрифт НЕ масштабируется (размер глифов
-// прежний), строки прижаты к глиф-боксу (зазор ~1px против дефолтных ~2px).
+// Задаёт межстрочный интервал через LineHeightScale (lineSpacingScale=1.0 =
+// стандартный интервал Gio); шрифт не масштабируется. LineHeight явно не
+// задаётся. Крутилка на будущее: плотнее — меняется одно число.
 func overlayLabel(th *material.Theme, sp unit.Sp, text string) material.LabelStyle {
 	l := material.Label(th, sp, text)
-	l.LineHeight = unit.Sp(float32(sp) * lineHeightCompact)
+	l.LineHeightScale = lineSpacingScale
 	return l
+}
+
+// layoutAnswersZone — зона 3: при наличии ошибки генерации рендерится она
+// (приоритетно), иначе подсказки, иначе — пустой каркас на всю высоту.
+// needScroll — автоскролл списка подсказок к концу (Task 3.1).
+func (o *Overlay) layoutAnswersZone(gtx layout.Context, th *material.Theme, msg UIMessage, has bool, errorMsg UIMessage, fs int, needScroll bool) layout.Dimensions {
+	if errorMsg.Type == Error {
+		return layoutError(gtx, th, errorMsg, fs)
+	}
+	if !has {
+		return emptyZoneDims(gtx, gtx.Constraints.Max.Y)
+	}
+	return layoutAnswers(gtx, th, msg, fs, &o.answersList, needScroll)
+}
+
+// layoutError — сообщение об ошибке генерации (Type=Error) в зоне 3: красная
+// строка с префиксом. Единый шрифт fs (Task 3.0).
+func layoutError(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) layout.Dimensions {
+	label := overlayLabel(th, unit.Sp(fs), "⚠️ "+msg.Text)
+	label.Color = layoutErrorColor
+	label.Alignment = text.Start
+	return label.Layout(gtx)
 }
 
 func paintBackground(gtx layout.Context, c color.NRGBA) {

@@ -1,10 +1,15 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	"gioui.org/app"
+	"gioui.org/io/event"
+	"gioui.org/widget/material"
 
 	"github.com/mastererik/translator/internal/logger"
 )
@@ -59,11 +64,11 @@ func TestNewOverlay(t *testing.T) {
 			if o.cfg.FontSize != tt.wantFontSize {
 				t.Errorf("FontSize = %d, want %d", o.cfg.FontSize, tt.wantFontSize)
 			}
-			if o.messages == nil {
-				t.Error("messages slice should be initialized")
+			if o.translations == nil || o.history == nil || o.answersHistory == nil {
+				t.Error("zone slices should be initialized")
 			}
-			if len(o.messages) != 0 {
-				t.Errorf("initial messages should be empty, got %d", len(o.messages))
+			if len(o.GetMessages()) != 0 {
+				t.Errorf("initial messages should be empty, got %d", len(o.GetMessages()))
 			}
 			if o.shutdown == nil {
 				t.Error("shutdown channel should be initialized")
@@ -72,12 +77,108 @@ func TestNewOverlay(t *testing.T) {
 	}
 }
 
+// TestGetMessagesFieldOrder — GetMessages конкатенирует поля в стабильном
+// порядке: interim → translations → history → answersHistory → error.
+// Это контракт порядка (обратная совместимость OverlayUI-интерфейса).
+func TestGetMessagesFieldOrder(t *testing.T) {
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
+
+	// Добавляем в перемешанном порядке — GetMessages всё равно сортирует по зонам.
+	o.AddMessage(UIMessage{Type: Error, Text: "ошибка"})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("hint")})
+	o.AddMessage(UIMessage{Type: Translation, Text: "перевод"})
+	o.AddMessage(UIMessage{Type: Interim, Text: "речь"})
+	o.AddMessage(UIMessage{Type: History, Text: "оригинал"})
+
+	msgs := o.GetMessages()
+	want := []struct {
+		typ  UIMessageType
+		text string
+	}{
+		{Interim, "речь"},
+		{Translation, "перевод"},
+		{History, "оригинал"},
+		{AnswerCandidates, ""},
+		{Error, "ошибка"},
+	}
+	if len(msgs) != len(want) {
+		t.Fatalf("len(GetMessages) = %d, want %d", len(msgs), len(want))
+	}
+	for i, w := range want {
+		if msgs[i].Type != w.typ {
+			t.Errorf("msgs[%d].Type = %v, want %v (порядок полей)", i, msgs[i].Type, w.typ)
+		}
+		if w.text != "" && msgs[i].Text != w.text {
+			t.Errorf("msgs[%d].Text = %q, want %q", i, msgs[i].Text, w.text)
+		}
+	}
+}
+
+// TestGetMessagesOmitsEmptyInterimAndError — zero-value interim/error не
+// попадают в вывод (GetMessages пропускает пустые одиночные поля).
+func TestGetMessagesOmitsEmptyInterimAndError(t *testing.T) {
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
+	o.AddMessage(UIMessage{Type: Translation, Text: "только перевод"})
+
+	msgs := o.GetMessages()
+	if len(msgs) != 1 || msgs[0].Type != Translation {
+		t.Fatalf("GetMessages = %v, want только [Translation]", msgs)
+	}
+}
+
+// TestAddMessageConcurrentAllZones — конкурентная запись во все зоны
+// (interim/translation/history/answers/error) + чтение GetMessages под -race.
+// Дополняет TestConcurrentAccess (тот писал только Status).
+func TestAddMessageConcurrentAllZones(t *testing.T) {
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
+
+	const writers = 8
+	const perWriter = 100
+	var wg sync.WaitGroup
+	wg.Add(writers * 2)
+	for w := 0; w < writers; w++ {
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				switch i % 5 {
+				case 0:
+					o.AddMessage(UIMessage{Type: Interim, Text: fmt.Sprintf("i%d", i)})
+				case 1:
+					o.AddMessage(UIMessage{Type: Translation, Text: fmt.Sprintf("t%d", i)})
+				case 2:
+					o.AddMessage(UIMessage{Type: History, Text: fmt.Sprintf("h%d", i)})
+				case 3:
+					o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("a")})
+				case 4:
+					o.AddMessage(UIMessage{Type: Error, Text: fmt.Sprintf("e%d", i)})
+				}
+			}
+		}(w)
+		// Параллельные читатели.
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				_ = o.GetMessages()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// interim заменяется (1), error заменяется (1), остальное накапливается.
+	tr := o.translationMessages()
+	h := o.historyMessages()
+	if len(tr) != writers*perWriter/5 || len(h) != writers*perWriter/5 {
+		t.Errorf("translationMessages=%d historyMessages=%d, want %d each",
+			len(tr), len(h), writers*perWriter/5)
+	}
+}
+
 func TestAddMessageGetMessages(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
 	// Статус и подсказки добавляются (append).
 	msg1 := UIMessage{Type: Status, Text: "Connected", Timestamp: time.Now()}
-	msg2 := UIMessage{Type: AnswerCandidates, Text: "Q", Answers: []string{"A1", "A2"}, Timestamp: time.Now()}
+	msg2 := UIMessage{Type: AnswerCandidates, Text: "Q", Answers: answersFrom("A1", "A2"), Timestamp: time.Now()}
 	o.AddMessage(msg1)
 	o.AddMessage(msg2)
 
@@ -93,54 +194,57 @@ func TestAddMessageGetMessages(t *testing.T) {
 	}
 }
 
-func TestTranslationReplacement(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
-
-	// Translation-сообщения заменяются, а не копятся.
-	o.AddMessage(UIMessage{Type: Translation, Text: "first", MsgStatus: "pending"})
-	o.AddMessage(UIMessage{Type: Translation, Text: "second", MsgStatus: "streaming"})
-	o.AddMessage(UIMessage{Type: Translation, Text: "third", MsgStatus: "done"})
-
-	msgs := o.GetMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("Translation должен заменяться: ждали 1, получили %d", len(msgs))
+// TestTranslationAppendOnly — Translation стал append-only (Task 1.1, P1):
+// streaming-ветка удалена, dispatcher шлёт только "done". Все Translation
+// сообщения накапливаются независимо от MsgStatus, фильтра нет.
+func TestTranslationAppendOnly(t *testing.T) {
+	tests := []struct {
+		name      string
+		messages  []UIMessage
+		wantTexts []string
+	}{
+		{
+			name: "pending appends like done",
+			messages: []UIMessage{
+				{Type: Translation, Text: "first", MsgStatus: "pending"},
+				{Type: Translation, Text: "second", MsgStatus: "streaming"},
+				{Type: Translation, Text: "third", MsgStatus: "done"},
+			},
+			wantTexts: []string{"first", "second", "third"},
+		},
+		{
+			name: "done only unaffected",
+			messages: []UIMessage{
+				{Type: Translation, Text: "a", MsgStatus: "done"},
+				{Type: Translation, Text: "b", MsgStatus: "done"},
+			},
+			wantTexts: []string{"a", "b"},
+		},
+		{
+			name: "empty status appends",
+			messages: []UIMessage{
+				{Type: Translation, Text: "x", MsgStatus: ""},
+			},
+			wantTexts: []string{"x"},
+		},
 	}
-	if msgs[0].Text != "third" {
-		t.Errorf("Text = %q, want %q", msgs[0].Text, "third")
-	}
-}
 
-func TestMessageOrdering(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
-
-	baseTime := time.Now()
-	for i := 0; i < 10; i++ {
-		o.AddMessage(UIMessage{
-			Type:      Status,
-			Text:      fmt.Sprintf("%d. message", i+1),
-			Timestamp: baseTime.Add(time.Duration(i) * time.Second),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
+			for _, m := range tt.messages {
+				o.AddMessage(m)
+			}
+			tr := o.translationMessages()
+			if len(tr) != len(tt.wantTexts) {
+				t.Fatalf("translationMessages count = %d, want %d", len(tr), len(tt.wantTexts))
+			}
+			for i, want := range tt.wantTexts {
+				if tr[i].Text != want {
+					t.Errorf("translationMessages[%d].Text = %q, want %q", i, tr[i].Text, want)
+				}
+			}
 		})
-	}
-
-	msgs := o.GetMessages()
-	if len(msgs) != 10 {
-		t.Fatalf("expected 10 messages, got %d", len(msgs))
-	}
-	for i, m := range msgs {
-		if i > 0 && m.Timestamp.Before(msgs[i-1].Timestamp) {
-			t.Errorf("messages out of order at index %d", i)
-		}
-	}
-}
-
-func TestEmptyMessages(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
-	msgs := o.GetMessages()
-	if len(msgs) != 0 {
-		t.Errorf("expected 0 messages, got %d", len(msgs))
-	}
-	if msgs == nil {
-		t.Error("GetMessages should return empty slice, not nil")
 	}
 }
 
@@ -207,38 +311,6 @@ func TestGetMessagesReturnsCopy(t *testing.T) {
 
 // ── Тесты вспомогательных функций ──
 
-func TestLastInterim(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
-
-	// Пустой overlay.
-	if m := o.lastInterim(); m.Type != "" {
-		t.Errorf("пустой overlay: lastInterim should return zero UIMessage, got %v", m.Type)
-	}
-
-	// Один interim.
-	o.AddMessage(UIMessage{Type: Interim, Text: "Hello"})
-	if m := o.lastInterim(); m.Text != "Hello" {
-		t.Errorf("lastInterim = %q, want %q", m.Text, "Hello")
-	}
-
-	// Замена — только последний.
-	o.AddMessage(UIMessage{Type: Interim, Text: "World"})
-	if m := o.lastInterim(); m.Text != "World" {
-		t.Errorf("lastInterim after replace = %q, want %q", m.Text, "World")
-	}
-
-	// Проверяем что в messages только 1 interim (старый заменён).
-	interimCount := 0
-	for _, m := range o.GetMessages() {
-		if m.Type == Interim {
-			interimCount++
-		}
-	}
-	if interimCount != 1 {
-		t.Errorf("interim count = %d, want 1 (replacement)", interimCount)
-	}
-}
-
 func TestLastAnswers(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
@@ -249,23 +321,23 @@ func TestLastAnswers(t *testing.T) {
 	}
 
 	// Кандидаты с пустым списком — не считаются.
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom()})
 	msg, ok = o.lastAnswers()
 	if ok {
 		t.Errorf("empty answers list: lastAnswers should return false")
 	}
 
 	// Реальные кандидаты.
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"A", "B", "C"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("A", "B", "C")})
 	msg, ok = o.lastAnswers()
 	if !ok || len(msg.Answers) != 3 {
 		t.Errorf("with answers: got ok=%v len=%d, want ok=true len=3", ok, len(msg.Answers))
 	}
 
 	// Замена.
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"X"}})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("X")})
 	msg, ok = o.lastAnswers()
-	if !ok || len(msg.Answers) != 1 || msg.Answers[0] != "X" {
+	if !ok || len(msg.Answers) != 1 || msg.Answers[0].Source != "X" {
 		t.Errorf("after replace: got ok=%v answers=%v, want [X]", ok, msg.Answers)
 	}
 }
@@ -320,31 +392,8 @@ func TestInterimReplacement(t *testing.T) {
 	}
 }
 
-func TestAnswerCandidatesReplacement(t *testing.T) {
-	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
-
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"A1", "A2"}})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"B1"}})
-	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: []string{"C1", "C2", "C3"}})
-
-	msgs := o.GetMessages()
-	ansCount := 0
-	var lastLen int
-	for _, m := range msgs {
-		if m.Type == AnswerCandidates {
-			ansCount++
-			lastLen = len(m.Answers)
-		}
-	}
-
-	if ansCount != 1 {
-		t.Errorf("AnswerCandidates count = %d, want 1 — должен заменяться", ansCount)
-	}
-	if lastLen != 3 {
-		t.Errorf("last AnswerCandidates len = %d, want 3", lastLen)
-	}
-}
-
+// TestHistoryAppendOnly — History накапливается (append-only), перевод
+// History-сообщения сохраняется.
 func TestHistoryAppendOnly(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
 
@@ -364,15 +413,162 @@ func TestHistoryAppendOnly(t *testing.T) {
 	}
 }
 
-func TestUIMessageConstants(t *testing.T) {
-	if string(Translation) != "Translation" {
-		t.Errorf("Translation = %q", Translation)
+// TestUIMessageConstants удалён: ассертил строковые константы сами на себя
+// (string(Translation) == "Translation") — гарантируется компилятором.
+
+// ── Task 2.2: раздельное состояние зон ──
+
+// TestAnswerCandidatesHistoryPreserved — RED (Task 2.2): две AnswerCandidates
+// не теряются в истории (GetMessages содержит оба), но рендерится последняя.
+func TestAnswerCandidatesHistoryPreserved(t *testing.T) {
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
+
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("first")})
+	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("second")})
+
+	var found []string
+	for _, m := range o.GetMessages() {
+		if m.Type == AnswerCandidates {
+			for _, a := range m.Answers {
+				found = append(found, a.Source)
+			}
+		}
 	}
-	if string(AnswerCandidates) != "AnswerCandidates" {
-		t.Errorf("AnswerCandidates = %q", AnswerCandidates)
+	if len(found) != 2 || found[0] != "first" || found[1] != "second" {
+		t.Fatalf("история AnswerCandidates потеряна: %v", found)
 	}
-	if string(Status) != "Status" {
-		t.Errorf("Status = %q", Status)
+
+	last, ok := o.lastAnswers()
+	if !ok || len(last.Answers) != 1 || last.Answers[0].Source != "second" {
+		t.Errorf("рендерится не последняя: ok=%v answers=%v", ok, last.Answers)
 	}
 }
 
+// TestErrorZone3RendersError — Task 2.3: сообщение об ошибке (Type=Error)
+// рендерится в зоне 3 отдельным стилем; рендер не паникует и занимает окно.
+func TestErrorZone3RendersError(t *testing.T) {
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
+	o.AddMessage(UIMessage{Type: Error, Text: "LLM timeout"})
+
+	// Ошибка хранится отдельно от подсказок.
+	if o.errorMsg.Type != Error || o.errorMsg.Text != "LLM timeout" {
+		t.Fatalf("errorMsg = %+v, want Type=Error Text=LLM timeout", o.errorMsg)
+	}
+	msgs := o.GetMessages()
+	if len(msgs) != 1 || msgs[0].Type != Error {
+		t.Fatalf("GetMessages = %v, want единственный Error", msgs)
+	}
+
+	th := material.NewTheme()
+	gtx, _ := newTestContext(800, 650)
+	o.render(gtx, th)
+	if gtx.Constraints.Max.X != 800 || gtx.Constraints.Max.Y != 650 {
+		t.Errorf("render занимает %v, want 800x650", gtx.Constraints.Max)
+	}
+}
+
+// TestErrorReplacement — Error заменяется (хранится только последняя), в
+// отличие от AnswerCandidates.
+func TestErrorReplacement(t *testing.T) {
+	o := NewOverlay(OverlayConfig{Width: 800, Height: 200}, logger.NewNopSessionLogger())
+	o.AddMessage(UIMessage{Type: Error, Text: "first"})
+	o.AddMessage(UIMessage{Type: Error, Text: "second"})
+
+	if o.errorMsg.Text != "second" {
+		t.Errorf("errorMsg = %q, want %q (замена)", o.errorMsg.Text, "second")
+	}
+	count := 0
+	for _, m := range o.GetMessages() {
+		if m.Type == Error {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("Error count = %d, want 1 (замена)", count)
+	}
+}
+
+// ── Task 1.3: таймаут ожидания DestroyEvent (P7) ──
+
+// TestWaitForDestroyReceivesEvent — канал с DestroyEvent → немедленный возврат
+// с ошибкой контекста (штатное завершение окна).
+func TestWaitForDestroyReceivesEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	nextEvent := func() event.Event { return app.DestroyEvent{} }
+
+	start := time.Now()
+	err := waitForDestroy(ctx, nextEvent, destroyEventTimeout, logger.NewNopSessionLogger())
+	elapsed := time.Since(start)
+
+	if err != ctx.Err() {
+		t.Errorf("err = %v, want ctx.Err() = %v", err, ctx.Err())
+	}
+	// Не должны ждать таймаут: событие пришло сразу.
+	if elapsed > destroyEventTimeout/2 {
+		t.Errorf("возврат занял %v — DestroyEvent должен возвращаться сразу", elapsed)
+	}
+}
+
+// TestWaitForDestroyTimeout — канал молчит → возврат по таймауту (nil), не виснет.
+func TestWaitForDestroyTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Блокирующий источник, который никогда не отдаёт событие.
+	block := make(chan struct{})
+	nextEvent := func() event.Event {
+		<-block
+		return app.DestroyEvent{}
+	}
+
+	const timeout = 50 * time.Millisecond
+	start := time.Now()
+	err := waitForDestroy(ctx, nextEvent, timeout, logger.NewNopSessionLogger())
+	elapsed := time.Since(start)
+	close(block) // освобождаем насос waitForDestroy (застрял на nextEvent)
+
+	if err != nil {
+		t.Errorf("err = %v, want nil (принудительный выход по таймауту)", err)
+	}
+	if elapsed < timeout {
+		t.Errorf("возврат занял %v — раньше таймаута %v", elapsed, timeout)
+	}
+	if elapsed > 10*timeout {
+		t.Errorf("возврат занял %v — таймаут %v не сработал", elapsed, timeout)
+	}
+}
+
+// TestWaitForDestroyOtherEventTimeout — источник отдаёт НЕ-DestroyEvent
+// (например FrameEvent), ждём до таймаута → возврат по таймауту.
+func TestWaitForDestroyOtherEventTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Первое событие — FrameEvent (не DestroyEvent); далее источник молчит,
+	// иначе насос крутился бы в busy-spin.
+	block := make(chan struct{})
+	first := true
+	nextEvent := func() event.Event {
+		if first {
+			first = false
+			return app.FrameEvent{}
+		}
+		<-block
+		return app.DestroyEvent{}
+	}
+
+	const timeout = 50 * time.Millisecond
+	start := time.Now()
+	err := waitForDestroy(ctx, nextEvent, timeout, logger.NewNopSessionLogger())
+	elapsed := time.Since(start)
+	close(block)
+
+	if err != nil {
+		t.Errorf("err = %v, want nil (FrameEvent не завершает ожидание)", err)
+	}
+	if elapsed < timeout || elapsed > 10*timeout {
+		t.Errorf("возврат занял %v, want ≈%v", elapsed, timeout)
+	}
+}

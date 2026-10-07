@@ -50,7 +50,7 @@ func TestOverlayStub(t *testing.T) {
 	overlay.AddMessage(ui.UIMessage{
 		Type:      ui.AnswerCandidates,
 		Text:      "What is Go?",
-		Answers:   []string{"Компилируемый язык", "Со сборщиком мусора"},
+		Answers:   []ui.Answer{{Source: "Компилируемый язык"}, {Source: "Со сборщиком мусора"}},
 		Timestamp: time.Now(),
 	})
 
@@ -84,7 +84,7 @@ func TestOverlayStub(t *testing.T) {
 	}
 	wg.Wait()
 
-	if len(overlay.GetMessages()) != 2 {
-		t.Errorf("expected 2 messages (Translation is replaced, not duplicated), got %d", len(overlay.GetMessages()))
+	if len(overlay.GetMessages()) != 12 {
+		t.Errorf("expected 12 messages (Initial 2 + 10 appended Translations), got %d", len(overlay.GetMessages()))
 	}
 }

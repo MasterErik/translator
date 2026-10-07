@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	"gioui.org/layout"
 	"gioui.org/widget/material"
 
 	"github.com/mastererik/translator/internal/logger"
@@ -28,7 +29,8 @@ func TestRenderEmptyFrameworkSeparatorsVisible(t *testing.T) {
 	oneLine := emptyZoneHeight(fs)
 
 	// Зона 1 — Interim: пустой текст резервирует interimVisibleLines строк.
-	dims := layoutInterim(gtx, th, UIMessage{}, fs)
+	var interimList layout.List
+	dims := layoutInterim(gtx, th, UIMessage{}, fs, &interimList, false)
 	if dims.Size.X != gtx.Constraints.Max.X {
 		t.Errorf("layoutInterim (пустой): width = %d, want %d", dims.Size.X, gtx.Constraints.Max.X)
 	}
@@ -47,8 +49,8 @@ func TestRenderEmptyFrameworkSeparatorsVisible(t *testing.T) {
 	}
 
 	// Зона 3 — AnswerCandidates без ответов (render-ветка !hasAnswers) занимает
-	// всю выделенную Flexed-высоту.
-	dims = o.layoutAnswersZone(gtx, th, UIMessage{}, false, fs)
+	// всю выделенную Flexed-высоту. Ошибки нет (нулевой UIMessage{}).
+	dims = o.layoutAnswersZone(gtx, th, UIMessage{}, false, UIMessage{}, fs, false)
 	if dims.Size.X != gtx.Constraints.Max.X {
 		t.Errorf("layoutAnswers (без ответов): width = %d, want %d", dims.Size.X, gtx.Constraints.Max.X)
 	}
@@ -57,13 +59,17 @@ func TestRenderEmptyFrameworkSeparatorsVisible(t *testing.T) {
 	}
 
 	// Separator — один из двух между зонами 1–2 и 2–3; ровно 3px.
-	sepDims := layoutZoneSeparator(gtx)
+	sepDims := zoneSeparator(gtx)
 	if sepDims.Size.Y != 3 {
 		t.Errorf("separator: height = %d, want 3", sepDims.Size.Y)
 	}
 
 	// Полный рендер пустого overlay — каркас занимает всё окно, не схлопывается.
-	renderDims := o.render(gtx, th)
+	m := o.render(gtx, th)
+	if m.InterimAtEnd || m.TranslationsAtEnd || m.AnswersAtEnd || m.TranscriptionAtEnd {
+		t.Errorf("пустой overlay: флаги конца скролла должны быть false, got %+v", m)
+	}
+	renderDims := layout.Dimensions{Size: gtx.Constraints.Max}
 	if renderDims.Size.X != 800 || renderDims.Size.Y != 650 {
 		t.Errorf("render (пустой overlay): size = %v, want 800x650", renderDims.Size)
 	}

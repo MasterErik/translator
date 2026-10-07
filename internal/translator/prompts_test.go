@@ -5,29 +5,78 @@ import (
 	"testing"
 )
 
-func TestSystemPromptAnswerGenFormat(t *testing.T) {
+func TestBuildSystemPromptDefaultFormat(t *testing.T) {
 	// Verify the answer generation prompt specifies the answer format,
-	// first-person perspective, candidate-context grounding, and language.
+	// first-person perspective, candidate-context grounding, and the default
+	// en→ru language pair.
+	prompt := BuildSystemPrompt("en", "ru")
 	checks := []string{
 		"first person",
 		"candidate context",
 		"EN:",
-		"RU:",
+		"| RU:",
 		"IT terminology in English",
 	}
 
 	for _, check := range checks {
-		if !strings.Contains(strings.ToLower(SystemPromptAnswerGen), strings.ToLower(check)) {
-			t.Errorf("SystemPromptAnswerGen should contain %q", check)
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(check)) {
+			t.Errorf("BuildSystemPrompt(en,ru) should contain %q, got:\n%s", check, prompt)
 		}
 	}
 }
 
-func TestSystemPromptAnswerGenKeepsITTerms(t *testing.T) {
-	if !strings.Contains(SystemPromptAnswerGen, "Use IT terminology in English in both languages.") {
-		t.Error("SystemPromptAnswerGen should instruct to keep IT terms in English")
+func TestBuildSystemPromptParameterizedTarget(t *testing.T) {
+	// en→de: EN label and "| DE:" separator present, RU must be absent.
+	enDe := BuildSystemPrompt("en", "de")
+	if !strings.Contains(enDe, "EN:") {
+		t.Errorf("BuildSystemPrompt(en,de) must contain EN label, got:\n%s", enDe)
+	}
+	if !strings.Contains(enDe, "| DE:") {
+		t.Errorf("BuildSystemPrompt(en,de) must contain | DE: separator, got:\n%s", enDe)
+	}
+	if strings.Contains(enDe, "RU") {
+		t.Errorf("BuildSystemPrompt(en,de) must NOT contain RU, got:\n%s", enDe)
+	}
+
+	// Parameterized source label as well.
+	deEn := BuildSystemPrompt("de", "en")
+	if !strings.Contains(deEn, "DE:") || !strings.Contains(deEn, "| EN:") {
+		t.Errorf("BuildSystemPrompt(de,en) must contain DE: label and | EN: separator, got:\n%s", deEn)
 	}
 }
+
+// TestBuildSystemPromptUppercasesTags — теги выводятся через
+// strings.ToUpper, поэтому любой регистр «en»/«En»/«EN» даёт «EN:» / «| RU:».
+func TestBuildSystemPromptUppercasesTags(t *testing.T) {
+	variants := [][2]string{
+		{"en", "ru"},
+		{"En", "Ru"},
+		{"EN", "RU"},
+	}
+	for _, v := range variants {
+		got := BuildSystemPrompt(v[0], v[1])
+		if !strings.Contains(got, "EN:") {
+			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать EN:", v[0], v[1])
+		}
+		if !strings.Contains(got, "| RU:") {
+			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать | RU:", v[0], v[1])
+		}
+		if strings.Contains(got, "en:") || strings.Contains(got, "ru:") {
+			t.Errorf("BuildSystemPrompt(%q,%q) не должен содержать строчные теги, got:\n%s", v[0], v[1], got)
+		}
+	}
+}
+
+// TestBuildSystemPromptEmptyLangsDefault — пустые языки дают дефолт en→ru
+// (SourceLang/TargetLang по умолчанию).
+func TestBuildSystemPromptEmptyLangsDefault(t *testing.T) {
+	if got, want := BuildSystemPrompt("", ""), BuildSystemPrompt("en", "ru"); got != want {
+		t.Errorf("BuildSystemPrompt(\"\",\"\") must equal the en/ru default")
+	}
+}
+
+// TestBuildSystemPromptKeepsITTerms удалён: подстрока «Use IT terminology in
+// English...» уже проверяется в TestBuildSystemPromptDefaultFormat.
 
 // Test 1/2 — conversation context попадает в user prompt, текущий вопрос всегда в конце.
 func TestBuildAnswerPrompt_WithConversationContext(t *testing.T) {
@@ -102,7 +151,7 @@ func TestBuildAnswerPrompt_SeparatesContexts(t *testing.T) {
 	}
 
 	userPrompt := BuildAnswerPrompt(req)
-	systemPrompt := buildSystemPrompt(req.CandidateContext)
+	systemPrompt := buildSystemPrompt(req.CandidateContext, "", "")
 
 	if strings.Contains(userPrompt, "Candidate: Senior Go developer") {
 		t.Error("candidate context must not be in the user prompt (it goes to system)")
@@ -127,7 +176,7 @@ func TestBuildAnswerPrompt_CompanyInfoNotCandidateFacts(t *testing.T) {
 	}
 
 	userPrompt := BuildAnswerPrompt(req)
-	systemPrompt := buildSystemPrompt(candidate)
+	systemPrompt := buildSystemPrompt(candidate, "", "")
 
 	if strings.Contains(systemPrompt, "500 employees") {
 		t.Error("company info must not leak into candidate context (system prompt)")

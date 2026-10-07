@@ -63,7 +63,7 @@ func sendChatRequest(t *testing.T, baseURL, apiKey, model, question string, disa
 	body := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
-			{"role": "system", "content": SystemPromptAnswerGen},
+			{"role": "system", "content": BuildSystemPrompt("en", "ru")},
 			{"role": "user", "content": BuildAnswerPrompt(AnswerRequest{Question: question})},
 		},
 		"temperature": 0.3,
