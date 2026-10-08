@@ -204,33 +204,47 @@ translation → UI Translation + UI History(lastOriginal.Text, translation.Text)
 
 | Горутина | Роль |
 |---|---|
-| `writePump` | audioCh → WebSocket (BinaryMessage, PCM) |
+| `supervise` | владеет парой pump'ов и автореконнектом; перезапускает пару при обрыве |
+| `writePump` | audioCh → WebSocket (BinaryMessage, PCM); выходит по connClosed |
 | `readPump` | WebSocket → parseAndEmit → textCh (JSON-события) |
 | `runSTT` (routeSTTEvent) | textCh → textStream с разделением interim/final/translation |
 
-## Reconnect (exponential backoff)
+## Reconnect (exponential backoff, supervisor)
 
-При обрыве WebSocket соединения Gladia **сохраняет сессию** — можно переподключиться на тот же URL без нового POST.
+При обрыве WebSocket (сеть/таймаут Gladia) supervisor-горутина внутри
+`GladiaProvider` (не в pipeline — контракт `STTProvider` неизменен)
+автоматически переподключается: полный двухфазный коннект заново
+(`initSession` POST /v2/live → dial нового WS URL), параметры сессии
+идемпотентны.
 
 ```
 Состояния:  CONNECTED → RECONNECTING → CONNECTED
-                                    → NEW_SESSION → CONNECTED
-                                    → FAILED → shutdown
+                                    → FAILED → EventError (UI зона 3)
 
-Попытка 1: сразу (0s)           — dial на сохранённый wsURL
-Попытка 2: 1s + jitter (±25%)   — dial
-Попытка 3: 2s + jitter          — dial
-Попытка 4: 4s + jitter          — dial
-...
-Попытка 8: 64s + jitter         — сессия истекла → новый POST /v2/live
-...
-Попытка 10: 64s + jitter        — исчерпаны → graceful shutdown
+Попытка 1: 1s + jitter (±25%)
+Попытка 2: 2s + jitter
+Попытка 3: 4s + jitter
+Попытка 4: 8s + jitter
+Попытка 5: 16s + jitter         — исчерпаны → EventError
 ```
+
+Каждый цикл реконнекта (в т.ч. первый `Start`) владеет своей парой
+pump'ов; `wsClosedCycle` (per-cycle CAS) + канал `connClosed` дают
+синхронное завершение пары при обрыве (writePump просыпается немедленно,
+не дожидаясь аудио-фрейма). `Stop()`/отмена ctx в любой точке — выход
+без реконнекта; Stop сначала дожидается supervisor (`supDone`), потом
+`pumpWg.Wait()` — дренаж без висящих горутин.
+
+Тест: `internal/stt/gladia_reconnect_test.go` — fake WS-сервер
+(httptest + gorilla/websocket), реальный обрыв TCP → реальное
+переподключение; Stop во время реконнекта; исчерпание попыток.
 
 | Параметр | Значение |
 |---|---|
-| Базовый интервал | `min(2^(n-2), 64)` секунд |
-| Jitter | `delay * (1 + rand.Float64() * 0.25)` |
-| Макс. попыток | 10 |
-| Действие при успехе | Буфер audioCh (до 5 сек) вычитывается в WS |
-| Действие при провале | Graceful shutdown |
+| Начальная задержка | `gladiaReconnectInitial` = 1s |
+| Множитель | `gladiaReconnectFactor` = 2.0 |
+| Cap | `gladiaReconnectMax` = 60s |
+| Jitter | `±gladiaReconnectJitter` = 25% |
+| Макс. попыток | `gladiaMaxReconnectAttempts` = 5 (const) |
+| Действие при успехе | Счётчик попыток сброшен; аудио между попытками не буферизуется |
+| Действие при провале | `STTEvent{Event: EventError}` через `g.emit` → UI зона 3 |

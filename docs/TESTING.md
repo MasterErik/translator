@@ -99,6 +99,12 @@ go test -tags integration -v ./internal/translator/...
 
 Обычный `go test ./...` гоняет только юнит-тесты без запуска приложения.
 
+Тесты автореконнекта Gladia (юнит-пакет `internal/stt`, без build-тегов):
+`gladia_reconnect_test.go` — fake WS-сервер (httptest + gorilla/websocket),
+реальный обрыв TCP → переподключение; Stop во время реконнекта; исчерпание
+попыток → EventError. Backoff-параметры (`gladiaReconnectInitial` и др.)
+— пакетные var, в тестах ускоряются до миллисекунд.
+
 Юнит-тесты `internal/ui` (без окна, offscreen `render()` + `FrameMetrics`):
 `overlay_test.go`, `interim_zone_test.go`, `overlay_label_test.go`, `autoscroll_test.go`,
 `separator_count_test.go`, `history_toggle_test.go`, `render_framework_test.go`,
@@ -133,7 +139,7 @@ go test -tags integration -v ./internal/translator/...
 | Задержка EndOfTurn (Final transcript) | MAX ≤ 1000ms |
 | Задержка Translation (после transcript) | MAX ≤ 300ms |
 | Endpointing | 300ms (оптимально для встреч) |
-| Reconnect | Exponential backoff (1s→2s→4s→…→64s cap, 10 попыток) |
+| Reconnect | Exponential backoff (1s→2s→4s→8s→16s, cap 60s, 5 попыток → EventError) |
 
 ### 3. LLM Generation SLA
 

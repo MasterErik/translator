@@ -8,7 +8,7 @@
 - **Перевод: Gladia Translation** — встроенный в тот же WebSocket, модель `enhanced`, без отдельного LLM-перевода
 - **LLM: только подсказки** — синхронный `GenerateAnswers` (GLM-4.7-Flash)
 - **Двухфазный коннект** — POST `/v2/live` → `{id, url}` → WebSocket dial
-- **Reconnect** — exponential backoff на тот же URL сессии
+- **Reconnect** — supervisor внутри провайдера: exponential backoff, 5 попыток, далее EventError
 
 ### Диаграмма потока данных
 
@@ -146,7 +146,7 @@ conversation:
 
 ## Gladia Live API v2
 
-Двухфазный коннект: `POST /v2/live` → `{id, url}` → WebSocket dial. PCM-фреймы 80ms (2560 байт, 16kHz mono). События: `transcript` (interim/final) + `translation` (enhanced, EN→RU). Связка через `lastOriginal` — перевод приходит после финального транскрипта. Reconnect: exponential backoff на тот же URL сессии.
+Двухфазный коннект: `POST /v2/live` → `{id, url}` → WebSocket dial. PCM-фреймы 80ms (2560 байт, 16kHz mono). События: `transcript` (interim/final) + `translation` (enhanced, EN→RU). Связка через `lastOriginal` — перевод приходит после финального транскрипта. Reconnect: supervisor-горутина в провайдере, повторный двухфазный коннект с exponential backoff (5 попыток → EventError).
 
 **Подробнее:** `docs/gladia-flow.md`
 
@@ -216,12 +216,13 @@ internal/
 | 2 | `capture·loopback` | `internal/capture` | runCtx.Done() |
 | 3 | `capture·mic` | `internal/capture` | runCtx.Done() (только при `SAVE_AUDIO`) |
 | 4 | `capture·mic·logger` (routeRawMic) | `internal/pipeline` | runCtx.Done() (только при `SAVE_AUDIO`) |
-| 5 | `stt·gladia·writePump` | `internal/stt` | runCtx.Done() / conn close |
-| 6 | `stt·gladia·readPump` | `internal/stt` | runCtx.Done() / conn close |
-| 7 | `route·stt` (runSTT) | `internal/pipeline` | runCtx.Done() |
-| 8 | `dispatcher` | `internal/dispatcher` | runCtx.Done() / textStream close |
-| 9 | `dispatcher·answerWorker` | `internal/dispatcher` | answerCh close / ctx.Done() + drain |
-| 10 | `ui·gioui` | `internal/ui` | DestroyEvent |
+| 5 | `stt·gladia·supervise` | `internal/stt` | supCtx.Done() / исчерпание попыток реконнекта |
+| 6 | `stt·gladia·writePump` | `internal/stt` | ctx.Done() / conn close (connClosed) |
+| 7 | `stt·gladia·readPump` | `internal/stt` | ctx.Done() / ошибка чтения (→ supervisor) |
+| 8 | `route·stt` (runSTT) | `internal/pipeline` | runCtx.Done() |
+| 9 | `dispatcher` | `internal/dispatcher` | runCtx.Done() / textStream close |
+| 10 | `dispatcher·answerWorker` | `internal/dispatcher` | answerCh close / ctx.Done() + drain |
+| 11 | `ui·gioui` | `internal/ui` | DestroyEvent |
 
 ### Каналы
 
@@ -279,7 +280,7 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 
 ### Логирование
 
-Operational-логи (запуск/остановка компонентов, ошибки, отладка) пишутся в **CSV сессии** через `sessLog.LogDebug()`, а не в `slog`. `slog` используется только для фатальных ошибок в `main.go` (stderr) и при создании/закрытии логгера. В Windows GUI-режиме (`-H windowsgui`) консольный вывод отключён (`io.Discard`).
+Operational-логи (запуск/остановка компонентов, ошибки, отладка) пишутся в **CSV сессии** через `sessLog.LogDebug()`, а не в `slog`. `slog` используется только для фатальных ошибок в `main.go`. В Windows GUI-режиме (`-H windowsgui`) консоль отсутствует, поэтому slog JSON-хендлер пишется в `logs/fatal-<date>.log` (открывается до загрузки конфига; уровень переустанавливается из `cfg.SlogLevel()` после); при невозможности открыть файл — fallback на `io.Discard`. `fatalError` дополнительно записывает сообщение напрямую в этот файл (`writeFatalLog` + `Sync`) перед `os.Exit` и показывает MessageBoxW.
 
 Формат CSV: `timestamp, channel, event, text, translation, answers`. Debug-записи имеют `event=DEBUG`. Все компоненты (Pipeline, Dispatcher, GladiaProvider, Overlay) получают `sessLog` через конструктор и пишут в него.
 
