@@ -486,9 +486,11 @@ func (p *Pipeline) routeSTTEvent(ctx context.Context, event common.STTEvent) {
 	if event.Event == common.EventEndOfTurn {
 		// Final: блокирующая отправка с таймаутом — перевод не теряется,
 		// но и не блокирует весь пайплайн при переполнении textStream.
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
 		select {
 		case p.textStream <- event:
-		case <-time.After(5 * time.Second):
+		case <-timer.C:
 			p.sessLog.LogDebug("textStream backpressure: final event dropped after 5s")
 		case <-ctx.Done():
 		}

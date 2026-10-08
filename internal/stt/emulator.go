@@ -83,6 +83,7 @@ func (g *GladiaEmulator) Start(ctx context.Context) error {
 	g.mu.Unlock()
 
 	// Эмуляция задержки коннекта (симуляция POST + WS dial).
+	// time.After здесь допустим: одноразовый select в Start, не в цикле.
 	connectDelay := jitter(g.ConnectDelay, g.Jitter)
 	select {
 	case <-time.After(connectDelay):
@@ -159,19 +160,23 @@ func (g *GladiaEmulator) run() {
 // drainAudio читает audioCh пока не закроется eventsDone или не отменится контекст.
 func (g *GladiaEmulator) drainAudio(eventsDone <-chan struct{}) {
 	for {
+		timer := time.NewTimer(200 * time.Millisecond)
 		select {
 		case <-g.ctx.Done():
+			timer.Stop()
 			return
 		case <-eventsDone:
 			// События отправлены, но продолжаем дренировать остатки аудио кратко.
+			timer.Stop()
 			g.drainRemaining()
 			return
 		case _, ok := <-g.audioCh:
+			timer.Stop()
 			if !ok {
 				return
 			}
 			// Потребляем, но не считаем.
-		case <-time.After(200 * time.Millisecond):
+		case <-timer.C:
 			// Нет аудио; на следующей итерации перепроверим eventsDone.
 		}
 	}
@@ -297,6 +302,7 @@ func jitter(base, jitterRange time.Duration) time.Duration {
 
 // sleepCtx — time.Sleep с поддержкой отмены контекста.
 // Возвращает false, если контекст был отменён.
+// time.After здесь допустим: вызов одноразовый, вне цикла (таймер живёт ≤ d).
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return true

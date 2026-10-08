@@ -153,10 +153,12 @@ func (p *ChatProvider) createChatCompletionWithRetry(ctx context.Context, req op
 			return openai.ChatCompletionResponse{}, err
 		}
 		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return openai.ChatCompletionResponse{}, fmt.Errorf("retry cancelled: %w", ctx.Err())
-		case <-time.After(backoff):
+		case <-timer.C:
 		}
 	}
 	return openai.ChatCompletionResponse{}, fmt.Errorf("max retries exceeded: %w", lastErr)
