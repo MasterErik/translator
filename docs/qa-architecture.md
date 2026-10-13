@@ -18,14 +18,17 @@ translator.IsQuestion(text)?
     ├── нет → ничего
     └── да
         ▼
-dispatcher.enqueueQuestion(question)        // неблокирующе
+dispatcher.enqueueQuestion(question)        // метка в QuestionTimeline, неблокирующе
         ▼
-answerCh (chan string, buf 16)
+AutoAnswer (nil→true)?  ── нет ──▶  метка остаётся QIdle, ответ по F1
+        │ да
         ▼
-answerWorker (ОДНА горутина, FIFO, дедупликация подряд)
-        │  (обрабатывает и вопросы, и команды F1–F3, и Esc)
+answerCh (chan answerTask, buf N)
         ▼
-generateAnswers(question, command)
+answerWorker (ОДНА горутина, FIFO)          // приоритет: hotkey/Cancel, иначе answerCh
+        │  hotkeyCh (Demand/Prev/Next) и cancelCh (Esc) — отдельные каналы
+        ▼
+generateAnswers(question, command, idx)     // idx — метка таймлайна
         │
         ├─ ConversationContext = history.BuildContext()   // история интервью
         │
@@ -41,9 +44,9 @@ llm.GenerateAnswers(ctx, req)
         ▼
 parseAnswerHints(content) → ["EN: <en> | RU: <ru>", …]
         ▼
-overlay.AddMessage(AnswerCandidates)
+SetAnswer/SetState(idx, QReady) + pushHeader(idx)   // шапка — только если метка активна
         ▼
-history.RecordAnswer(question, answers[0])
+history.RecordAnswer(question, answers[0])          // только если метка — хвостовая
 ```
 
 ## Контракты
@@ -52,10 +55,13 @@ history.RecordAnswer(question, answers[0])
 // internal/translator/conversation.go
 type GenerationCommand int
 const (
-    CommandAnswer        GenerationCommand = iota // F1
-    CommandMoreContext                            // F2
-    CommandSimplerEnglish                         // F3
+    CommandAnswer        GenerationCommand = iota // обычный ответ
+    CommandMoreContext                            // ответ с большей историей/контекстом
+    CommandSimplerEnglish                         // переформулировка проще по-английски
 )
+// Команды хранятся в Step метки таймлайна и выдаются по кругу 0→1→2→0
+// (NextStep). Прямых хоткеев на CommandMoreContext/CommandSimplerEnglish нет —
+// все три выдаются одним F1 (см. «Таймлайн вопросов»).
 
 type ConversationTurn struct {
     Question string
@@ -84,6 +90,51 @@ type LLMProvider interface {
 type AnswerGenerator interface {
     GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error)
 }
+
+// internal/dispatcher/questions.go — таймлайн вопросов
+type QState int
+const (
+    QIdle QState = iota // вопрос обнаружен, генерация не поставлена («idle»)
+    QQueued             // вопрос в очереди («queued»)
+    QGenerating         // идёт генерация («generating»)
+    QReady              // подсказки готовы («ready»)
+    QFailed             // генерация упала («failed»)
+)
+
+type QEntry struct {
+    Question string
+    Answer   []ui.Answer
+    State    QState
+    Step     int    // индекс в цикле команд 0=Answer,1=MoreContext,2=SimplerEnglish (mod 3)
+    Mode     string // режим последней генерации: "answer"/"more context"/"simpler"
+}
+
+type QuestionTimeline struct { … }
+func NewQuestionTimeline() *QuestionTimeline
+func (t *QuestionTimeline) Add(question string) int          // новая метка (QIdle), tail-follow
+func (t *QuestionTimeline) Active() (int, QEntry, bool)
+func (t *QuestionTimeline) Prev() bool                       // F2, clamp по границе
+func (t *QuestionTimeline) Next() bool                       // F3, clamp по границе
+func (t *QuestionTimeline) OnTail() bool                     // активная метка — последняя?
+func (t *QuestionTimeline) HasFresh() (int, bool)            // индикатор «справа есть свежие метки»
+func (t *QuestionTimeline) ClearFresh()
+func (t *QuestionTimeline) SetState(idx int, s QState)
+func (t *QuestionTimeline) SetAnswer(idx int, answers []ui.Answer)
+func (t *QuestionTimeline) NextStep(idx int) (translator.GenerationCommand, bool)
+func (t *QuestionTimeline) SetMode(idx int, mode string)
+func (t *QuestionTimeline) ResetPending()                    // Queued/Generating → Idle (Esc)
+func (t *QuestionTimeline) Snapshot() []QEntry               // глубокие копии
+
+// internal/dispatcher/hotkeys.go — действие функциональной клавиши (НЕ команда генерации)
+type HotkeyAction int
+const (
+    ActionDemand HotkeyAction = iota // F1
+    ActionPrev                       // F2
+    ActionNext                       // F3
+)
+
+// Config (internal/dispatcher)
+AutoAnswer *bool // nil→true: вопрос сразу ставит задание CommandAnswer
 ```
 
 ## Два контекста (строго разделены)
@@ -128,40 +179,108 @@ type AnswerGenerator interface {
 conversation:
   recent_turns: 6          # максимум turns в context
   max_context_tokens: 4000 # лимит размера (основной критерий)
+  auto_answer: true        # авто-генерация при обнаружении вопроса (отсутствует → true)
 ```
+
+- `auto_answer` (env `CONVERSATION_AUTO_ANSWER`, тип `*bool`): `nil`/отсутствует → **true**, т.е. вопрос сразу ставит задание `CommandAnswer`; `false` — вопрос лишь создаёт метку `QIdle`, ответ генерируется по F1. Указатель, а не `bool`, чтобы отличить «не задано» от «явно выключено».
 
 - Основной критерий — **размер текста**, а не число предложений.
 - `estimateTokens(s) = (len(s) + 3) / 4` — простая оценка (~1 токен на 4 символа для английского). Заменяется на tokenizer-реализацию текущей модели, когда она станет доступна.
 - При превышении лимита: удаляются **старые** turns (с начала), сохраняются самые свежие; текущий вопрос и Candidate Context не удаляются.
 - История не растёт бесконечно: `RecordAnswer` держит максимум `recentTurns` turns.
 
-## Regeneration (повторная генерация)
+## Таймлайн вопросов (QuestionTimeline)
 
-F2–F3 генерируют новую версию ответа на **тот же** вопрос без создания нового turn:
+Вопросы интервью образуют **таймлайн меток** (`internal/dispatcher/questions.go`) —
+история вопросов с состоянием ответа. В зоне 3 UI метка отображается как
+`[N]маркер` (см. `docs/UI.md`).
 
+```go
+type QEntry struct {
+    Question string
+    Answer   []ui.Answer
+    State    QState  // QIdle/QQueued/QGenerating/QReady/QFailed
+    Step     int     // цикл команд 0→1→2→0 (mod 3)
+    Mode     string  // "answer" / "more context" / "simpler"
+}
 ```
-Q1 → A1        (F1)
-Q1 → A1 → A1'  (F2/F3: A1' заменяет A1)
-```
 
-`RecordAnswer` с тем же вопросом (последний turn) заменяет `Answer`, а не добавляет turn. В историю для следующих вопросов попадает только финально выбранная версия (последняя успешная).
+### Состояния метки (`QState`)
 
-## Команды генерации (F1–F3, Esc)
+| Состояние | Когда | Что в зоне 3 |
+|---|---|---|
+| `QIdle` | вопрос обнаружен, генерация не поставлена (`auto_answer=false`); либо Esc сбросил очередь | «F1 — ответить» |
+| `QQueued` | задание поставлено, worker ещё не взял его | «генерация…» |
+| `QGenerating` | worker генерирует ответ | «генерация…» |
+| `QReady` | ответ получен | строки Source/Target |
+| `QFailed` | генерация упала (LLM/парсинг) | «ошибка генерации» (красным) |
 
-F1 (`CommandAnswer`), F2 (`CommandMoreContext`), F3 (`CommandSimplerEnglish`) — команды генерации; Esc — отмена. F4 — не команда генерации, а тумблер зоны 4 (transcription history). Полная таблица хоткеев — `docs/UI.md`.
+### Навигация Prev/Next и tail-follow
 
-Реализация:
+- `Active` — индекс активной метки; `Prev`/`Next` (F2/F3) двигают её с **clamp**
+  по границам `[0, total-1]` (на краю — no-op, возвращают `false`).
+- **Tail-follow**: новая метка становится активной **только если до этого активной
+  была хвостовая** (`OnTail`) — иначе пользователь листает историю и новая метка
+  не должна «утаскивать» вид. Если метка добавлена не с хвоста, выставляется флаг
+  `fresh` (`HasFresh`) — в зоне 3 рисуется индикатор `➤` о более свежих метках
+  справа; `ClearFresh` сбрасывает его при возврате к хвосту.
+- `Snapshot` возвращает **глубокие копии** `QEntry` (включая `Answer`) — worker
+  работает со снимком, не гоняясь с мутациями таймлайна.
 
-- `commandCh` (chan `GenerationCommand`) — команды F1–F3.
-- `cancelCh` — Esc: `activeCancel()` + флаг `cancelled` + `dropQueue()`.
+### Правило F1 (`HandleDemand`)
+
+Поведение F1 зависит от `State` активной метки:
+
+- **`QIdle`** → ставится задание `CommandAnswer` (`Step` уже указывает на нужную команду).
+- **`QReady`/`QFailed`** → выполняется **следующий шаг цикла** модификаторов:
+  `0=CommandAnswer → 1=CommandMoreContext → 2=CommandSimplerEnglish`, далее снова `0`
+  (`NextStep` по модулю 3). Итоговый `Step` и `Mode` сохраняются в метке.
+- **`QQueued`/`QGenerating`** → F1 **игнорируется**: коалесинг. Пока `busy`
+  (`atomic`) выставлен, повторные нажатия отбрасываются с debug-логом — во время
+  долгой генерации не копятся дубли. Дополнительно `hotkeyCh` неблокирующ
+  (при переполнении действие дропается).
+
+Команды генерации хранятся **в метке** (`Step`/`Mode`), а не приходят из хоткея:
+прямых биндингов на `CommandMoreContext`/`CommandSimplerEnglish` больше нет.
+`HotkeyAction` (`ActionDemand`/`ActionPrev`/`ActionNext`, `internal/dispatcher/hotkeys.go`)
+идёт по отдельному каналу `hotkeyCh` и **не является `GenerationCommand`** —
+F2/F3 вообще не запускают генерацию, только двигают активную метку.
+
+### Esc
+
+`Cancel` (Esc) отменяет активную генерацию (`activeCancel`) и очищает очередь
+(`cancelled` + `dropQueue`), затем `timeline.ResetPending()` переводит метки
+`QQueued`/`QGenerating` → `QIdle`. **Метки и уже готовые ответы сохраняются**;
+новый вопрос снова включает очередь (флаг `cancelled` снимается).
+
+### AutoAnswer и RecordAnswer
+
+- `Config.AutoAnswer *bool`: `nil` → **true** (вопрос сразу ставит задание
+  `CommandAnswer`); `false` — метка остаётся `QIdle`, ответ генерируется по F1.
+- **`pushHeader`/`RecordAnswer` — только для активной/хвостовой метки.**
+  Шапка в overlay отправляется, если метка задания всё ещё активна
+  (`isActive(idx)`), — устаревший ответ не перезаписывает шапку другого вопроса.
+  Ответ пишется в `ConversationHistory` (`RecordAnswer`) **только если метка
+  хвостовая** (`OnTail`): иначе ответ на старый вопрос стал бы последним turn'ом
+  интервью и сломал бы хронологию conversation context.
+
+## Регистрация хоткеев
+
+- Глобальный `RegisterHotKey` (Win32) в `internal/hotkey/` — оверлей
+  `WS_EX_NOACTIVATE` не получает клавиатуру, поэтому Gio `key.Event` не приходит.
+- Все биндинги (F1–F4, Esc) регистрируются с **`MOD_NOREPEAT` (0x4000)** —
+  удержание клавиши не спамит `WM_HOTKEY`.
+- Маршрутизация (`internal/pipeline`): F1 → `HandleDemand`, F2 → `HandlePrev`,
+  F3 → `HandleNext`, Esc → `Cancel`; F4 обходит dispatcher —
+  `overlay.ToggleTranscriptionHistory()` напрямую. Полная таблица — `docs/UI.md`.
 - Модификаторы команд добавляются в `BuildAnswerPrompt` через `commandInstruction(cmd)`.
-- Hotkey: глобальный `RegisterHotKey` (Win32) в `internal/hotkey/` — оверлей `WS_EX_NOACTIVATE` не получает клавиатуру, поэтому Gio `key.Event` не приходит.
 
 ## Очередь (последовательная обработка)
 
-- Один `answerWorker` обрабатывает и вопросы, и команды **последовательно** (FIFO) — без параллельных LLM-запросов.
+- Один `answerWorker` обрабатывает и вопросы, и команды генерации **последовательно** (FIFO) — без параллельных LLM-запросов. `hotkeyCh` (Demand/Prev/Next) и `cancelCh` (Esc) — отдельные каналы, `select` обрабатывает их вне очереди заданий (навигация/отмена не ждут генерацию).
 - Причина: Groq free tier возвращает **429** при частых запросах (rate-limit TPM).
-- Неблокирующая отправка: при переполнении очереди вопрос дропается с debug-логом.
+- Неблокирующая отправка в `answerCh`/`hotkeyCh`: при переполнении задание/действие дропается с debug-логом.
+- Коалесинг F1: во время генерации (`busy`) повторный `HandleDemand` не ставит второе задание.
 - Shutdown: `Run` ждёт `<-answerDone` ПЕРЕД `close(answerCh)`; `workerCtx` отменяется при выходе `Run`, worker дренирует очередь.
 
 ## Точки расширения → личная база данных (retrieval / RAG)
