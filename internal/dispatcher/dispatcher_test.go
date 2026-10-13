@@ -981,9 +981,9 @@ func TestDispatcherDrainQueueWithDupes(t *testing.T) {
 	d := New(overlay, engine, logger, DefaultConfig())
 
 	// Заполняем очередь: Q1, Q1 (дубль), Q2.
-	d.answerCh <- "Q1?"
-	d.answerCh <- "Q1?" // дубликат
-	d.answerCh <- "Q2?"
+	d.answerCh <- answerTask{idx: 0, cmd: translator.CommandAnswer, question: "Q1?", fresh: true}
+	d.answerCh <- answerTask{idx: 1, cmd: translator.CommandAnswer, question: "Q1?", fresh: true} // дубликат
+	d.answerCh <- answerTask{idx: 2, cmd: translator.CommandAnswer, question: "Q2?", fresh: true}
 
 	lastQuestion := ""
 	d.drainQueue(&lastQuestion)
@@ -1052,7 +1052,7 @@ func TestDispatcherNewDefaultQueueSize(t *testing.T) {
 
 	go d.answerWorker(ctx)
 
-	d.answerCh <- "Test?"
+	d.answerCh <- answerTask{idx: 0, cmd: translator.CommandAnswer, question: "Test?"}
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()

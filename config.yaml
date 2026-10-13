@@ -58,3 +58,4 @@ hints:
 conversation:
   recent_turns: 6
   max_context_tokens: 4000
+  # auto_answer: false  # вопросы только копятся как метки, ответ по F1

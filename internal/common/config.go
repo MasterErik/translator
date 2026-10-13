@@ -61,6 +61,11 @@ type Config struct {
 type ConversationConfig struct {
 	RecentTurns      int `yaml:"recent_turns"`       // максимум turns в context
 	MaxContextTokens int `yaml:"max_context_tokens"` // лимит размера context
+
+	// AutoAnswer — авто-генерация ответа сразу при обнаружении вопроса.
+	// nil/отсутствует → true (режим по умолчанию: вопрос → немедленная генерация).
+	// false — вопрос только создаёт метку в таймлайне, ответ генерируется по F1.
+	AutoAnswer *bool `yaml:"auto_answer"`
 }
 
 // CandidateContextConfig — параметры fact-level candidate context retrieval.
@@ -124,6 +129,13 @@ func (c *Config) loadFromEnv() {
 	if v := os.Getenv("CONVERSATION_MAX_CONTEXT_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Conversation.MaxContextTokens = n
+		}
+	}
+	// CONVERSATION_AUTO_ANSWER=false — вопросы только копятся как метки,
+	// ответ генерируется вручную по F1. Не задан/true — авто-генерация.
+	if v := os.Getenv("CONVERSATION_AUTO_ANSWER"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Conversation.AutoAnswer = &b
 		}
 	}
 

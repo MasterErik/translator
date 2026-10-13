@@ -676,17 +676,30 @@ func TestPipelineConcurrentStreams(t *testing.T) {
 	msgs := ovl.GetMessages()
 	t.Logf("Total messages: %d", len(msgs))
 
-	var answerCount int
+	var candidates []ui.UIMessage
 	for _, m := range msgs {
 		if m.Type == ui.AnswerCandidates {
-			answerCount++
+			candidates = append(candidates, m)
 			t.Logf("AnswerCandidates: answers=%v text=%q", m.Answers, m.Text)
 		}
 	}
-	t.Logf("AnswerCandidates messages: %d", answerCount)
+	t.Logf("AnswerCandidates messages: %d", len(candidates))
 
-	if answerCount < 3 {
-		t.Errorf("Expected at least 3 AnswerCandidates messages, got %d", answerCount)
+	// Новая семантика: ответ кладётся в шапку только если его метка активна.
+	// Из трёх одновременных вопросов активной (хвостовой) остаётся последний,
+	// поэтому в UI уходит ровно одна шапка — про «How does garbage collection work?».
+	if len(candidates) == 0 {
+		t.Fatal("Expected at least one AnswerCandidates message, got 0")
+	}
+	last := candidates[len(candidates)-1]
+	if len(last.Answers) == 0 {
+		t.Fatalf("шапка без Answers: %+v", last)
+	}
+	if last.Answers[0].QuestionIdx != 2 {
+		t.Errorf("QuestionIdx шапки = %d, ожидался 2 (хвостовой вопрос)", last.Answers[0].QuestionIdx)
+	}
+	if last.Answers[0].Total != 3 {
+		t.Errorf("Total шапки = %d, ожидался 3", last.Answers[0].Total)
 	}
 
 	// Verify LLM call log — each question should trigger GenerateAnswersStream.

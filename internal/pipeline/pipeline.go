@@ -97,6 +97,10 @@ type Config struct {
 	TextStreamBuffer int           // default: 64
 	AnswerTimeout    time.Duration // default: 10s
 
+	// AutoAnswer — авто-генерация ответа при обнаружении вопроса (nil → true).
+	// false — вопросы только создают метки в таймлайне, ответ — по F1.
+	AutoAnswer *bool
+
 	// Debug
 	SilentFrame []byte // для StubCapture
 }
@@ -225,6 +229,7 @@ func New(cfg Config) (*Pipeline, error) {
 			sessLog,
 			dispatcher.Config{
 				AnswerTimeout:      cfg.AnswerTimeout,
+				AutoAnswer:         cfg.AutoAnswer,
 				CandidateContext:   candidateContext,
 				CandidateContextFn: candidateContextFn,
 				RecentTurns:        cfg.RecentTurns,
@@ -608,16 +613,16 @@ func (p *Pipeline) generateAnswersAsync(question string) {
 }
 
 // runHotkeys запускает глобальные hotkeys (F1–F4, Esc) и маршрутизирует их
-// в dispatcher: F1–F4 → HandleCommand, Esc → Cancel.
+// в dispatcher: F1–F3 → HandleDemand/Prev/Next, Esc → Cancel.
 func (p *Pipeline) runHotkeys(ctx context.Context) {
 	if err := hotkey.Run(ctx, p.handleHotkey); err != nil && err != context.Canceled {
 		p.sessLog.LogDebug(fmt.Sprintf("hotkey: %v", err))
 	}
 }
 
-// handleHotkey маппит функциональную клавишу на команду генерации.
-// Раскладка: F1 — CommandAnswer, F2 — CommandMoreContext,
-// F3 — CommandSimplerEnglish, F4 — тумблер окна истории оригиналов.
+// handleHotkey маппит функциональную клавишу на действие диспетчера.
+// Раскладка: F1 — ответить (HandleDemand), F2 — предыдущий вопрос (HandlePrev),
+// F3 — следующий вопрос (HandleNext), F4 — тумблер окна истории оригиналов.
 // F4 работает без dispatcher и маршрутизируется прямо в overlay.
 func (p *Pipeline) handleHotkey(k hotkey.Key) {
 	switch k {
@@ -631,11 +636,11 @@ func (p *Pipeline) handleHotkey(k hotkey.Key) {
 		}
 		switch k {
 		case hotkey.KeyF1:
-			p.dispatch.HandleCommand(translator.CommandAnswer)
+			p.dispatch.HandleDemand()
 		case hotkey.KeyF2:
-			p.dispatch.HandleCommand(translator.CommandMoreContext)
+			p.dispatch.HandlePrev()
 		case hotkey.KeyF3:
-			p.dispatch.HandleCommand(translator.CommandSimplerEnglish)
+			p.dispatch.HandleNext()
 		case hotkey.KeyEsc:
 			p.dispatch.Cancel()
 		}

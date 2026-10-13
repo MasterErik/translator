@@ -52,17 +52,25 @@ type Config struct {
 	// MaxContextTokens — лимит размера conversation context (default 4000).
 	MaxContextTokens int
 
-	// CommandBufferSize — буфер канала команд F1–F4 (default 16).
-	CommandBufferSize int
+	// HotkeyBufferSize — буфер канала hotkey-действий F1–F3 (default 16).
+	HotkeyBufferSize int
+
+	// AutoAnswer включает авто-генерацию ответа сразу при обнаружении вопроса.
+	// nil трактуется как true (сохранение прежнего поведения: вопрос →
+	// немедленная генерация). false — вопрос лишь создаёт метку в таймлайне,
+	// ответ генерируется по F1. Указатель, а не bool: ноль-значение bool не
+	// позволяет отличить «не задано» от «явно выключено», а сохранение
+	// авто-ответа по умолчанию важнее, чем удобство литерала.
+	AutoAnswer *bool
 }
 
 func DefaultConfig() Config {
 	return Config{
-		AnswerTimeout:     10 * time.Second,
-		AnswerQueueSize:   16,
-		RecentTurns:       6,
-		MaxContextTokens:  4000,
-		CommandBufferSize: 16,
+		AnswerTimeout:    10 * time.Second,
+		AnswerQueueSize:  16,
+		RecentTurns:      6,
+		MaxContextTokens: 4000,
+		HotkeyBufferSize: 16,
 	}
 }
 
@@ -77,13 +85,13 @@ type Dispatcher struct {
 	lastDropWarn time.Time
 	dropMu       sync.Mutex
 
-	// Очередь вопросов для последовательной обработки одним consumer'ом.
-	answerCh   chan string
+	// Очередь заданий на генерацию (последовательная обработка одним consumer'ом).
+	answerCh   chan answerTask
 	answerDone chan struct{}
 
-	// Канал команд F1–F4 и канал отмены (Esc).
-	commandCh chan translator.GenerationCommand
-	cancelCh  chan struct{}
+	// Канал hotkey-действий F1–F3 (Demand/Prev/Next) и канал отмены (Esc).
+	hotkeyCh chan HotkeyAction
+	cancelCh chan struct{}
 
 	// История текущего интервью и база CV.
 	history            *translator.ConversationHistory
@@ -94,9 +102,15 @@ type Dispatcher struct {
 	srcLang string
 	tgtLang string
 
-	// Текущий обнаруженный вопрос (для F1–F4 regeneration).
-	currentQuestion string
-	currentMu       sync.Mutex
+	// timeline — таймлайн обнаруженных вопросов (метки + ответы + навигация).
+	timeline *QuestionTimeline
+
+	// autoAnswer — авто-генерация ответа при обнаружении вопроса (default true).
+	autoAnswer bool
+
+	// busy — true, пока worker выполняет генерацию. F1, пришедший во время
+	// генерации, дропается в HandleDemand (коалесинг), не скапливаясь в очереди.
+	busy atomic.Bool
 
 	// Отмена активной генерации (Esc).
 	activeCancel context.CancelFunc
@@ -123,8 +137,8 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 	if cfg.MaxContextTokens <= 0 {
 		cfg.MaxContextTokens = 4000
 	}
-	if cfg.CommandBufferSize <= 0 {
-		cfg.CommandBufferSize = 16
+	if cfg.HotkeyBufferSize <= 0 {
+		cfg.HotkeyBufferSize = 16
 	}
 	if cfg.SourceLang == "" {
 		cfg.SourceLang = translator.DefaultSourceLang
@@ -133,7 +147,10 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 		cfg.TargetLang = translator.DefaultTargetLang
 	}
 
-	answerCh := make(chan string, cfg.AnswerQueueSize)
+	// AutoAnswer=nil → true (прежнее поведение: авто-генерация при вопросе).
+	autoAnswer := cfg.AutoAnswer == nil || *cfg.AutoAnswer
+
+	answerCh := make(chan answerTask, cfg.AnswerQueueSize)
 
 	return &Dispatcher{
 		overlay:            overlay,
@@ -142,14 +159,29 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 		cfg:                cfg,
 		answerCh:           answerCh,
 		answerDone:         make(chan struct{}),
-		commandCh:          make(chan translator.GenerationCommand, cfg.CommandBufferSize),
+		hotkeyCh:           make(chan HotkeyAction, cfg.HotkeyBufferSize),
 		cancelCh:           make(chan struct{}, 1),
 		history:            translator.NewConversationHistory(cfg.RecentTurns, cfg.MaxContextTokens),
 		candidateContext:   cfg.CandidateContext,
 		candidateContextFn: cfg.CandidateContextFn,
 		srcLang:            cfg.SourceLang,
 		tgtLang:            cfg.TargetLang,
+		timeline:           NewQuestionTimeline(),
+		autoAnswer:         autoAnswer,
 	}
+}
+
+// answerTask — задание на генерацию подсказок для конкретной метки таймлайна.
+// question — снимок текста вопроса на момент постановки: к моменту обработки
+// активной меткой может быть уже другая, а задание продолжает относиться к своей
+// метке (idx) и своему тексту. fresh=true — задание создано авто-генерацией при
+// обнаружении нового вопроса (подлежит дедупу по тексту); false — задание по
+// Demand/regeneration (дедуп не применяется).
+type answerTask struct {
+	idx      int
+	cmd      translator.GenerationCommand
+	question string
+	fresh    bool
 }
 
 func (d *Dispatcher) Run(ctx context.Context, textStream <-chan common.STTEvent, done chan<- struct{}) {
@@ -273,25 +305,45 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 	}
 }
 
-// enqueueQuestion отправляет вопрос в очередь на обработку (неблокирующе).
-func (d *Dispatcher) enqueueQuestion(question string) {
+// enqueueQuestion регистрирует вопрос в таймлайне и, при включённом
+// AutoAnswer, ставит задание на генерацию (неблокирующе). Возвращает индекс
+// метки. Если AutoAnswer выключен, метка остаётся в QIdle — ответ по F1.
+func (d *Dispatcher) enqueueQuestion(question string) int {
 	// Новый вопрос сбрасывает отмену Esc — очередь снова активна.
 	d.cancelled.Store(false)
-	d.setCurrentQuestion(question)
 
+	idx := d.timeline.Add(question)
+
+	if !d.autoAnswer {
+		return idx
+	}
+
+	d.timeline.SetState(idx, QQueued)
+	// Первый ответ всегда CommandAnswer, но Step метки продвигается вперёд:
+	// следующий F1 после готового авто-ответа сразу даёт CommandMoreContext.
+	d.timeline.NextStep(idx)
+	d.timeline.SetMode(idx, modeAnswer)
+	d.enqueueAnswer(answerTask{idx: idx, cmd: translator.CommandAnswer, question: question, fresh: true})
+	return idx
+}
+
+// enqueueAnswer кладёт задание на генерацию в очередь (неблокирующе).
+// При переполнении задание дропается с логом, состояние метки возвращается в QIdle.
+func (d *Dispatcher) enqueueAnswer(task answerTask) {
 	select {
-	case d.answerCh <- question:
+	case d.answerCh <- task:
 		// OK
 	default:
+		d.timeline.SetState(task.idx, QIdle)
 		if d.sessLog != nil {
-			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: очередь подсказок переполнена, вопрос пропущен: text=%v", question))
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: очередь подсказок переполнена, вопрос пропущен: text=%v", task.question))
 		}
 	}
 }
 
-// answerWorker — единственная горутина, последовательно обрабатывающая очередь
-// вопросов, команды F1–F4 и отмену (Esc).
-// Дедупликация: повторяющийся подряд вопрос пропускается.
+// answerWorker — единственная горутина, последовательно обрабатывающая задания
+// генерации, hotkey-действия (F1–F3) и отмену (Esc).
+// Дедупликация: задание с тем же текстом вопроса, что и предыдущее, пропускается.
 func (d *Dispatcher) answerWorker(ctx context.Context) {
 	defer close(d.answerDone)
 
@@ -300,39 +352,32 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Дренируем оставшиеся вопросы перед выходом.
+			// Дренируем оставшиеся задания перед выходом.
 			d.drainQueue(&lastQuestion)
 			return
 
-		case question, ok := <-d.answerCh:
+		case task, ok := <-d.answerCh:
 			if !ok {
 				return
 			}
-			// Очередь отменена (Esc) — дропаем оставшиеся вопросы.
+			// Очередь отменена (Esc) — дропаем оставшиеся задания.
 			if d.cancelled.Load() {
+				d.timeline.SetState(task.idx, QIdle)
 				continue
 			}
-			// Дедупликация: пропускаем точный повтор предыдущего вопроса.
-			if question == lastQuestion {
+			// Дедупликация: пропускаем точный повтор предыдущего вопроса,
+			// но только для авто-заданий (fresh). Regeneration по F1 не дедупим.
+			if task.fresh && task.question == lastQuestion {
 				if d.sessLog != nil {
-					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: дубликат вопроса пропущен: text=%v", question))
+					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: дубликат вопроса пропущен: text=%v", task.question))
 				}
 				continue
 			}
-			lastQuestion = question
-			d.setCurrentQuestion(question)
-			d.generateAnswers(question, translator.CommandAnswer)
+			lastQuestion = task.question
+			d.runAnswer(task)
 
-		case cmd := <-d.commandCh:
-			// F2–F4: повторная генерация на текущий вопрос.
-			q := d.currentQ()
-			if q == "" {
-				if d.sessLog != nil {
-					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: команда без текущего вопроса пропущена: cmd=%v", cmd))
-				}
-				continue
-			}
-			d.generateAnswers(q, cmd)
+		case act := <-d.hotkeyCh:
+			d.handleHotkeyAction(act)
 
 		case <-d.cancelCh:
 			// Esc: очищаем очередь — следующие вопросы не уйдут в LLM.
@@ -340,40 +385,114 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 				d.sessLog.LogDebug("dispatcher: очередь отменена (Esc)")
 			}
 			d.dropQueue()
+			// Метки в Queued/Generating возвращаем в Idle; готовые сохраняем.
+			d.timeline.ResetPending()
 		}
 	}
 }
 
-// drainQueue вычитывает все оставшиеся вопросы из очереди.
-// Вызывается при shutdown, когда answerCh ещё открыт.
+// handleHotkeyAction обрабатывает hotkey-действие в контексте таймлайна.
+// Prev/Next только двигают активную позицию и обновляют шапку; Demand (F1)
+// ставит задание на генерацию для активной метки (коалесинг: во время генерации
+// повторный F1 игнорируется).
+func (d *Dispatcher) handleHotkeyAction(act HotkeyAction) {
+	switch act {
+	case ActionPrev:
+		if !d.timeline.Prev() {
+			return
+		}
+		d.pushActiveHeader()
+	case ActionNext:
+		if !d.timeline.Next() {
+			return
+		}
+		d.pushActiveHeader()
+	case ActionDemand:
+		d.handleDemand()
+	}
+}
+
+// handleDemand реализует F1: генерация ответа для активной метки.
+//   - пустой таймлайн → no-op с логом;
+//   - метка уже в очереди/генерируется → игнор (коалесинг повторного F1);
+//   - метка QIdle → первая генерация (всегда CommandAnswer, Step не трогаем);
+//   - метка QReady/QFailed → следующий шаг цикла (more context → simpler → ...).
+func (d *Dispatcher) handleDemand() {
+	idx, entry, ok := d.timeline.Active()
+	if !ok {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: F1 без активной метки пропущен")
+		}
+		return
+	}
+
+	switch entry.State {
+	case QQueued, QGenerating:
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: F1 во время генерации пропущен: question=%v, state=%v", entry.Question, entry.State.String()))
+		}
+		return
+	case QIdle:
+		// Первый ответ на метку — всегда CommandAnswer, но Step продвигаем:
+		// следующий F1 даст CommandMoreContext.
+		d.timeline.NextStep(idx)
+		d.timeline.SetState(idx, QQueued)
+		d.timeline.SetMode(idx, modeAnswer)
+		d.enqueueAnswer(answerTask{idx: idx, cmd: translator.CommandAnswer, question: entry.Question})
+	default:
+		// QReady/QFailed: следующий режим цикла (answer→more context→simpler).
+		cmd, _ := d.timeline.NextStep(idx)
+		d.timeline.SetState(idx, QQueued)
+		d.timeline.SetMode(idx, modeOf(cmd))
+		d.enqueueAnswer(answerTask{idx: idx, cmd: cmd, question: entry.Question})
+	}
+}
+
+// runAnswer выполняет задание генерации для метки task.idx.
+func (d *Dispatcher) runAnswer(task answerTask) {
+	d.busy.Store(true)
+	defer d.busy.Store(false)
+	d.timeline.SetState(task.idx, QGenerating)
+	d.generateAnswers(task.question, task.cmd, task.idx)
+}
+
+// drainQueue вычитывает все оставшиеся задания из очереди при shutdown.
+// Генерирует только те, что ещё можно поставить в очередь (QIdle/QFailed →
+// попытка ответить; QQueued переводится в QGenerating перед генерацией).
 func (d *Dispatcher) drainQueue(lastQuestion *string) {
 	if d.answerCh == nil {
 		return
 	}
 	for {
 		select {
-		case question, ok := <-d.answerCh:
+		case task, ok := <-d.answerCh:
 			if !ok {
 				return
 			}
-			if question != *lastQuestion {
-				d.GenerateAnswers(question)
-				*lastQuestion = question
+			if d.cancelled.Load() {
+				d.timeline.SetState(task.idx, QIdle)
+				continue
 			}
+			if task.fresh && task.question == *lastQuestion {
+				continue
+			}
+			*lastQuestion = task.question
+			d.runAnswer(task)
 		default:
 			return
 		}
 	}
 }
 
-// dropQueue выбрасывает все ожидающие вопросы из очереди (без генерации).
+// dropQueue выбрасывает все ожидающие задания из очереди (без генерации).
 func (d *Dispatcher) dropQueue() {
 	if d.answerCh == nil {
 		return
 	}
 	for {
 		select {
-		case <-d.answerCh:
+		case task := <-d.answerCh:
+			d.timeline.SetState(task.idx, QIdle)
 		default:
 			return
 		}
@@ -381,22 +500,50 @@ func (d *Dispatcher) dropQueue() {
 }
 
 // GenerateAnswers запускает обычную генерацию ответа на заданный вопрос (F1/авто).
+// Добавляет метку в таймлайн и отвечает на неё — используется при shutdown
+// (drainQueue) и в тестах.
 func (d *Dispatcher) GenerateAnswers(question string) {
-	d.generateAnswers(question, translator.CommandAnswer)
+	idx := d.timeline.Add(question)
+	d.timeline.SetState(idx, QGenerating)
+	d.generateAnswers(question, translator.CommandAnswer, idx)
 }
 
-// HandleCommand отправляет команду F1–F4 в обработку.
-func (d *Dispatcher) HandleCommand(cmd translator.GenerationCommand) {
+// HandleDemand — F1: запросить ответ для активной метки (неблокирующе).
+// Коалесинг: если worker сейчас генерирует ответ (busy), запрос дропается —
+// чтобы во время долгой генерации не накапливались лишние задания.
+func (d *Dispatcher) HandleDemand() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: F1 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
+	d.sendHotkey(ActionDemand)
+}
+
+// HandlePrev — F2: перейти к предыдущей метке таймлайна.
+func (d *Dispatcher) HandlePrev() {
+	d.sendHotkey(ActionPrev)
+}
+
+// HandleNext — F3: перейти к следующей метке таймлайна.
+func (d *Dispatcher) HandleNext() {
+	d.sendHotkey(ActionNext)
+}
+
+// sendHotkey отправляет hotkey-действие в worker (неблокирующе).
+func (d *Dispatcher) sendHotkey(act HotkeyAction) {
 	select {
-	case d.commandCh <- cmd:
+	case d.hotkeyCh <- act:
 	default:
 		if d.sessLog != nil {
-			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: очередь команд переполнена, команда пропущена: cmd=%v", cmd))
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: очередь hotkey переполнена, действие пропущено: action=%v", act))
 		}
 	}
 }
 
-// Cancel отменяет активную генерацию и очищает очередь вопросов (Esc).
+// Cancel отменяет активную генерацию и очищает очередь заданий (Esc).
+// Метки и уже готовые ответы сохраняются: QQueued/QGenerating → QIdle.
 func (d *Dispatcher) Cancel() {
 	d.cancelled.Store(true)
 
@@ -412,26 +559,20 @@ func (d *Dispatcher) Cancel() {
 	}
 }
 
-func (d *Dispatcher) setCurrentQuestion(q string) {
-	d.currentMu.Lock()
-	d.currentQuestion = q
-	d.currentMu.Unlock()
-}
-
-func (d *Dispatcher) currentQ() string {
-	d.currentMu.Lock()
-	defer d.currentMu.Unlock()
-	return d.currentQuestion
-}
-
 // generateAnswers собирает AnswerRequest (candidate context + conversation
-// context + команда) и выполняет синхронную генерацию. Активная генерация может
-// быть отменена через Cancel() (Esc).
-func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationCommand) {
+// context + команда) и выполняет синхронную генерацию для метки idx.
+// Активная генерация может быть отменена через Cancel() (Esc).
+//
+// Результат кладётся в таймлайн (SetAnswer/SetState) и в overlay — но только
+// если метка idx всё ещё активна (иначе ответ устаревший: пользователь ушёл на
+// другую метку, и перезаписывать её шапку нельзя). RecordAnswer выполняется
+// только для хвостовой метки, иначе хронология истории интервью ломается.
+func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationCommand, idx int) {
 	if d.engine == nil {
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: engine=nil, генерация пропущена: question=%v", question))
 		}
+		d.timeline.SetState(idx, QFailed)
 		return
 	}
 
@@ -463,16 +604,18 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 
 	answers, err := d.engine.GenerateAnswers(ansCtx, req)
 	if err != nil {
-		// Отменено через Esc — тихо, без ошибки в UI.
+		// Отменено через Esc / истёк таймаут — тихо, без ошибки в UI.
 		if ansCtx.Err() != nil {
 			if d.sessLog != nil {
 				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация отменена (Esc): question=%v", question))
 			}
+			d.timeline.SetState(idx, QIdle)
 			return
 		}
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация подсказок не удалась: question=%v, error=%v", question, err))
 		}
+		d.timeline.SetState(idx, QFailed)
 		if d.overlay != nil {
 			d.overlay.AddMessage(ui.UIMessage{
 				Type:      ui.Error,
@@ -487,6 +630,7 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: подсказки пусты: question=%v", question))
 		}
+		d.timeline.SetState(idx, QFailed)
 		return
 	}
 
@@ -494,22 +638,102 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 	// Непарсящиеся строки сохраняются целиком как Source (текст не теряем).
 	parsed := d.parseAnswers(answers)
 
-	if d.overlay != nil {
-		d.overlay.AddMessage(ui.UIMessage{
-			Type:      ui.AnswerCandidates,
-			Text:      question,
-			Answers:   parsed,
-			Timestamp: time.Now(),
-		})
-	}
+	d.timeline.SetAnswer(idx, parsed)
+	d.timeline.SetState(idx, QReady)
+	d.timeline.SetMode(idx, modeOf(cmd))
 
 	if d.sessLog != nil {
 		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: подсказки сгенерированы: question=%v, command=%v, count=%v", question, cmd, len(parsed)))
 	}
 
-	// Сохраняем финальный ответ в историю. Regeneration (F2–F4) заменяет
-	// последнюю версию ответа на тот же вопрос (не создаёт новый turn).
-	d.history.RecordAnswer(question, parsed[0].Source)
+	// UI-шапка: отправляем, только если метка idx всё ещё активна — иначе
+	// устаревший ответ не должен перезаписывать шапку текущей метки.
+	if d.isActive(idx) {
+		d.pushHeader(idx, parsed)
+	}
+
+	// Сохраняем финальный ответ в историю только для хвостовой метки, иначе
+	// хронология turns в conversation context ломается (ответ на старый вопрос
+	// не должен стать последним turn'ом интервью).
+	if d.timeline.OnTail() {
+		d.history.RecordAnswer(question, parsed[0].Source)
+	}
+}
+
+// modeOf отображает команду генерации в строковый режим для UI.
+func modeOf(cmd translator.GenerationCommand) string {
+	switch cmd {
+	case translator.CommandMoreContext:
+		return modeMoreContext
+	case translator.CommandSimplerEnglish:
+		return modeSimpler
+	default:
+		return modeAnswer
+	}
+}
+
+// Режимы генерации для шапки метки (ui.Answer.Mode).
+const (
+	modeAnswer      = "answer"
+	modeMoreContext = "more context"
+	modeSimpler     = "simpler"
+)
+
+// isActive сообщает, является ли метка idx активной в таймлайне.
+func (d *Dispatcher) isActive(idx int) bool {
+	cur, _, ok := d.timeline.Active()
+	return ok && cur == idx
+}
+
+// pushActiveHeader отправляет в overlay шапку активной метки (для Prev/Next):
+// готовый ответ из таймлайна, если он есть, иначе пустые Answers с её State
+// (UI покажет «F1 — ответить»).
+func (d *Dispatcher) pushActiveHeader() {
+	idx, entry, ok := d.timeline.Active()
+	if !ok {
+		return
+	}
+	d.pushHeader(idx, entry.Answer)
+}
+
+// pushHeader формирует и отправляет в overlay сообщение шапки метки idx.
+// Заполняет QuestionIdx/Total/QuestionText/State/Mode по актуальному состоянию
+// таймлайна; Mode берётся из метки (задаётся при постановке задания/ответе).
+//
+// Если у метки ещё нет ответа (Idle/Queued/Generating/Failed), отправляется
+// один «каркасный» Answer с пустым Source/Target — он несёт метаданные
+// (QuestionIdx/State/Mode), по которым UI рисует шапку и подсказку «F1 — ответить».
+func (d *Dispatcher) pushHeader(idx int, answers []ui.Answer) {
+	if d.overlay == nil {
+		return
+	}
+	// Метка может быть неактивной (устаревший ответ) — берём её из снапшота по idx.
+	snap := d.timeline.Snapshot()
+	if idx < 0 || idx >= len(snap) {
+		return
+	}
+	entry := snap[idx]
+
+	header := make([]ui.Answer, len(answers))
+	copy(header, answers)
+	if len(header) == 0 {
+		// Каркасный элемент: метаданные шапки без текста ответа.
+		header = []ui.Answer{{}}
+	}
+	for i := range header {
+		header[i].QuestionIdx = idx
+		header[i].Total = len(snap)
+		header[i].QuestionText = entry.Question
+		header[i].State = entry.State.String()
+		header[i].Mode = entry.Mode
+	}
+
+	d.overlay.AddMessage(ui.UIMessage{
+		Type:      ui.AnswerCandidates,
+		Text:      entry.Question,
+		Answers:   header,
+		Timestamp: time.Now(),
+	})
 }
 
 // parseAnswers превращает сырые строки ответа LLM в структурированные пары

@@ -77,6 +77,7 @@ func main() {
 		Hints:                cfg.Hints,
 		RecentTurns:          cfg.Conversation.RecentTurns,
 		MaxContextTokens:     cfg.Conversation.MaxContextTokens,
+		AutoAnswer:           cfg.Conversation.AutoAnswer,
 		OverlayCfg: ui.OverlayConfig{
 			Width:    cfg.OverlayWidth,
 			Height:   cfg.OverlayHeight,
