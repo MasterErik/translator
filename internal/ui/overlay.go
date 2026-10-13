@@ -507,20 +507,301 @@ type answerLine struct {
 // отличимый от белого (Interim/подсказки) и зелёного (перевод подсказки).
 var layoutErrorColor = color.NRGBA{R: 255, G: 96, B: 96, A: 255}
 
-// layoutAnswers — подсказки: Source и Target на отдельных строках, с вертикальным скроллом.
-// Шрифт единый — fs (Task 3.0: убран fs-2/floor). needScroll — автоскролл к концу (Task 3.1).
+// ── Task 5: таймлайн вопросов в зоне 3 ──
+
+// questionStripMaxVisible — максимум одновременно видимых меток [1][2]… в ленте.
+// Если меток больше, лента показывает окно вокруг активной (visibleWindow).
+const questionStripMaxVisible = 8
+
+// questionStripNewMark — индикатор «справа есть более свежие метки»
+// (Total > активной + 1): маленькая стрелка после правого края ленты.
+const questionStripNewMark = "➤"
+
+// smallFontSize — шрифт подписей таймлайна (лента меток, шапка вопроса,
+// подсказка состояния, режим): fs-2 с полом 10.
+func smallFontSize(fs int) int {
+	if fs-2 < 10 {
+		return 10
+	}
+	return fs - 2
+}
+
+// visibleWindow возвращает индексы меток, видимых в ленте ширины n вокруг
+// активной: окно длины min(n, total), в котором active по возможности
+// отцентрован, но окно не выходит за границы [0, total-1]. Чистая функция —
+// тестируется напрямую. Возвращаемый срез всегда в границах таймлайна.
+func visibleWindow(active, total, n int) []int {
+	if total <= 0 || n <= 0 {
+		return nil
+	}
+	if n > total {
+		n = total
+	}
+	if active < 0 {
+		active = 0
+	}
+	if active > total-1 {
+		active = total - 1
+	}
+	// Ставим active в середину окна, затем прижимаем окно к границам.
+	start := active - n/2
+	if start < 0 {
+		start = 0
+	}
+	if start+n > total {
+		start = total - n
+	}
+	out := make([]int, 0, n)
+	for i := start; i < start+n; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+// questionStateMark — маркер состояния метки для ленты: ○ (idle — ждёт F1),
+// … (queued/generating), ● (ready), ! (failed).
+func questionStateMark(state string) string {
+	switch state {
+	case "queued", "generating":
+		return "…"
+	case "ready":
+		return "●"
+	case "failed":
+		return "!"
+	default:
+		return "○" // idle и неизвестное состояние
+	}
+}
+
+// isMetadataOnly сообщает, что Answer — каркас шапки (без текста ответа):
+// Source и Target пусты. Явный State при этом задаёт состояние по контракту
+// таймлайна (dispatcher.pushHeader отправляет один пустой Answer с метаданными).
+func isMetadataOnly(a Answer) bool {
+	return a.Source == "" && a.Target == ""
+}
+
+// answersMeta возвращает метаданные таймлайна из первого Answer с заданным
+// контрактом (QuestionIdx/Total/State/Mode). ok=false для старого формата,
+// где все поля метаданных нулевые — тогда зона 3 рендерится как раньше.
+func answersMeta(answers []Answer) (Answer, bool) {
+	for _, a := range answers {
+		if a.Total != 0 || a.State != "" || a.Mode != "" || a.QuestionText != "" {
+			return a, true
+		}
+	}
+	return Answer{}, false
+}
+
+// layoutQuestionStrip рисует ленту меток [1] [2] [3] над ответами: активная
+// выделена цветом, у каждой — маркер состояния, справа — индикатор более
+// свежих меток. Ширина ленты ограничена questionStripMaxVisible; окно вокруг
+// активной считает visibleWindow. Высота — одна строка smallFontSize(fs).
+func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, fs int) layout.Dimensions {
+	total := meta.Total
+	active := meta.QuestionIdx
+	if total <= 0 {
+		// Метаданных нет (старый формат) — по числу ответов.
+		total = len(answers)
+	}
+	if active < 0 {
+		active = 0
+	}
+	if active > total-1 {
+		active = total - 1
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutMarksRow(gtx, th, answers, meta, active, total, fs)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			// Распорка: прижимает индикатор свежих меток к правому краю, а при
+			// короткой ленте просто заполняет строку.
+			return layout.Dimensions{Size: image.Pt(gtx.Constraints.Min.X, 0)}
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if total <= active+1 {
+				return layout.Dimensions{}
+			}
+			l := overlayLabel(th, unit.Sp(smallFontSize(fs)), questionStripNewMark)
+			l.Color = color.NRGBA{R: 200, G: 200, B: 220, A: 255}
+			return l.Layout(gtx)
+		}),
+	)
+}
+
+// layoutMarksRow рисует видимые метки ленты: видимое окно вокруг активной.
+func layoutMarksRow(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, active, total, fs int) layout.Dimensions {
+	win := visibleWindow(active, total, questionStripMaxVisible)
+	children := make([]layout.FlexChild, 0, len(win))
+	for _, idx := range win {
+		idx := idx
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutMark(gtx, th, answers, meta, idx, idx == active, fs)
+		}))
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
+}
+
+// layoutMark рисует одну метку «[N]маркер». Активная — белым, остальные — серым.
+// Маркер состояния берётся из Answer этой метки (если dispatcher прислал только
+// шапку — у активной метки известен лишь её State; остальные получают ○/…).
+func layoutMark(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, idx int, active bool, fs int) layout.Dimensions {
+	mark := "○"
+	if a, ok := answerByQuestionIdx(answers, idx); ok {
+		if a.State != "" {
+			mark = questionStateMark(a.State)
+		}
+	} else if meta.Total > 0 && idx < meta.QuestionIdx {
+		// Метка «слева» от активной уже отжила — готовый ответ или без статуса.
+		mark = "○"
+	}
+	text := "[" + fmt.Sprintf("%d", idx+1) + "]" + mark
+	l := overlayLabel(th, unit.Sp(smallFontSize(fs)), text)
+	if active {
+		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	} else {
+		l.Color = color.NRGBA{R: 160, G: 160, B: 180, A: 255}
+	}
+	return l.Layout(gtx)
+}
+
+// answerByQuestionIdx ищет Answer по индексу вопроса портала.
+func answerByQuestionIdx(answers []Answer, idx int) (Answer, bool) {
+	for _, a := range answers {
+		if a.Total != 0 && a.QuestionIdx == idx {
+			return a, true
+		}
+	}
+	return Answer{}, false
+}
+
+// layoutQuestionHeader рисует шапку активной метки: «Q3 (3/5): <вопрос>». Вопрос
+// обрезается до maxQuestionHeaderLines строк (ellipsis), шрифт smallFontSize(fs),
+// высота — измеренным продвижением строки (не «на глаз»). Рядом — подпись режима
+// генерации Mode («answer»/«more context»/«simpler»).
+func layoutQuestionHeader(gtx layout.Context, th *material.Theme, meta Answer, fs int) layout.Dimensions {
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutQuestionTitle(gtx, th, meta, fs)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if meta.Mode == "" {
+				return layout.Dimensions{}
+			}
+			l := overlayLabel(th, unit.Sp(smallFontSize(fs)), "· "+meta.Mode)
+			l.Color = color.NRGBA{R: 150, G: 170, B: 200, A: 255}
+			return l.Layout(gtx)
+		}),
+	)
+}
+
+// layoutQuestionTitle — «Q3 (3/5): вопрос»; часть «вопрос» обрезается по числу
+// строк (maxQuestionHeaderLines) с ellipsis.
+func layoutQuestionTitle(gtx layout.Context, th *material.Theme, meta Answer, fs int) layout.Dimensions {
+	prefix := ""
+	if meta.Total > 0 {
+		prefix = fmt.Sprintf("Q%d (%d/%d): ", meta.QuestionIdx+1, meta.QuestionIdx+1, meta.Total)
+	}
+	l := overlayLabel(th, unit.Sp(smallFontSize(fs)), prefix+meta.QuestionText)
+	l.Color = color.NRGBA{R: 220, G: 220, B: 230, A: 255}
+	l.Alignment = text.Start
+	l.MaxLines = maxQuestionHeaderLines
+	return l.Layout(gtx)
+}
+
+// maxQuestionHeaderLines — сколько строк вопроса показывает шапка активной метки.
+const maxQuestionHeaderLines = 2
+
+// answerStateHint — подсказка вместо пустоты, когда ответа нет: idle — ждём F1,
+// queued/generating — генерация, failed — ошибка. Явный State имеет приоритет;
+// пустой State/ready трактуется как idle (ответ ещё не запрошен).
+func answerStateHint(state string) string {
+	switch state {
+	case "queued", "generating":
+		return "генерация…"
+	case "failed":
+		return "ошибка генерации"
+	default:
+		return "F1 — ответить"
+	}
+}
+
+// layoutAnswerHint — подсказка состояния метки вместо пустоты: та же логика
+// цветов, что у подписей, шрифт smallFontSize(fs), отступ одной строкой сверху
+// (чтобы не липнуть к шапке).
+func layoutAnswerHint(gtx layout.Context, th *material.Theme, state string, fs int) layout.Dimensions {
+	sp := unit.Sp(smallFontSize(fs))
+	l := overlayLabel(th, sp, answerStateHint(state))
+	c := color.NRGBA{R: 180, G: 180, B: 200, A: 255}
+	switch state {
+	case "failed":
+		c = layoutErrorColor
+	case "queued", "generating":
+		c = color.NRGBA{R: 200, G: 200, B: 120, A: 255}
+	}
+	l.Color = c
+	l.Alignment = text.Start
+	return l.Layout(gtx)
+}
+
+// layoutAnswers — подсказки активной метки (зона 3): лента меток и шапка
+// вопроса сверху (только для сообщений с контрактом таймлайна), затем строки
+// Source (белый) / Target (зелёный) с вертикальным скроллом. Если текста
+// ответа нет — вместо пустоты подсказка состояния (idle/queued/failed).
+// Шрифт строк ответа — единый fs (Task 3.0). needScroll — автоскролл (Task 3.1).
 func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	// Собираем плоский список: Source (белый), Target (зелёный).
 	items := make([]answerLine, 0, len(msg.Answers)*2)
 	for _, ans := range msg.Answers {
-		items = append(items, answerLine{text: ans.Source, isRU: false})
+		if ans.Source != "" {
+			items = append(items, answerLine{text: ans.Source, isRU: false})
+		}
 		if ans.Target != "" {
 			items = append(items, answerLine{text: ans.Target, isRU: true})
 		}
 	}
 
+	meta, hasMeta := answersMeta(msg.Answers)
+
+	// Старый формат (метаданных нет) — рендер как раньше: чистый скролл строк.
+	if !hasMeta {
+		return layoutAnswerLines(gtx, th, items, fs, list, needScroll)
+	}
+
+	// Контракт таймлайна: лента меток + шапка активного вопроса + (при пустом
+	// ответе) подсказка состояния. Ответные строки скроллятся в остатке высоты.
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutQuestionStrip(gtx, th, msg.Answers, meta, fs)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if meta.QuestionText == "" {
+				return layout.Dimensions{}
+			}
+			return layoutQuestionHeader(gtx, th, meta, fs)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if len(items) > 0 {
+				return layout.Dimensions{}
+			}
+			return layoutAnswerHint(gtx, th, meta.State, fs)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			if len(items) == 0 {
+				return layout.Dimensions{Size: image.Pt(gtx.Constraints.Min.X, 0)}
+			}
+			return layoutAnswerLines(gtx, th, items, fs, list, needScroll)
+		}),
+	)
+}
+
+// layoutAnswerLines — скролл строк ответа (общая часть старого и нового формата).
+func layoutAnswerLines(gtx layout.Context, th *material.Theme, items []answerLine, fs int, list *layout.List, needScroll bool) layout.Dimensions {
+	if len(items) == 0 {
+		return layout.Dimensions{}
+	}
 	list.Axis = layout.Vertical
-	if needScroll && len(items) > 0 {
+	if needScroll {
 		autoScrollBottom(list)
 	}
 	return list.Layout(gtx, len(items), func(gtx layout.Context, idx int) layout.Dimensions {
