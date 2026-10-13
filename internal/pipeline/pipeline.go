@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -81,6 +82,7 @@ type Config struct {
 	// Candidate context (база CV) и conversation context.
 	CandidateContextFile string                        // путь к файлу базы CV (legacy)
 	CandidateContext     common.CandidateContextConfig // fact-level retrieval (Dir) — приоритет над File
+	Hints                common.HintsConfig            // подсказки-ответы (каталог в формате candidate_context)
 	RecentTurns          int                           // максимум turns в context
 	MaxContextTokens     int                           // лимит размера context
 
@@ -170,6 +172,26 @@ func New(cfg Config) (*Pipeline, error) {
 	if ccErr != nil {
 		newErr = fmt.Errorf("pipeline: candidate context: %w", ccErr)
 		return nil, newErr
+	}
+
+	// Hints — подсказки-ответы на предсказуемые вопросы интервьюера.
+	// Композируются поверх candidateContextFn: готовый ответ добавляется
+	// после фактов. В legacy-режиме (fn == nil) подсказки недоступны —
+	// они требуют retrieval по вопросу.
+	hintsFn, hintsErr := resolveHints(cfg, logf)
+	if hintsErr != nil {
+		newErr = fmt.Errorf("pipeline: hints: %w", hintsErr)
+		return nil, newErr
+	}
+	if hintsFn != nil {
+		if candidateContextFn == nil {
+			logf("WARN: hints задан, но candidate context работает в legacy-режиме — hints отключены")
+		} else {
+			baseFn := candidateContextFn
+			candidateContextFn = func(question string) string {
+				return appendHint(baseFn(question), hintsFn(question))
+			}
+		}
 	}
 
 	// Overlay.
@@ -272,6 +294,60 @@ func fallbackToLegacyFile(cfg Config, logf func(string), cause error) (string, f
 	}
 	logf(fmt.Sprintf("WARN: fact-level candidate context недоступен (%v), fallback на legacy файл", cause))
 	return string(data), nil, nil
+}
+
+// resolveHints создаёт функцию подсказок-ответов на предсказуемые вопросы
+// интервьюера (каталог в формате candidate_context).
+//
+// В отличие от resolveCandidateContext, здесь нет legacy-режима и ошибки НЕ
+// фатальны: каталог hints — вспомогательный, его отсутствие или порча не
+// должны ронять pipeline. Возвращает:
+//   - fn — функция получения готового ответа по вопросу (nil, если hints
+//     выключены или недоступны);
+//   - err — всегда nil (оставлен для единообразия с resolveCandidateContext);
+//     проблемы логируются через logf в формате "WARN: ...".
+func resolveHints(cfg Config, logf func(string)) (func(string) string, error) {
+	// Hints выключены: каталог не задан.
+	if cfg.Hints.Dir == "" {
+		return nil, nil
+	}
+
+	manifest, index, loadErr := candidatecontext.LoadCandidateContext(cfg.Hints.Dir)
+	if loadErr != nil {
+		logf(fmt.Sprintf("WARN: не удалось загрузить hints %s: %v", cfg.Hints.Dir, loadErr))
+		return nil, nil
+	}
+
+	retriever, retErr := candidatecontext.NewRetriever(manifest, index, cfg.Hints.Dir, cfg.Hints.TopK, cfg.Hints.MinScore)
+	if retErr != nil {
+		logf(fmt.Sprintf("WARN: не удалось инициализировать retriever hints %s: %v", cfg.Hints.Dir, retErr))
+		return nil, nil
+	}
+
+	// Профиль hints-manifest в подсказке не используется — только тела фактов.
+	fn := func(question string) string {
+		results := retriever.Retrieve(question)
+		bodies := make([]string, 0, len(results))
+		for _, r := range results {
+			bodies = append(bodies, r.Content)
+		}
+		return strings.Join(bodies, "\n")
+	}
+	return fn, nil
+}
+
+// appendHint добавляет готовый ответ-подсказку к базовому ответу. Пустая
+// подсказка — base возвращается без изменений; иначе подсказка добавляется
+// отдельным блоком с явным указанием «использовать как есть».
+func appendHint(base, hint string) string {
+	if hint == "" {
+		return base
+	}
+	const header = "Suggested answer (use as is):\n"
+	if base == "" {
+		return header + hint
+	}
+	return base + "\n\n" + header + hint
 }
 
 // --------------------------------------------------------------------------

@@ -3,7 +3,7 @@
     {"question": "What is your experience with Apache Kafka?", "relevant_fact_ids": ["skills-streaming"]},
     {"question": "Tell me about your pricing engine work.", "relevant_fact_ids": ["exp-java-head"]},
     {"question": "What databases do you work with?", "relevant_fact_ids": ["skills-data"]},
-    {"question": "Do you have experience with PostgreSQL?", "relevant_fact_ids": ["skills-data"]},
+    {"question": "Do you have experience with PostgreSQL?", "relevant_fact_ids": ["skills-data", "alarm-platform-overview"]},
     {"question": "Tell me about your experience with Java and the JVM.", "relevant_fact_ids": ["exp-java-head"]},
     {"question": "What is your experience with microservices architecture?", "relevant_fact_ids": ["sum-competencies"]},
     {"question": "Have you worked with Kubernetes and Docker?", "relevant_fact_ids": ["skills-ai-devops"]},

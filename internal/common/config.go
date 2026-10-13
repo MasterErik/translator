@@ -49,6 +49,10 @@ type Config struct {
 	// Candidate context — fact-level retrieval (каталог с manifest.json + sections/).
 	CandidateContext CandidateContextConfig `yaml:"candidate_context"`
 
+	// Hints — подсказки-ответы на предсказуемые вопросы интервьюера
+	// (каталог в формате candidate_context).
+	Hints HintsConfig `yaml:"hints"`
+
 	// Conversation context — ограничение истории интервью.
 	Conversation ConversationConfig `yaml:"conversation"`
 }
@@ -66,6 +70,14 @@ type CandidateContextConfig struct {
 	MaxProfileTokens int     `yaml:"max_profile_tokens"` // бюджет токенов на профиль
 	MinScore         float64 `yaml:"min_score"`          // минимальный score отобранного факта
 	TopK             int     `yaml:"top_k"`              // максимум отобранных фактов
+}
+
+// HintsConfig — параметры подсказок-ответов (готовые ответы на предсказуемые
+// вопросы интервьюера; каталог в формате candidate_context).
+type HintsConfig struct {
+	Dir      string  `yaml:"dir"`       // каталог hints (manifest.json + sections/); "" = выключено
+	MinScore float64 `yaml:"min_score"` // строгий порог: score ниже — подсказка не выводится
+	TopK     int     `yaml:"top_k"`     // максимум подсказок на вопрос
 }
 
 func setDefault[T comparable](v *T, def T) {
@@ -88,6 +100,8 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.CandidateContext.MaxProfileTokens, 150)
 	setDefault(&c.CandidateContext.MinScore, 0.0)
 	setDefault(&c.CandidateContext.TopK, 5)
+	setDefault(&c.Hints.MinScore, 0.0)
+	setDefault(&c.Hints.TopK, 1)
 }
 
 // loadFromEnv loads .env via godotenv, then reads environment variables
@@ -136,6 +150,21 @@ func (c *Config) loadFromEnv() {
 	if v := os.Getenv("CANDIDATE_CONTEXT_TOP_K"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.CandidateContext.TopK = n
+		}
+	}
+
+	// Вложенная секция hints — env-override вручную (аналогично candidate_context).
+	if v := os.Getenv("HINTS_DIR"); v != "" {
+		c.Hints.Dir = v
+	}
+	if v := os.Getenv("HINTS_MIN_SCORE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			c.Hints.MinScore = f
+		}
+	}
+	if v := os.Getenv("HINTS_TOP_K"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Hints.TopK = n
 		}
 	}
 }

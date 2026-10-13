@@ -1,0 +1,20 @@
+{
+  "profile": "",
+  "global_aliases": {},
+  "sections": [
+    {
+      "id": "alarm-qa",
+      "title": "Alarm Platform Q&A",
+      "summary": "Prepared answers to anticipated interviewer questions about the pharma order ingestion platform.",
+      "tags": [
+        "alarm",
+        "pharma",
+        "kafka",
+        "ftp",
+        "redis",
+        "s3",
+        "qa"
+      ]
+    }
+  ]
+}

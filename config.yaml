@@ -43,6 +43,17 @@ candidate_context:
   min_score: 0
   top_k: 5
 
+# Hints — заготовленные ответы на предсказуемые вопросы интервьюера.
+# dir: "hints" — каталог (формат candidate_context) с готовыми ответами;
+# при совпадении вопроса подсказка выводится как «Suggested answer (use as is)».
+# dir: "" или отсутствие каталога — подсказки выключены.
+hints:
+  dir: "hints"
+  # Строгий порог: score ниже — подсказка не выводится вообще.
+  # Подобран smoke-тестом: свои вопросы >= 62, посторонние <= 36.5.
+  min_score: 50
+  top_k: 1
+
 # Conversation context — ограничение истории интервью.
 conversation:
   recent_turns: 6

@@ -74,6 +74,7 @@ func main() {
 		MaxTokens:            cfg.MaxTokens,
 		CandidateContextFile: cfg.CandidateContextFile,
 		CandidateContext:     cfg.CandidateContext,
+		Hints:                cfg.Hints,
 		RecentTurns:          cfg.Conversation.RecentTurns,
 		MaxContextTokens:     cfg.Conversation.MaxContextTokens,
 		OverlayCfg: ui.OverlayConfig{
