@@ -29,6 +29,24 @@ const (
 type Answer struct {
 	Source string
 	Target string
+
+	// Поля ниже — контракт таймлайна вопросов (QuestionTimeline). Они позволяют
+	// показывать метку «вопрос N из M» и статус генерации, не вводя в пакет ui
+	// зависимость от dispatcher (значения State/Mode задаёт dispatcher).
+	//
+	// QuestionIdx — индекс вопроса в таймлайне (нумерация с 0).
+	// Total — общее число вопросов в таймлайне.
+	// QuestionText — текст вопроса, к которому относится подсказка.
+	// State — статус генерации: "idle", "queued", "generating", "ready", "failed".
+	// Mode — режим генерации: "answer", "more context", "simpler".
+	//
+	// Нулевые значения сохраняют прежнее поведение рендера (поля не заполнены —
+	// рендер работает как раньше).
+	QuestionIdx  int
+	Total        int
+	QuestionText string
+	State        string
+	Mode         string
 }
 
 // UIMessage represents a single message displayed in the overlay.
