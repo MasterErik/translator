@@ -20,6 +20,10 @@ const (
 
 	wmHotkey = 0x0312
 	wmQuit   = 0x0012
+
+	// modNorepeat — MOD_NOREPEAT (Windows Vista+): подавляет автоповтор
+	// WM_HOTKEY при удержании клавиши.
+	modNorepeat = 0x4000
 )
 
 var (
@@ -44,18 +48,21 @@ type msg struct {
 	ptY     int32
 }
 
-// hotkeyBinding — связка «идентификатор → виртуальный код».
+// hotkeyBinding — связка «идентификатор → модификаторы + виртуальный код».
 type hotkeyBinding struct {
-	id int32
-	vk uintptr
+	id   int32
+	mods uintptr
+	vk   uintptr
 }
 
+// Все биндинги регистрируются с MOD_NOREPEAT: тумблер (F4) и Esc тоже
+// не должны спамиться при удержании клавиши.
 var bindings = []hotkeyBinding{
-	{int32(KeyF1), vkF1},
-	{int32(KeyF2), vkF2},
-	{int32(KeyF3), vkF3},
-	{int32(KeyF4), vkF4},
-	{int32(KeyEsc), vkEsc},
+	{int32(KeyF1), modNorepeat, vkF1},
+	{int32(KeyF2), modNorepeat, vkF2},
+	{int32(KeyF3), modNorepeat, vkF3},
+	{int32(KeyF4), modNorepeat, vkF4},
+	{int32(KeyEsc), modNorepeat, vkEsc},
 }
 
 // Run регистрирует глобальные hotkeys (F1–F4, Esc) и запускает цикл обработки
@@ -67,7 +74,7 @@ func Run(ctx context.Context, onKey func(Key)) error {
 	threadID, _, _ := procGetCurrentThreadID.Call()
 
 	for _, b := range bindings {
-		ret, _, _ := procRegisterHotKey.Call(0, uintptr(b.id), 0, b.vk)
+		ret, _, _ := procRegisterHotKey.Call(0, uintptr(b.id), b.mods, b.vk)
 		if ret == 0 {
 			unregisterAll(b.id)
 			return fmt.Errorf("hotkey: RegisterHotKey(id=%d) failed", b.id)
