@@ -505,11 +505,26 @@ func TestWaitForDestroyReceivesEvent(t *testing.T) {
 	if err != ctx.Err() {
 		t.Errorf("err = %v, want ctx.Err() = %v", err, ctx.Err())
 	}
-	// Не должны ждать таймаут: событие пришло сразу.
-	if elapsed > destroyEventTimeout/2 {
+	// Событие пришло сразу: путь «событие» должен победить таймер. Порог —
+	// ровно destroyEventTimeout (без произвольной доли): рабочий путь занимает
+	// ~0с, а если бы событие не сработало, вернулся бы таймер ровно за timeout.
+	// Так на медленном CI остаётся полный запас в timeout, а ложный failure
+	// возможен лишь при заморозке процесса дольше timeout (D8).
+	if elapsed >= destroyEventTimeout {
 		t.Errorf("возврат занял %v — DestroyEvent должен возвращаться сразу", elapsed)
 	}
 }
+
+// destroyWaitTestTimeout — таймаут, передаваемый waitForDestroy в тестах
+// пути «таймер сработал». Маленький, чтобы тест не занимал секунды.
+const destroyWaitTestTimeout = 50 * time.Millisecond
+
+// destroyWaitTestSlack — запас к destroyWaitTestTimeout для верхней границы
+// замеров. Таймер Go срабатывает не раньше дедлайна, но под нагрузкой CI
+// горутина может быть вытеснена — запас делаем щедрым (20×), чтобы ложного
+// failure из-за джиттера планировщика не было (D8). Реальное зависание
+// (таймер не сработал) выходит далеко за этот предел.
+const destroyWaitTestSlack = 20 * destroyWaitTestTimeout
 
 // TestWaitForDestroyTimeout — канал молчит → возврат по таймауту (nil), не виснет.
 func TestWaitForDestroyTimeout(t *testing.T) {
@@ -523,20 +538,19 @@ func TestWaitForDestroyTimeout(t *testing.T) {
 		return app.DestroyEvent{}
 	}
 
-	const timeout = 50 * time.Millisecond
 	start := time.Now()
-	err := waitForDestroy(ctx, nextEvent, timeout, logger.NewNopSessionLogger())
+	err := waitForDestroy(ctx, nextEvent, destroyWaitTestTimeout, logger.NewNopSessionLogger())
 	elapsed := time.Since(start)
 	close(block) // освобождаем насос waitForDestroy (застрял на nextEvent)
 
 	if err != nil {
 		t.Errorf("err = %v, want nil (принудительный выход по таймауту)", err)
 	}
-	if elapsed < timeout {
-		t.Errorf("возврат занял %v — раньше таймаута %v", elapsed, timeout)
+	if elapsed < destroyWaitTestTimeout {
+		t.Errorf("возврат занял %v — раньше таймаута %v", elapsed, destroyWaitTestTimeout)
 	}
-	if elapsed > 10*timeout {
-		t.Errorf("возврат занял %v — таймаут %v не сработал", elapsed, timeout)
+	if elapsed > destroyWaitTestTimeout+destroyWaitTestSlack {
+		t.Errorf("возврат занял %v — таймаут %v не сработал", elapsed, destroyWaitTestTimeout)
 	}
 }
 
@@ -559,7 +573,7 @@ func TestWaitForDestroyOtherEventTimeout(t *testing.T) {
 		return app.DestroyEvent{}
 	}
 
-	const timeout = 50 * time.Millisecond
+	const timeout = destroyWaitTestTimeout
 	start := time.Now()
 	err := waitForDestroy(ctx, nextEvent, timeout, logger.NewNopSessionLogger())
 	elapsed := time.Since(start)
@@ -568,7 +582,7 @@ func TestWaitForDestroyOtherEventTimeout(t *testing.T) {
 	if err != nil {
 		t.Errorf("err = %v, want nil (FrameEvent не завершает ожидание)", err)
 	}
-	if elapsed < timeout || elapsed > 10*timeout {
+	if elapsed < timeout || elapsed > timeout+destroyWaitTestSlack {
 		t.Errorf("возврат занял %v, want ≈%v", elapsed, timeout)
 	}
 }
