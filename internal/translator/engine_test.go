@@ -2,10 +2,8 @@ package translator
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
-	"time"
 )
 
 // mockLLMProvider is a test stub implementing LLMProvider.
@@ -33,123 +31,6 @@ func TestNewEngine(t *testing.T) {
 
 	if engine.llm == nil {
 		t.Error("engine.llm should not be nil")
-	}
-}
-
-func TestProcessQuestion_ClassificationPositive(t *testing.T) {
-	tests := []struct {
-		name string
-		text string
-	}{
-		{"question_mark", "What is Kubernetes?"},
-		{"what", "What is your experience with Docker"},
-		{"how", "How do you handle race conditions"},
-		{"why", "Why did you choose microservices"},
-		{"can_you", "Can you explain CQRS"},
-		{"could_you", "Could you describe your CI/CD pipeline"},
-		{"tell_me", "Tell me about your last project"},
-		{"explain", "Explain how mutex works in Go"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockLLMProvider{}
-			engine := NewEngine(mock)
-
-			result, err := engine.ProcessQuestion(tt.text)
-			if err != nil {
-				t.Fatalf("ProcessQuestion() error = %v", err)
-			}
-
-			if !result.IsQuestion {
-				t.Errorf("Should classify %q as a question", tt.text)
-			}
-		})
-	}
-}
-
-func TestProcessQuestion_ClassificationNegative(t *testing.T) {
-	tests := []struct {
-		name string
-		text string
-	}{
-		{"statement", "I have five years of experience with Kubernetes."},
-		{"greeting", "Hello, nice to meet you."},
-		{"opinion", "I think microservices are a good fit for this project."},
-		{"empty", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockLLMProvider{}
-			engine := NewEngine(mock)
-
-			result, err := engine.ProcessQuestion(tt.text)
-			if err != nil {
-				t.Fatalf("ProcessQuestion() error = %v", err)
-			}
-
-			if result.IsQuestion {
-				t.Errorf("Should NOT classify %q as a question", tt.text)
-			}
-		})
-	}
-}
-
-func TestProcessQuestion_AnswerGenerationTriggered(t *testing.T) {
-	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
-			return []string{"hint about " + req.Question}, nil
-		},
-	}
-	engine := NewEngine(mock)
-
-	result, err := engine.ProcessQuestion("What is Docker?")
-	if err != nil {
-		t.Fatalf("ProcessQuestion() error = %v", err)
-	}
-
-	if !result.IsQuestion {
-		t.Error("Should classify as question")
-	}
-
-	// Ждём асинхронной генерации подсказок с таймаутом.
-	for i := 0; i < 50; i++ {
-		if len(result.GetAnswers()) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if len(result.GetAnswers()) != 1 {
-		t.Errorf("Answers length = %d, want 1", len(result.GetAnswers()))
-	}
-}
-
-func TestProcessQuestion_NoAnswerForNonQuestion(t *testing.T) {
-	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
-			t.Error("GenerateAnswers should not be called for non-questions")
-			return nil, nil
-		},
-	}
-	engine := NewEngine(mock)
-
-	result, err := engine.ProcessQuestion("I like Kubernetes.")
-	if err != nil {
-		t.Fatalf("ProcessQuestion() error = %v", err)
-	}
-
-	if result.IsQuestion {
-		t.Error("\"I like Kubernetes.\" should not be classified as question")
-	}
-
-	// Give goroutine time in case it was incorrectly triggered.
-	mock.mu.Lock()
-	genCalls := len(mock.generateCalls)
-	mock.mu.Unlock()
-	if genCalls != 0 {
-		t.Errorf("GenerateAnswers was called %d times for non-question", genCalls)
 	}
 }
 
@@ -193,6 +74,15 @@ func TestIsQuestion_EdgeCases(t *testing.T) {
 		{"Question: how to handle errors", false}, // doesn't start with question word
 		{"I know what to do", false},
 		{"how", true}, // single question word
+		// Word boundary: prefix words that are not questions.
+		{"however, I did it differently", false},
+		{"whatever you say", false},
+		{"whoever comes first", false},
+		{"whatsapp is a messenger", false},
+		// Regression: positive cases still detected.
+		{"how do you scale", true},
+		{"what's your experience", true},    // apostrophe boundary
+		{"what, exactly, went wrong", true}, // comma boundary
 	}
 
 	for _, tt := range tests {
@@ -201,26 +91,6 @@ func TestIsQuestion_EdgeCases(t *testing.T) {
 			t.Errorf("isQuestion(%q) = %v, want %v", tt.text, got, tt.expected)
 		}
 	}
-}
-
-// TestProcessQuestion_LLMError проверяет, что ошибка LLM не паникует.
-func TestProcessQuestion_LLMError(t *testing.T) {
-	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
-			return nil, fmt.Errorf("simulated error")
-		},
-	}
-	engine := NewEngine(mock)
-
-	result, err := engine.ProcessQuestion("What is Kubernetes?")
-	if err != nil {
-		t.Fatalf("ProcessQuestion() должен вернуть результат даже при ошибке LLM: %v", err)
-	}
-	if !result.IsQuestion {
-		t.Error("вопрос должен быть классифицирован как вопрос, несмотря на ошибку LLM")
-	}
-	// Горутина не должна паниковать — просто ждём.
-	time.Sleep(100 * time.Millisecond)
 }
 
 // TestIsQuestion_TableDriven полный набор табличных тестов.
@@ -382,29 +252,5 @@ func TestEngine_GenerateAnswersStream_DirectStreaming(t *testing.T) {
 	}
 	if len(tokens) != 2 {
 		t.Errorf("len = %d, want 2", len(tokens))
-	}
-}
-
-// TestTranslationResult_GetSetAnswers проверяет конкурентный доступ к answers.
-func TestTranslationResult_GetSetAnswers(t *testing.T) {
-	r := &TranslationResult{
-		IsQuestion: true,
-	}
-
-	if answers := r.GetAnswers(); len(answers) != 0 {
-		t.Error("GetAnswers на новом результате должен вернуть пустой массив")
-	}
-
-	r.SetAnswers([]string{"a1", "a2"})
-	answers := r.GetAnswers()
-	if len(answers) != 2 {
-		t.Errorf("len = %d, want 2", len(answers))
-	}
-
-	// Modify returned slice — original should be unaffected.
-	answers[0] = "modified"
-	answers2 := r.GetAnswers()
-	if answers2[0] != "a1" {
-		t.Error("GetAnswers должен возвращать копию")
 	}
 }

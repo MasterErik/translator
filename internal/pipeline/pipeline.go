@@ -602,16 +602,6 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 	p.dispatch.Run(ctx, p.textStream, p.dispatchDone)
 }
 
-// generateAnswersAsync делегирует генерацию подсказок в dispatcher.
-// Оставлен для совместимости с существующими тестами.
-func (p *Pipeline) generateAnswersAsync(question string) {
-	if p.dispatch == nil {
-		p.dispatch = dispatcher.New(p.overlay, p.engine, p.sessLog,
-			dispatcher.Config{AnswerTimeout: p.cfg.AnswerTimeout})
-	}
-	p.dispatch.GenerateAnswers(question)
-}
-
 // runHotkeys запускает глобальные hotkeys (F1–F4, Esc) и маршрутизирует их
 // в dispatcher: F1–F3 → HandleDemand/Prev/Next, Esc → Cancel.
 func (p *Pipeline) runHotkeys(ctx context.Context) {

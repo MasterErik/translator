@@ -4,103 +4,68 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 )
 
-// TestEngine_ConcurrentProcessQuestion validates that multiple
-// goroutines can call ProcessQuestion concurrently without
-// data races on the result.
-func TestEngine_ConcurrentProcessQuestion(t *testing.T) {
+// TestEngine_ConcurrentGenerateAnswers validates that multiple goroutines
+// can call GenerateAnswers (the live dispatcher contract) concurrently
+// without data races.
+func TestEngine_ConcurrentGenerateAnswers(t *testing.T) {
 	mock := &mockLLMProvider{}
-	engine := NewEngine(mock)
-
-	var wg sync.WaitGroup
-	texts := []string{
-		"What is Kubernetes?",
-		"How does Docker work?",
-		"Explain CI/CD pipelines.",
-		"I have 5 years of experience.",
-		"Tell me about microservices.",
-		"My stack includes Go and TypeScript.",
-		"What is your approach to testing?",
-		"I prefer Agile methodology.",
-		"Can you describe CQRS?",
-		"We use PostgreSQL and Redis.",
-	}
-
-	for _, text := range texts {
-		wg.Add(1)
-		go func(txt string) {
-			defer wg.Done()
-			_, err := engine.ProcessQuestion(txt)
-			if err != nil {
-				t.Errorf("ProcessQuestion() error: %v", err)
-			}
-		}(text)
-	}
-
-	wg.Wait()
-}
-
-// TestEngine_ConcurrentQuestionAndAnswers validates that question
-// detection runs safely under concurrent access.
-func TestEngine_ConcurrentQuestionAndAnswers(t *testing.T) {
-	var genMu sync.Mutex
-	var genCallCount int
-
-	mock := &mockLLMProvider{
-		generateFn: func(ctx context.Context, req AnswerRequest) ([]string, error) {
-			genMu.Lock()
-			genCallCount++
-			genMu.Unlock()
-			return []string{"hint 1", "hint 2"}, nil
-		},
-	}
 	engine := NewEngine(mock)
 
 	var wg sync.WaitGroup
 	questions := []string{
 		"What is Kubernetes?",
 		"How does Docker work?",
-		"Explain CI/CD.",
-		"Can you describe your experience?",
-		"What is your approach to TDD?",
+		"Explain CI/CD pipelines.",
+		"Tell me about microservices.",
+		"Can you describe CQRS?",
+		"What is your approach to testing?",
+		"How do you handle race conditions?",
+		"Why did you choose Go?",
+		"What are your weaknesses?",
+		"Where do you see yourself in 5 years?",
 	}
 
 	for _, q := range questions {
 		wg.Add(1)
 		go func(question string) {
 			defer wg.Done()
-			result, err := engine.ProcessQuestion(question)
+			answers, err := engine.GenerateAnswers(context.Background(), AnswerRequest{Question: question})
 			if err != nil {
-				t.Errorf("ProcessQuestion() error: %v", err)
+				t.Errorf("GenerateAnswers() error: %v", err)
 				return
 			}
-			if !result.IsQuestion {
-				t.Errorf("Expected %q to be classified as question", question)
+			if len(answers) == 0 {
+				t.Errorf("GenerateAnswers(%q) returned no answers", question)
 			}
 		}(q)
 	}
 
 	wg.Wait()
+}
 
-	// Асинхронная генерация подсказок запускается в горутинах внутри
-	// ProcessQuestion. Ждём до 1 секунды пока хотя бы один вызов
-	// GenerateAnswers зарегистрируется.
-	for i := 0; i < 20; i++ {
-		genMu.Lock()
-		calls := genCallCount
-		genMu.Unlock()
-		if calls > 0 {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+// TestEngine_ConcurrentIsQuestion validates that the pure IsQuestion
+// classifier runs safely under concurrent access.
+func TestEngine_ConcurrentIsQuestion(t *testing.T) {
+	texts := []string{
+		"What is Kubernetes?",
+		"How does Docker work?",
+		"Explain CI/CD.",
+		"Can you describe your experience?",
+		"What is your approach to TDD?",
+		"I have 5 years of experience.",
+		"however, I did it differently",
+		"whatever you say",
 	}
 
-	genMu.Lock()
-	calls := genCallCount
-	genMu.Unlock()
-	if calls == 0 {
-		t.Error("Expected at least some GenerateAnswers calls")
+	var wg sync.WaitGroup
+	for _, txt := range texts {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			_ = IsQuestion(s)
+		}(txt)
 	}
+	wg.Wait()
 }

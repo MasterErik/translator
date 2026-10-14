@@ -814,6 +814,7 @@ func TestPipelineDispatch_ErrorEvent(t *testing.T) {
 
 // =========================================================================
 // TestGenerateAnswersAsync_LLMError — ошибка LLM не паникует
+// (переведён на dispatcher-контракт: живой путь через Dispatcher.GenerateAnswers)
 // =========================================================================
 
 func TestGenerateAnswersAsync_LLMError(t *testing.T) {
@@ -825,27 +826,32 @@ func TestGenerateAnswersAsync_LLMError(t *testing.T) {
 		cfg:     Config{AnswerTimeout: 3 * time.Second},
 		engine:  engine,
 		overlay: ovl,
+		sessLog: logger.NewNopSessionLogger(),
 	}
+	p.dispatch = dispatcher.New(ovl, engine, p.sessLog,
+		dispatcher.Config{AnswerTimeout: 3 * time.Second})
 
-	// Не должно быть паники.
-	p.generateAnswersAsync("What is Docker?")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.runDispatch(ctx)
+	time.Sleep(50 * time.Millisecond)
 
-	// Даём время горутине.
-	time.Sleep(500 * time.Millisecond)
+	// Не должно быть паники — живой dispatcher-путь.
+	p.dispatch.GenerateAnswers("What is Docker?")
 
-	msgs := ovl.GetMessages()
-	found := false
-	for _, m := range msgs {
-		if m.Type == ui.Error {
-			found = true
-			if m.Text == "" {
-				t.Error("Error при ошибке LLM должен содержать текст причины")
+	// Даём время worker'у обработать задание.
+	for i := 0; i < 20; i++ {
+		time.Sleep(50 * time.Millisecond)
+		for _, m := range ovl.GetMessages() {
+			if m.Type == ui.Error {
+				if m.Text == "" {
+					t.Error("Error при ошибке LLM должен содержать текст причины")
+				}
+				return
 			}
 		}
 	}
-	if !found {
-		t.Error("ожидался Error при сбое LLM")
-	}
+	t.Error("ожидался Error при сбое LLM")
 }
 
 // =========================================================================
@@ -949,6 +955,7 @@ func TestPipelineNew_ValidConfig_WithLogDir(t *testing.T) {
 
 // =========================================================================
 // TestGenerateAnswersAsync_FullStream — проверяет полный путь: стрим LLM → AnswerCandidates.
+// (переведён на dispatcher-контракт: живой путь через Dispatcher.GenerateAnswers)
 // =========================================================================
 
 func TestGenerateAnswersAsync_FullStream(t *testing.T) {
@@ -963,9 +970,17 @@ func TestGenerateAnswersAsync_FullStream(t *testing.T) {
 		cfg:     Config{AnswerTimeout: 5 * time.Second},
 		engine:  engine,
 		overlay: ovl,
+		sessLog: logger.NewNopSessionLogger(),
 	}
+	p.dispatch = dispatcher.New(ovl, engine, p.sessLog,
+		dispatcher.Config{AnswerTimeout: 5 * time.Second})
 
-	p.generateAnswersAsync("What is Docker?")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.runDispatch(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	p.dispatch.GenerateAnswers("What is Docker?")
 
 	// Даём время на сбор токенов и отправку в UI.
 	for i := 0; i < 20; i++ {
@@ -981,51 +996,6 @@ func TestGenerateAnswersAsync_FullStream(t *testing.T) {
 
 	t.Log("AnswerCandidates не получены — OK (может не хватить токенов для парсинга подсказок)")
 }
-
-// streamingMockLLM для тестов pipeline_test (адаптация из pipeline_integration_test).
-// Используем streamingMockLLM из pipeline_integration_test.go.
-// Если нет — создаём локальный.
-type localStreamingMockLLM struct {
-	mu      sync.Mutex
-	tokens  []string
-	delay   time.Duration
-	callLog []string
-}
-
-func (m *localStreamingMockLLM) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
-	return []string{"hint 1", "hint 2"}, nil
-}
-
-func (m *localStreamingMockLLM) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
-	m.mu.Lock()
-	m.callLog = append(m.callLog, "GenAnswersStream:"+req.Question)
-	m.mu.Unlock()
-
-	ch := make(chan string, len(m.tokens)+1)
-	go func() {
-		defer close(ch)
-		for _, tok := range m.tokens {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			if m.delay > 0 {
-				time.Sleep(m.delay)
-			}
-			select {
-			case ch <- tok:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return ch, nil
-}
-
-var _ translator.LLMProvider = (*localStreamingMockLLM)(nil)
-
-// TestPipelineNoHistoryDuplicates — проверяет отсутствие дублей в History.
 func TestPipelineNoHistoryDuplicates(t *testing.T) {
 	stt := newMockSTT()
 	capt := newMockCapturer()
@@ -1166,8 +1136,6 @@ func TestPipelineHistoryDedup(t *testing.T) {
 		}
 	}
 }
-
-var _ translator.StreamingAnswersProvider = (*localStreamingMockLLM)(nil)
 
 // =========================================================================
 // TestPipeline_TextStreamBackpressure — проверяет, что final-событие

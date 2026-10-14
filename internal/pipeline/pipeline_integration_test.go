@@ -529,7 +529,7 @@ func TestPipelineDispatchGracefulShutdown(t *testing.T) {
 
 // TestPipelineStreamingTokensArrive — проверяет, что потоковые подсказки
 // от GenerateAnswersStream доходят до UI AnswerCandidates.
-// В новом Gladia flow: финальный транскрипт-вопрос → generateAnswersAsync →
+// В новом Gladia flow: финальный транскрипт-вопрос → dispatcher.GenerateAnswers →
 // токены собираются → AnswerCandidates в оверлее.
 func TestPipelineStreamingTokensArrive(t *testing.T) {
 	skipIfShort(t)
@@ -549,7 +549,7 @@ func TestPipelineStreamingTokensArrive(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
-	// Send a question — triggers generateAnswersAsync.
+	// Send a question — triggers dispatcher.GenerateAnswers.
 	p.textStream <- common.STTEvent{
 		Text:      "Can you explain Docker?",
 		Event:     common.EventEndOfTurn,
@@ -636,7 +636,7 @@ func TestPipelineStreamCancellation(t *testing.T) {
 // =========================================================================
 
 // TestPipelineConcurrentStreams — параллельная обработка нескольких вопросов.
-// Отправляем 3 вопроса одновременно → каждый запускает generateAnswersAsync →
+// Отправляем 3 вопроса одновременно → каждый запускает dispatcher.GenerateAnswers →
 // все должны сгенерировать AnswerCandidates.
 func TestPipelineConcurrentStreams(t *testing.T) {
 	skipIfShort(t)
@@ -802,7 +802,7 @@ func TestPipelineFallbackToSync(t *testing.T) {
 
 	go p.runDispatch(ctx)
 
-	// Send a question — triggers generateAnswersAsync.
+	// Send a question — triggers dispatcher.GenerateAnswers.
 	p.textStream <- common.STTEvent{
 		Text:      "Can you explain Docker?",
 		Event:     common.EventEndOfTurn,
