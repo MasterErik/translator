@@ -50,6 +50,7 @@ func BuildSystemPrompt(sourceLang, targetLang string) string {
 //	[Conversation Context]
 //	The interviewer asked:
 //	<question>
+//	[Clarifications from the interviewer]  (только если есть, максимум 3)
 //	Generate 1 answer from the candidate's perspective ...
 //	[modifier for F2–F4]
 func BuildAnswerPrompt(req AnswerRequest) string {
@@ -64,6 +65,11 @@ func BuildAnswerPrompt(req AnswerRequest) string {
 	sb.WriteString("The interviewer asked:\n")
 	sb.WriteString(req.Question)
 
+	if clarifications := formatClarifications(req.Clarifications); clarifications != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(clarifications)
+	}
+
 	sb.WriteString("\n\nGenerate 1 answer from the candidate's perspective (first person, ready to read aloud):")
 
 	if instruction := commandInstruction(req.Command); instruction != "" {
@@ -71,6 +77,33 @@ func BuildAnswerPrompt(req AnswerRequest) string {
 		sb.WriteString(instruction)
 	}
 
+	return sb.String()
+}
+
+// maxClarifications — сколько последних уточнений попадает в промпт.
+const maxClarifications = 3
+
+// formatClarifications renders the clarifications block for the user prompt.
+// Only the last maxClarifications items are included (in chronological order);
+// each item is prefixed with "- ". Returns an empty string when there is
+// nothing to render, so the block is omitted entirely.
+func formatClarifications(clarifications []string) string {
+	if len(clarifications) == 0 {
+		return ""
+	}
+
+	start := len(clarifications) - maxClarifications
+	if start < 0 {
+		start = 0
+	}
+	last := clarifications[start:]
+
+	var sb strings.Builder
+	sb.WriteString("Clarifications from the interviewer:")
+	for _, c := range last {
+		sb.WriteString("\n- ")
+		sb.WriteString(c)
+	}
 	return sb.String()
 }
 

@@ -188,3 +188,98 @@ func TestBuildAnswerPrompt_CompanyInfoNotCandidateFacts(t *testing.T) {
 		t.Error("candidate facts must remain in the candidate context")
 	}
 }
+
+// Б-T0: блок уточнений в user prompt.
+//
+// Правила: 0/nil — блока нет; 1/3 — все строки в порядке добавления с
+// префиксом "- "; >3 — только последние 3 (хвост среза) в порядке следования;
+// содержимое уточнений идёт как обычный текст без спецобработки.
+func TestBuildAnswerPrompt_NoClarificationsBlockWhenEmpty(t *testing.T) {
+	base := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go."})
+	withEmpty := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Clarifications: []string{}})
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+	}{
+		{"nil", base},
+		{"empty", withEmpty},
+	} {
+		if strings.Contains(tc.prompt, "Clarifications from the interviewer:") {
+			t.Errorf("%s: clarifications block must be omitted, got:\n%s", tc.name, tc.prompt)
+		}
+		if strings.Contains(tc.prompt, "\n- ") {
+			t.Errorf("%s: prompt must not contain clarification bullets, got:\n%s", tc.name, tc.prompt)
+		}
+	}
+}
+
+func TestBuildAnswerPrompt_SingleClarification(t *testing.T) {
+	prompt := BuildAnswerPrompt(AnswerRequest{
+		Question:       "Tell me about your scalability work.",
+		Clarifications: []string{"I mean at scale"},
+	})
+
+	if !strings.Contains(prompt, "Clarifications from the interviewer:") {
+		t.Fatalf("prompt must contain the clarifications header, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "\n- I mean at scale") {
+		t.Errorf("prompt must render the single clarification as \"- I mean at scale\", got:\n%s", prompt)
+	}
+	if got := strings.Count(prompt, "\n- "); got != 1 {
+		t.Errorf("prompt must contain exactly 1 clarification bullet, got %d:\n%s", got, prompt)
+	}
+}
+
+func TestBuildAnswerPrompt_ThreeClarificationsInOrder(t *testing.T) {
+	prompt := BuildAnswerPrompt(AnswerRequest{
+		Question:       "Tell me about your scalability work.",
+		Clarifications: []string{"I mean at scale", "multi-region", "with Kubernetes"},
+	})
+
+	want := "Clarifications from the interviewer:\n- I mean at scale\n- multi-region\n- with Kubernetes"
+	if !strings.Contains(prompt, want) {
+		t.Errorf("prompt must contain clarifications block:\n%q\ngot:\n%s", want, prompt)
+	}
+	// В порядке добавления.
+	if i, j := strings.Index(prompt, "I mean at scale"), strings.Index(prompt, "multi-region"); i >= j {
+		t.Error("clarifications must keep their insertion order (first before second)")
+	}
+	// Блок идёт после вопроса.
+	if strings.Index(prompt, "The interviewer asked:") > strings.Index(prompt, "Clarifications from the interviewer:") {
+		t.Error("clarifications block must come after the question")
+	}
+}
+
+func TestBuildAnswerPrompt_OnlyLastThreeClarifications(t *testing.T) {
+	all := []string{"c1", "c2", "c3", "c4", "c5"}
+	prompt := BuildAnswerPrompt(AnswerRequest{
+		Question:       "Tell me about your scalability work.",
+		Clarifications: all,
+	})
+
+	want := "Clarifications from the interviewer:\n- c3\n- c4\n- c5"
+	if !strings.Contains(prompt, want) {
+		t.Errorf("prompt must contain only the last 3 clarifications:\n%q\ngot:\n%s", want, prompt)
+	}
+	for _, dropped := range []string{"- c1", "- c2"} {
+		if strings.Contains(prompt, dropped) {
+			t.Errorf("prompt must NOT contain dropped clarification %q, got:\n%s", dropped, prompt)
+		}
+	}
+	if got := strings.Count(prompt, "\n- "); got != 3 {
+		t.Errorf("prompt must contain exactly 3 clarification bullets, got %d:\n%s", got, prompt)
+	}
+}
+
+func TestBuildAnswerPrompt_ClarificationTextNotEscaped(t *testing.T) {
+	tricky := "why? \"quotes\" & <tags> | pipes: 100%"
+	prompt := BuildAnswerPrompt(AnswerRequest{
+		Question:       "Tell me more.",
+		Clarifications: []string{tricky},
+	})
+
+	if !strings.Contains(prompt, "\n- "+tricky) {
+		t.Errorf("clarification must be inserted verbatim (no escaping), got:\n%s", prompt)
+	}
+}

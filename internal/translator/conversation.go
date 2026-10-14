@@ -50,6 +50,10 @@ type ConversationTurn struct {
 type AnswerRequest struct {
 	// Question — текущий вопрос интервьюера.
 	Question string
+	// Clarifications — уточняющие реплики интервьюера к текущему вопросу
+	// (в порядке добавления). В промпт идут только последние 3; пустой/nil
+	// срез означает отсутствие блока уточнений.
+	Clarifications []string
 	// CandidateContext — постоянные факты кандидата (база CV). Выше по приоритету,
 	// чем ConversationContext. LLM не должна придумывать факты сверх этого.
 	CandidateContext string
