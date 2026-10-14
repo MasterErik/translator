@@ -293,6 +293,33 @@ type QEntry struct {
 идёт по отдельному каналу `hotkeyCh` и **не является `GenerationCommand`** —
 F2/F3 вообще не запускают генерацию, только двигают активную метку.
 
+### Уточнения (clarifications, фаза 2)
+
+Ручной поток уточнений: интервьюер говорит уточняющую реплику → пользователь
+жмёт **Shift+F2** — реплика прикрепляется к активной метке как уточнение
+(`Clarifications []string` в `QEntry`), **не** создавая новой метки.
+
+- **`lastFinal`** (`Dispatcher`, собственный мьютекс `lastFinalMu`): каждая
+  **финальная реплика интервьюера** (EndOfTurn, вопрос ИЛИ не-вопрос)
+  сохраняется как кандидат уточнения. Пустой текст игнорируется.
+- **`HandleClarify` (Shift+F2)**: пустой таймлайн или нет `lastFinal` → no-op.
+  Иначе сначала `AbsorbLast(lastFinal)` — если последняя метка окна является
+  дублем-вопросом (её `Question == lastFinal`), метка удаляется, её текст идёт
+  уточнением в предыдущую метку (это решает случай «уточнение распознано как
+  вопрос»); если слияние не выполнено — `AddClarification(activeIdx, lastFinal)`.
+  Затем шапка активной метки обновляется (`pushHeaderForState`). `lastFinal`
+  **потребляется** (очищается) — повторный Shift+F2 без новой фразы = no-op.
+- **`HandleUnclarify` (Shift+F3)**: `RemoveLastClarification(activeIdx)` +
+  обновление шапки; no-op, если уточнений нет.
+- **Генерация**: `AnswerRequest.Clarifications` заполняется из
+  `timeline.Clarifications(idx)` во всех путях (auto-answer, F1/`HandleDemand`).
+  В `BuildAnswerPrompt` — блок «Clarifications from the interviewer:» после
+  вопроса: пустой срез → блок опускается; >3 → **последние 3**. Копии
+  `Clarifications` переживают вытеснение кольцевого буфера (глубокие копии в
+  `cloneEntry`).
+- **UI**: шапка активной метки несёт стек уточнений (`ui.Answer.Clarifications`)
+  — в зоне 3 виден тот же состав, что уходит в LLM (рендер — `docs/UI.md`).
+
 ### Esc
 
 `Cancel` (Esc) отменяет активную генерацию (`activeCancel`) и очищает очередь
@@ -317,10 +344,12 @@ F2/F3 вообще не запускают генерацию, только дв
 
 - Глобальный `RegisterHotKey` (Win32) в `internal/hotkey/` — оверлей
   `WS_EX_NOACTIVATE` не получает клавиатуру, поэтому Gio `key.Event` не приходит.
-- Все биндинги (F1–F4, Esc) регистрируются с **`MOD_NOREPEAT` (0x4000)** —
-  удержание клавиши не спамит `WM_HOTKEY`.
+- Все биндинги (F1–F4, Esc, Shift+F2/F3) регистрируются с **`MOD_NOREPEAT` (0x4000)** —
+  удержание клавиши не спамит `WM_HOTKEY` (Shift-биндинги — `MOD_SHIFT|MOD_NOREPEAT`,
+  id 1001/1002, маппинг id→`Key` через `keyForID`).
 - Маршрутизация (`internal/pipeline`): F1 → `HandleDemand`, F2 → `HandlePrev`,
-  F3 → `HandleNext`, Esc → `Cancel`; F4 обходит dispatcher —
+  F3 → `HandleNext`, Shift+F2 → `HandleClarify`, Shift+F3 → `HandleUnclarify`,
+  Esc → `Cancel`; F4 обходит dispatcher —
   `overlay.ToggleTranscriptionHistory()` напрямую. Полная таблица — `docs/UI.md`.
 - Модификаторы команд добавляются в `BuildAnswerPrompt` через `commandInstruction(cmd)`.
 
