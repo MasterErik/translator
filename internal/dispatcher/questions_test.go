@@ -222,6 +222,121 @@ func TestQuestionTimeline_ActiveReturnsCopy(t *testing.T) {
 	}
 }
 
+// --- абсолютный счётчик вопросов (A-4) ---
+
+// TestQuestionTimeline_TotalAskedSurvivesEviction — totalAsked растёт на каждом
+// Add и НЕ сбрасывается при вытеснении головы кольца: после cap+5 добавлений
+// он равен cap+5, что больше числа хранимых меток (cap). Плюс проверяем, что
+// счётчик виден через Snapshot/мутации не влияют на него.
+func TestQuestionTimeline_TotalAskedSurvivesEviction(t *testing.T) {
+	tl := NewQuestionTimeline()
+
+	if got := tl.TotalAsked(); got != 0 {
+		t.Fatalf("TotalAsked() на пустом таймлайне = %d, ожидалось 0", got)
+	}
+
+	extra := 5
+	for i := 0; i < questionTimelineCapacity+extra; i++ {
+		tl.Add("q")
+	}
+
+	if got := tl.TotalAsked(); got != questionTimelineCapacity+extra {
+		t.Fatalf("TotalAsked() после cap+%d Add = %d, ожидалось %d", extra, got, questionTimelineCapacity+extra)
+	}
+	// Вытеснение не должно уменьшать счётчик: он больше размера окна.
+	snap := tl.Snapshot()
+	if len(snap) != questionTimelineCapacity {
+		t.Fatalf("len(Snapshot()) = %d, ожидалось %d (вместимость)", len(snap), questionTimelineCapacity)
+	}
+	if tl.TotalAsked() <= len(snap) {
+		t.Fatalf("TotalAsked() = %d, ожидалось > len(Snapshot()) = %d (абсолютный счётчик)", tl.TotalAsked(), len(snap))
+	}
+
+	// ClearFresh/ResetPending/навигация не трогают счётчик.
+	tl.Prev()
+	tl.Next()
+	tl.ClearFresh()
+	tl.ResetPending()
+	if got := tl.TotalAsked(); got != questionTimelineCapacity+extra {
+		t.Fatalf("TotalAsked() после навигации/ResetPending = %d, ожидалось %d", got, questionTimelineCapacity+extra)
+	}
+}
+
+// TestQuestionTimeline_ResetPendingResetsStep — ResetPending (Esc) сбрасывает
+// Step вместе с состоянием: Queued/Generating → Idle со Step=0, поэтому
+// следующий NextStep снова вернёт CommandAnswer. Step готовой метки не трогаем.
+func TestQuestionTimeline_ResetPendingResetsStep(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.Add("Q2")
+	tl.Add("Q3")
+
+	// Q1 — готовая метка, цикл которой уже продвинут (Step=2).
+	tl.SetState(0, QReady)
+	for i := 0; i < 2; i++ {
+		if _, ok := tl.NextStep(0); !ok {
+			t.Fatal("NextStep(0): ok = false, ожидалось true")
+		}
+	}
+	// Q2 — в очереди с продвинутым Step.
+	tl.SetState(1, QQueued)
+	if _, ok := tl.NextStep(1); !ok {
+		t.Fatal("NextStep(1): ok = false, ожидалось true")
+	}
+	// Q3 — генерируется.
+	tl.SetState(2, QGenerating)
+	if _, ok := tl.NextStep(2); !ok {
+		t.Fatal("NextStep(2): ok = false, ожидалось true")
+	}
+
+	tl.ResetPending()
+
+	snap := tl.Snapshot()
+	if snap[0].Step != 2 {
+		t.Errorf("Step готовой метки после ResetPending = %d, ожидалось 2 (не трогаем)", snap[0].Step)
+	}
+	if snap[1].State != QIdle || snap[1].Step != 0 {
+		t.Errorf("Q2 после ResetPending: state=%v step=%d, ожидалось QIdle/0", snap[1].State, snap[1].Step)
+	}
+	if snap[2].State != QIdle || snap[2].Step != 0 {
+		t.Errorf("Q3 после ResetPending: state=%v step=%d, ожидалось QIdle/0", snap[2].State, snap[2].Step)
+	}
+
+	// Идемпотентность: повторный ResetPending не портит готовый Step.
+	tl.ResetPending()
+	if got := tl.Snapshot()[1].Step; got != 0 {
+		t.Fatalf("Step Q2 после повторного ResetPending = %d, ожидалось 0", got)
+	}
+}
+
+// TestQuestionTimeline_ResetStep — ResetStep сбрасывает Step конкретной метки
+// по абсолютному idx (дроп задания) и не задевает соседние; вытесненный idx — no-op.
+func TestQuestionTimeline_ResetStep(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.Add("Q2")
+
+	for _, idx := range []int{0, 1} {
+		if _, ok := tl.NextStep(idx); !ok {
+			t.Fatalf("NextStep(%d): ok = false, ожидалось true", idx)
+		}
+	}
+
+	tl.ResetStep(0)
+
+	snap := tl.Snapshot()
+	if snap[0].Step != 0 {
+		t.Errorf("Step Q1 после ResetStep(0) = %d, ожидалось 0", snap[0].Step)
+	}
+	if snap[1].Step != 1 {
+		t.Errorf("Step Q2 (соседняя метка) = %d, ожидалось 1 (не тронута)", snap[1].Step)
+	}
+
+	// Неверный/вытесненный idx — no-op без паники.
+	tl.ResetStep(-1)
+	tl.ResetStep(99)
+}
+
 // --- NextStep ---
 
 func TestQuestionTimeline_NextStepCycle(t *testing.T) {

@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -708,6 +709,156 @@ func TestHandleDemandResetsCancelledAfterEsc(t *testing.T) {
 	msg, _ := lastCandidates(overlay)
 	if msg.Answers[0].Source != "EN: A" {
 		t.Errorf("ответ в overlay = %q, ожидался EN: A", msg.Answers[0].Source)
+	}
+}
+
+// ── A-T1: Esc не должен пропускать шаг цикла F1 (A-1) ────────────────────
+
+// TestEscThenF1KeepsCommandCycle — регресс A-1: вопрос сгенерирован
+// авто-ответом (AutoAnswer=true), затем Esc (ResetPending). Первый F1 после Esc
+// обязан снова дать CommandAnswer, второй — CommandMoreContext, а НЕ
+// CommandSimplerEnglish (баг: NextStep продвигал Step в QIdle, а его результат
+// отбрасывался в пользу хардкода CommandAnswer — шаг цикла терялся).
+func TestEscThenF1KeepsCommandCycle(t *testing.T) {
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}, delay: 200 * time.Millisecond}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig())
+	defer cancel()
+
+	// Q1 берётся в работу (генерируется), Q2..Q3 стоят в очереди.
+	for _, q := range []string{"Q1?", "Q2?", "Q3?"} {
+		textStream <- question(q)
+	}
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) > 0 && snap[0].State == QGenerating
+	}, 2*time.Second)
+
+	// Esc: очередь дропается, состояния Queued/Generating → Idle, Step → 0.
+	d.Cancel()
+	waitFor(t, func() bool { return !d.busy.Load() }, 2*time.Second)
+	waitFor(t, func() bool {
+		for _, e := range snapshotOf(d) {
+			if e.State == QQueued || e.State == QGenerating {
+				return false
+			}
+		}
+		return true
+	}, 2*time.Second)
+
+	// Уходим на первую метку (Q1) — на ней проверяем цикл команд.
+	for {
+		idx, _, _ := d.timeline.Active()
+		if idx == 0 {
+			break
+		}
+		d.timeline.Prev()
+	}
+
+	// Первый F1 после Esc → снова CommandAnswer (не пропуск шага).
+	callsBefore := len(engine.Calls())
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
+	waitFor(t, func() bool { return snapshotOf(d)[0].State == QReady }, 2*time.Second)
+
+	reqs := engine.Reqs()
+	if got := reqs[callsBefore].Command; got != translator.CommandAnswer {
+		t.Fatalf("F1 после Esc: Command = %v, ожидался CommandAnswer", got)
+	}
+
+	// Второй F1 → CommandMoreContext, а не CommandSimplerEnglish.
+	callsBefore = len(engine.Calls())
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
+
+	reqs = engine.Reqs()
+	if got := reqs[callsBefore].Command; got != translator.CommandMoreContext {
+		t.Errorf("второй F1 после Esc: Command = %v, ожидался CommandMoreContext (CommandSimplerEnglish = пропуск шага)", got)
+	}
+}
+
+// ── A-T2: абсолютный счётчик вопросов (A-4) ──────────────────────────────
+
+// TestHeaderTotalIsAbsoluteAcrossEviction — Total, который pushHeader кладёт в
+// шапку, — абсолютное число заданных вопросов (TotalAsked), а не размер окна
+// кольца. Без фикса pushHeader выставлял Total = len(snap) и на 150-м вопросе
+// счётчик «N из M» начинал уменьшаться.
+func TestHeaderTotalIsAbsoluteAcrossEviction(t *testing.T) {
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, overlay, _, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig())
+	defer cancel()
+
+	const extra = 5
+	const total = questionTimelineCapacity + extra // ровно cap+extra добавлений
+
+	// Все вопросы уникальны: иначе воркер дедуплицирует подряд идущие fresh-задания.
+	for i := 0; i < total; i++ {
+		d.enqueueQuestion(fmt.Sprintf("Q%d?", i))
+	}
+
+	want := total
+	if got := d.timeline.TotalAsked(); got != want {
+		t.Fatalf("TotalAsked() = %d, ожидалось %d", got, want)
+	}
+	snap := snapshotOf(d)
+	if len(snap) != questionTimelineCapacity {
+		t.Fatalf("len(Snapshot()) = %d, ожидалось %d (окно кольца)", len(snap), questionTimelineCapacity)
+	}
+	if want <= len(snap) {
+		t.Fatalf("тест бессмыслен: total=%d не больше окна=%d", want, len(snap))
+	}
+
+	// Абсолютный номер метки-головы окна: base = total - cap.
+	headIdx := total - questionTimelineCapacity
+	for _, idx := range []int{headIdx, headIdx + 1, total - 1} {
+		// Переводим активную позицию на нужную метку и шлём её шапку напрямую
+		// (pushHeader — та самая функция, которая заполняет Total).
+		target := snapshotOf(d)[idx-headIdx]
+		if target.Idx != idx {
+			t.Fatalf("снимок: метка позиции %d имеет idx=%d", idx-headIdx, target.Idx)
+		}
+		d.pushHeader(idx, nil)
+
+		msg, ok := lastCandidates(overlay)
+		if !ok || len(msg.Answers) == 0 {
+			t.Fatalf("idx=%d: шапка не найдена в overlay: %+v", idx, msg)
+		}
+		a := msg.Answers[0]
+		if a.Total != want {
+			t.Errorf("idx=%d: Answer.Total = %d, ожидалось %d (абсолютный, окно хранит %d)",
+				idx, a.Total, want, len(snap))
+		}
+		if a.QuestionIdx != idx {
+			t.Errorf("idx=%d: Answer.QuestionIdx = %d", idx, a.QuestionIdx)
+		}
+	}
+}
+
+// TestHeaderTotalGrowsMonotonicallyAcrossEviction — Total в шапках монотонно
+// растёт вместе с числом вопросов и никогда не откатывается (проверка
+// пользовательского контракта «вопрос N из M» после вытеснения).
+func TestHeaderTotalGrowsMonotonicallyAcrossEviction(t *testing.T) {
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, overlay, _, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig())
+	defer cancel()
+
+	prev := 0
+	for i := 0; i < questionTimelineCapacity+10; i++ {
+		d.enqueueQuestion(fmt.Sprintf("Q%d?", i))
+		idx := d.timeline.TotalAsked() - 1
+		d.pushHeader(idx, nil)
+
+		msg, ok := lastCandidates(overlay)
+		if !ok || len(msg.Answers) == 0 {
+			t.Fatalf("итерация %d: шапка не найдена", i)
+		}
+		got := msg.Answers[0].Total
+		if got != i+1 {
+			t.Fatalf("итерация %d: Total = %d, ожидалось %d", i, got, i+1)
+		}
+		if got < prev {
+			t.Fatalf("итерация %d: Total откатился с %d до %d (вытеснение сбросило счётчик)", i, prev, got)
+		}
+		prev = got
 	}
 }
 

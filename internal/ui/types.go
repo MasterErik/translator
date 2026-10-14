@@ -36,18 +36,23 @@ type Answer struct {
 	//
 	// QuestionIdx — АБСОЛЮТНЫЙ номер вопроса в таймлайне (нумерация с 0, не
 	// сбрасывается при вытеснении старых меток из кольца).
-	// Total — число меток в окне таймлайна (окно кольца, не растёт бесконечно).
+	// Total — АБСОЛЮТНОЕ число заданных вопросов за сессию (totalAsked,
+	// не сбрасывается при вытеснении; больше либо равно числу меток в окне).
 	// QuestionText — текст вопроса, к которому относится подсказка.
 	// State — статус генерации: "idle", "queued", "generating", "ready", "failed".
 	// Mode — режим генерации: "answer", "more context", "simpler".
+	// HasFresh — есть в окне кольца метки правее активной (индикатор «➤»).
+	// Clarifications — уточнения активного вопроса (последние 3 уходит в промпт).
 	//
 	// Нулевые значения сохраняют прежнее поведение рендера (поля не заполнены —
 	// рендер работает как раньше).
-	QuestionIdx  int
-	Total        int
-	QuestionText string
-	State        string
-	Mode         string
+	QuestionIdx    int
+	Total          int
+	QuestionText   string
+	State          string
+	Mode           string
+	HasFresh       bool
+	Clarifications []string
 }
 
 // UIMessage represents a single message displayed in the overlay.

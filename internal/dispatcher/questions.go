@@ -90,8 +90,13 @@ type QuestionTimeline struct {
 	entries []QEntry
 	// base — абсолютный номер entries[0] (число вытесненных меток). Внутренняя
 	// позиция метки с абсолютным номером idx: idx - base.
-	base   int
-	active int
+	base int
+	// totalAsked — АБСОЛЮТНОЕ число вопросов за сессию (счётчик всех Add).
+	// НЕ сбрасывается при вытеснении головы evictLocked и поэтому больше либо
+	// равно len(entries): внешний UI-контракт Answer.Total не должен «схлопываться»
+	// на 150-м вопросе.
+	totalAsked int
+	active     int
 	// freshAt — внутренняя позиция последней добавленной метки, если она ещё не
 	// была просмотрена (-1 если индикатора нет). Сбрасывается при переходе на
 	// эту метку в Prev/Next или явно методом ClearFresh.
@@ -147,6 +152,7 @@ func (t *QuestionTimeline) Add(question string) int {
 	defer t.mu.Unlock()
 
 	idx := t.base + len(t.entries)
+	t.totalAsked++
 	t.entries = append(t.entries, QEntry{
 		Idx:      idx,
 		Question: question,
@@ -313,9 +319,21 @@ func (t *QuestionTimeline) SetMode(idx int, mode string) {
 	t.entries[r].Mode = mode
 }
 
+// TotalAsked возвращает АБСОЛЮТНОЕ число вопросов, добавленных за сессию.
+// Счётчик не сбрасывается при вытеснении меток из кольца, поэтому он всегда
+// больше либо равен len(Snapshot()) — на нём строится UI-контракт Answer.Total.
+func (t *QuestionTimeline) TotalAsked() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.totalAsked
+}
+
 // ResetPending переводит все метки в состоянии QQueued/QGenerating обратно в
 // QIdle (Esc: очередь заданий дропается). Готовые/упавшие/праздные метки и их
-// ответы сохраняются.
+// ответы сохраняются. Step метки тоже сбрасывается в 0: отменённая (или
+// дропнутая) постановка задания не должна двигать цикл команд — иначе после Esc
+// первый F1 пропустит CommandAnswer/CommandMoreContext (см. handleDemand).
 func (t *QuestionTimeline) ResetPending() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -323,8 +341,24 @@ func (t *QuestionTimeline) ResetPending() {
 	for i := range t.entries {
 		if t.entries[i].State == QQueued || t.entries[i].State == QGenerating {
 			t.entries[i].State = QIdle
+			t.entries[i].Step = 0
 		}
 	}
+}
+
+// ResetStep сбрасывает Step метки по АБСОЛЮТНОМУ idx в 0. Вызывается, когда
+// задание дропнуто (переполнение очереди / отмена): команда так и не была
+// отдана LLM, поэтому цикл F1 не должен считаться продвинутым.
+// No-op при неверном/вытесненном idx.
+func (t *QuestionTimeline) ResetStep(idx int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	r, ok := t.rel(idx)
+	if !ok {
+		return
+	}
+	t.entries[r].Step = 0
 }
 
 // Snapshot возвращает глубокую копию всех хранимых меток (окно кольца), включая

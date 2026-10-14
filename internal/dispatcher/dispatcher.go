@@ -321,8 +321,10 @@ func (d *Dispatcher) enqueueQuestion(question string) int {
 	// новая только помечается fresh).
 	if d.autoAnswer {
 		d.timeline.SetState(idx, QQueued)
-		// Первый ответ всегда CommandAnswer, но Step метки продвигается вперёд:
-		// следующий F1 после готового авто-ответа сразу даёт CommandMoreContext.
+		// Авто-ответ всегда идёт с шага 0 (CommandAnswer), но NextStep его
+		// продвигает: следующий F1 (уже QReady) сразу даёт CommandMoreContext.
+		// Дроп задания (переполнение очереди / Esc) Step откатывает — см.
+		// enqueueAnswer и ResetPending.
 		d.timeline.NextStep(idx)
 		d.timeline.SetMode(idx, modeAnswer)
 	}
@@ -350,13 +352,16 @@ func (d *Dispatcher) pushHeaderForState(idx int) {
 }
 
 // enqueueAnswer кладёт задание на генерацию в очередь (неблокирующе).
-// При переполнении задание дропается с логом, состояние метки возвращается в QIdle.
+// При переполнении задание дропается с логом, состояние метки возвращается в
+// QIdle, а Step сбрасывается: команда так и не отдана LLM — цикл F1 не должен
+// считаться продвинутым (иначе следующий F1 пропустит шаг цикла).
 func (d *Dispatcher) enqueueAnswer(task answerTask) {
 	select {
 	case d.answerCh <- task:
 		// OK
 	default:
 		d.timeline.SetState(task.idx, QIdle)
+		d.timeline.ResetStep(task.idx)
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: очередь подсказок переполнена, вопрос пропущен: text=%v", task.question))
 		}
@@ -436,8 +441,12 @@ func (d *Dispatcher) handleHotkeyAction(act HotkeyAction) {
 
 // handleDemand реализует F1: генерация ответа для активной метки.
 //   - пустой таймлайн → no-op с логом;
-//   - метка уже в очереди/генерируется → игнор (коалесинг повторного F1);
-//   - метка QIdle → первая генерация (всегда CommandAnswer, Step не трогаем);
+//   - идёт генерация (busy) → игнор: метка в очереди/генерируется (коалесинг
+//     повторного F1) либо Esc уже вернул её в QIdle, пока worker не снял busy
+//     (задание всё равно было бы дропнуто, а Step — сдвинут);
+//   - метка QIdle → генерация по команде текущего Step (шаг 0 — CommandAnswer;
+//     Step сброшен при ResetPending/дропе, так что после Esc F1 снова даёт
+//     CommandAnswer, а не продолжает цикл);
 //   - метка QReady/QFailed → следующий шаг цикла (more context → simpler → ...).
 func (d *Dispatcher) handleDemand() {
 	// Task 4: F1 после Esc снова включает очередь — иначе задание, поставленное
@@ -455,6 +464,18 @@ func (d *Dispatcher) handleDemand() {
 		return
 	}
 
+	// Коалесинг отменённого авто-ответа: Esc перевёл метку обратно в QIdle
+	// (ResetPending), но worker мог ещё не снять busy. Задание, поставленное в
+	// этом окне, воркер дропнул бы (cancelled=true) — а Step метки уже был бы
+	// сдвинут, и следующий F1 пропустил бы шаг цикла (A-1). Поэтому в состоянии
+	// QIdle при активной генерации запрос игнорируется, как и в QQueued/QGenerating.
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: F1 во время генерации пропущен (коалесинг): question=%v, state=%v", entry.Question, entry.State.String()))
+		}
+		return
+	}
+
 	switch entry.State {
 	case QQueued, QGenerating:
 		if d.sessLog != nil {
@@ -462,12 +483,16 @@ func (d *Dispatcher) handleDemand() {
 		}
 		return
 	case QIdle:
-		// Первый ответ на метку — всегда CommandAnswer, но Step продвигаем:
-		// следующий F1 даст CommandMoreContext.
-		d.timeline.NextStep(idx)
+		// Первый ответ на метку — команда, которую возвращает NextStep (шаг 0
+		// всегда CommandAnswer). Используем возвращённую команду, а не хардкод:
+		// Step метки мог быть уже сдвинут вперёд при постановке авто-ответа
+		// (enqueueQuestion) или сброшен ResetPending/дропом очереди — взятая из
+		// NextStep команда делает цикл F1 согласованным с фактическим Step
+		// (после Esc первый F1 снова даёт CommandAnswer, а не пропускает его).
+		cmd, _ := d.timeline.NextStep(idx)
 		d.timeline.SetState(idx, QQueued)
-		d.timeline.SetMode(idx, modeAnswer)
-		d.enqueueAnswer(answerTask{idx: idx, cmd: translator.CommandAnswer, question: entry.Question})
+		d.timeline.SetMode(idx, modeOf(cmd))
+		d.enqueueAnswer(answerTask{idx: idx, cmd: cmd, question: entry.Question})
 	default:
 		// QReady/QFailed: следующий режим цикла (answer→more context→simpler).
 		cmd, _ := d.timeline.NextStep(idx)
@@ -522,15 +547,16 @@ func (d *Dispatcher) dropQueue() {
 		select {
 		case task := <-d.answerCh:
 			d.timeline.SetState(task.idx, QIdle)
+			d.timeline.ResetStep(task.idx)
 		default:
 			return
 		}
 	}
 }
 
-// GenerateAnswers запускает обычную генерацию ответа на заданный вопрос (F1/авто).
-// Добавляет метку в таймлайн и отвечает на неё — используется при shutdown
-// (drainQueue) и в тестах.
+// GenerateAnswers запускает генерацию ответа на заданный вопрос вне очереди
+// (CommandAnswer для новой метки). Используется в тестах: в production-потоке
+// вопрос ставится в очередь через enqueueQuestion/answerWorker.
 func (d *Dispatcher) GenerateAnswers(question string) {
 	idx := d.timeline.Add(question)
 	d.timeline.SetState(idx, QGenerating)
@@ -654,6 +680,7 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация отменена (Esc): question=%v", question))
 			}
 			d.timeline.SetState(idx, QIdle)
+			d.timeline.ResetStep(idx)
 			return
 		}
 		if d.sessLog != nil {
@@ -743,6 +770,8 @@ func (d *Dispatcher) pushActiveHeader() {
 // pushHeader формирует и отправляет в overlay сообщение шапки метки idx.
 // Заполняет QuestionIdx/Total/QuestionText/State/Mode по актуальному состоянию
 // таймлайна; Mode берётся из метки (задаётся при постановке задания/ответе).
+// Total — АБСОЛЮТНОЕ число заданных за сессию вопросов (TotalAsked), а НЕ размер
+// окна кольца: иначе на 150-м вопросе счётчик «N из M» начинал бы уменьшаться.
 //
 // Если у метки ещё нет ответа (Idle/Queued/Generating/Failed), отправляется
 // один «каркасный» Answer с пустым Source/Target — он несёт метаданные
@@ -774,9 +803,12 @@ func (d *Dispatcher) pushHeader(idx int, answers []ui.Answer) {
 		// Каркасный элемент: метаданные шапки без текста ответа.
 		header = []ui.Answer{{}}
 	}
+	// Total — абсолютный счётчик вопросов за сессию (не сбрасывается при
+	// вытеснении меток из кольца), поэтому берём его из таймлайна, а не len(snap).
+	total := d.timeline.TotalAsked()
 	for i := range header {
 		header[i].QuestionIdx = idx
-		header[i].Total = len(snap)
+		header[i].Total = total
 		header[i].QuestionText = entry.Question
 		header[i].State = entry.State.String()
 		header[i].Mode = entry.Mode
