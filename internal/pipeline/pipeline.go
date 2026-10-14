@@ -65,7 +65,8 @@ type Pipeline struct {
 	dispatchDone chan struct{} // Сигнал завершения dispatcher (буфер 1)
 	dispatch     *dispatcher.Dispatcher
 
-	hotkeyDone chan struct{} // Сигнал завершения runHotkeys (буфер 1)
+	hotkeyDone chan struct{} // Закрывается при выходе runHotkeys (r3-2)
+	hotkeyOnce sync.Once     // Защита от двойного close(hotkeyDone) (r3-2)
 }
 
 // Config — все настройки пайплайна (без магических чисел).
@@ -231,7 +232,7 @@ func New(cfg Config) (*Pipeline, error) {
 		sessLog:      sessLog,
 		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
 		dispatchDone: make(chan struct{}, 1),
-		hotkeyDone:   make(chan struct{}, 1),
+		hotkeyDone:   make(chan struct{}), // закрывается при выходе runHotkeys (r3-2)
 		dispatch: dispatcher.New(
 			overlay,
 			engine,
@@ -433,9 +434,10 @@ func (p *Pipeline) shutdown() {
 		<-p.dispatchDone
 	}
 
-	// 2b. Дождаться выхода hotkey.Run (runHotkeys сигнализирует hotkeyDone при
-	//     выходе из Run). Ограничиваем ожидание таймаутом: если Post-сообщения
-	//     потеряны и GetMessageW не разбудился, shutdown не должен висеть вечно.
+	// 2b. Дождаться выхода hotkey.Run (runHotkeys закрывает hotkeyDone при выходе
+	//     из Run). Закрытие идемпотентно для читателей — любой shutdown-путь
+	//     увидит его сразу. Ограничиваем ожидание таймаутом: если Post-сообщения
+	//     потеряны и GetMessageW не разбудился, shutdown не должен висеть вечно (r3-2).
 	if p.hotkeyDone != nil {
 		select {
 		case <-p.hotkeyDone:
@@ -627,17 +629,22 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 // Shift+F2/F3 → HandleClarify/HandleUnclarify (уточнения, план Б-T3),
 // Esc → Cancel.
 //
-// По завершении (в т.ч. при штатной отмене ctx) сигнализирует hotkeyDone,
-// чтобы shutdown мог дождаться выхода Run и не оставить висящую goroutine (B-2).
+// По завершении (в т.ч. при штатной отмене ctx) ЗАКРЫВАЕТ hotkeyDone — closure
+// виден всем читателям сразу и идемпотентен для них: любой shutdown-путь (их
+// несколько) дождётся выхода runHotkeys. Двойной close исключён через
+// hotkeyOnce: закрытие происходит ровно здесь и ровно один раз, даже если
+// runHotkeys по какой-то причине будет вызван дважды (r3-2).
+// sessLog передаётся в hotkey.Run (r3-4), чтобы отказы PostThreadMessageW/
+// RegisterHotKey не терялись; он nil-безопасен.
 // Ошибки отмены ctx (Canceled/DeadlineExceeded) — штатное завершение, не ошибка (B-9).
 func (p *Pipeline) runHotkeys(ctx context.Context) {
 	defer func() {
 		if p.hotkeyDone != nil {
-			p.hotkeyDone <- struct{}{}
+			p.hotkeyOnce.Do(func() { close(p.hotkeyDone) })
 		}
 	}()
 
-	err := hotkey.Run(ctx, p.handleHotkey)
+	err := hotkey.Run(ctx, p.handleHotkey, p.sessLog)
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return
 	}

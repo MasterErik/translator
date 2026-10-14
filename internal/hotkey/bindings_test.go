@@ -15,31 +15,35 @@ import "testing"
 //   - КАЖДЫЙ биндинг содержит РОВНО ожидаемые mods (строгое равенство, а не
 //     только проверка бита): modNorepeat для F1–F4/Esc, modShift|modNorepeat для
 //     Shift+F2/F3 (уточнения, план Б-T3);
+//   - key каждой записи равен ожидаемому Key (единая таблица r3-6);
 //   - WM_HOTKEY.id мапится на Key через keyForID.
+//
+// Сверка идёт по id (map[int32]wantBinding), а НЕ по позиции в bindings:
+// перестановка записей в таблице не должна ломать тест ложно (r3-5).
 func TestBindingsValid(t *testing.T) {
-	// wantVK — ожидаемый vk для каждого id. Проверяем и сами "виртуальные коды"
-	// против их числовых значений, чтобы константы не поехали.
-	tests := []struct {
+	// wantBinding — ожидаемые поля биндинга, ключ — его id.
+	type wantBinding struct {
 		key      Key
-		id       int32
-		name     string
 		wantVK   uintptr
 		wantMods uintptr // строгое равенство: modNorepeat либо modShift|modNorepeat
 		numeric  uintptr // независимая сверка числового значения VK из WinAPI
-	}{
-		{KeyF1, int32(KeyF1), "F1", vkF1, modNorepeat, 0x70},
-		{KeyF2, int32(KeyF2), "F2", vkF2, modNorepeat, 0x71},
-		{KeyF3, int32(KeyF3), "F3", vkF3, modNorepeat, 0x72},
-		{KeyF4, int32(KeyF4), "F4", vkF4, modNorepeat, 0x73},
-		{KeyEsc, int32(KeyEsc), "Esc", vkEsc, modNorepeat, 0x1B},
-		{KeyShiftF2, idShiftF2, "Shift+F2", vkF2, modShift | modNorepeat, 0x71},
-		{KeyShiftF3, idShiftF3, "Shift+F3", vkF3, modShift | modNorepeat, 0x72},
+		name     string
+	}
+	// want — ожидаемая таблица, ключованная по id (r3-5).
+	want := map[int32]wantBinding{
+		int32(KeyF1):  {KeyF1, vkF1, modNorepeat, 0x70, "F1"},
+		int32(KeyF2):  {KeyF2, vkF2, modNorepeat, 0x71, "F2"},
+		int32(KeyF3):  {KeyF3, vkF3, modNorepeat, 0x72, "F3"},
+		int32(KeyF4):  {KeyF4, vkF4, modNorepeat, 0x73, "F4"},
+		int32(KeyEsc): {KeyEsc, vkEsc, modNorepeat, 0x1B, "Esc"},
+		idShiftF2:     {KeyShiftF2, vkF2, modShift | modNorepeat, 0x71, "Shift+F2"},
+		idShiftF3:     {KeyShiftF3, vkF3, modShift | modNorepeat, 0x72, "Shift+F3"},
 	}
 
 	// Константы пакета обязаны совпадать с числовыми кодами WinAPI.
-	for _, tt := range tests {
-		if tt.wantVK != tt.numeric {
-			t.Errorf("package constant for %s = %#x, want numeric VK %#x", tt.name, tt.wantVK, tt.numeric)
+	for id, w := range want {
+		if w.wantVK != w.numeric {
+			t.Errorf("package constant for %s (id %d) = %#x, want numeric VK %#x", w.name, id, w.wantVK, w.numeric)
 		}
 	}
 
@@ -55,8 +59,8 @@ func TestBindingsValid(t *testing.T) {
 		t.Errorf("modNorepeat = %#x, want %#x (MOD_NOREPEAT)", uintptr(modNorepeat), numericModNorepeat)
 	}
 
-	if len(bindings) != len(tests) {
-		t.Fatalf("bindings count = %d, want %d", len(bindings), len(tests))
+	if len(bindings) != len(want) {
+		t.Fatalf("bindings count = %d, want %d", len(bindings), len(want))
 	}
 
 	seenIDs := make(map[int32]struct{}, len(bindings))
@@ -74,35 +78,43 @@ func TestBindingsValid(t *testing.T) {
 		}
 		seenCombos[combo] = struct{}{}
 
-		// id обязан совпадать с ожидаемым (Run мапит WM_HOTKEY.wParam → Key).
-		if b.id != tests[i].id {
-			t.Errorf("bindings[%d]: id = %d, want %d (%s)", i, b.id, tests[i].id, tests[i].name)
+		// Каждый id из bindings обязан быть в ожидаемой таблице (по id, не по позиции).
+		w, ok := want[b.id]
+		if !ok {
+			t.Errorf("bindings[%d]: неожиданный id %d", i, b.id)
+			continue
+		}
+
+		// key в записи обязан совпасть с ожидаемым Key (единая таблица r3-6:
+		// регистрация и id→Key берутся из одной записи).
+		if b.key != w.key {
+			t.Errorf("bindings[%d] (%s): key = %d, want %d", i, w.name, b.key, w.key)
 		}
 
 		// Явная сверка vk для КАЖДОЙ записи.
-		if b.vk != tests[i].wantVK {
-			t.Errorf("bindings[%d] (%s): vk = %#x, want %#x", i, tests[i].name, b.vk, tests[i].wantVK)
+		if b.vk != w.wantVK {
+			t.Errorf("bindings[%d] (%s): vk = %#x, want %#x", i, w.name, b.vk, w.wantVK)
 		}
 
 		// Строгое равенство mods: ровно ожидаемый набор модификаторов,
 		// без лишних битов и без недостающих.
-		if b.mods != tests[i].wantMods {
-			t.Errorf("bindings[%d] (%s): mods = %#x, want %#x", i, tests[i].name, b.mods, tests[i].wantMods)
+		if b.mods != w.wantMods {
+			t.Errorf("bindings[%d] (%s): mods = %#x, want %#x", i, w.name, b.mods, w.wantMods)
 		}
 
 		// keyForID обязан вернуть ожидаемый Key (маршрутизация WM_HOTKEY).
 		gotKey, ok := keyForID(b.id)
 		if !ok {
-			t.Errorf("bindings[%d] (%s): keyForID(%d) = ok=false", i, tests[i].name, b.id)
-		} else if gotKey != tests[i].key {
-			t.Errorf("bindings[%d]: keyForID(%d) = %d, want %d", i, b.id, gotKey, tests[i].key)
+			t.Errorf("bindings[%d] (%s): keyForID(%d) = ok=false", i, w.name, b.id)
+		} else if gotKey != w.key {
+			t.Errorf("bindings[%d]: keyForID(%d) = %d, want %d", i, b.id, gotKey, w.key)
 		}
 	}
 
 	// Множество id обязано покрывать ровно ожидаемые клавиши.
-	for _, tt := range tests {
-		if _, ok := seenIDs[tt.id]; !ok {
-			t.Errorf("missing binding id %d (%s)", tt.id, tt.name)
+	for id, w := range want {
+		if _, ok := seenIDs[id]; !ok {
+			t.Errorf("missing binding id %d (%s)", id, w.name)
 		}
 	}
 
