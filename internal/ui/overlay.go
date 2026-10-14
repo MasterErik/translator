@@ -631,13 +631,6 @@ func questionStateMark(state string) string {
 	}
 }
 
-// isMetadataOnly сообщает, что Answer — каркас шапки (без текста ответа):
-// Source и Target пусты. Явный State при этом задаёт состояние по контракту
-// таймлайна (dispatcher.pushHeader отправляет один пустой Answer с метаданными).
-func isMetadataOnly(a Answer) bool {
-	return a.Source == "" && a.Target == ""
-}
-
 // answersMeta возвращает метаданные таймлайна из первого Answer с заданным
 // контрактом (QuestionIdx/Total/State/Mode/HasFresh/Clarifications). ok=false
 // для старого формата, где все поля метаданных нулевые — тогда зона 3 рендерится
@@ -852,7 +845,7 @@ func answerByQuestionIdx(answers []Answer, idx int) (Answer, bool) {
 	return Answer{}, false
 }
 
-// layoutQuestionHeader рисует шапку активной метки: «Q3 (3/5): <вопрос>». Вопрос
+// layoutQuestionHeader рисует шапку активной метки: «Q3 из 5: <вопрос>». Вопрос
 // обрезается до maxQuestionHeaderLines строк (ellipsis), шрифт smallFontSize(fs),
 // высота — измеренным продвижением строки (не «на глаз»). Рядом — подпись режима
 // генерации Mode («answer»/«more context»/«simpler»).
@@ -872,12 +865,19 @@ func layoutQuestionHeader(gtx layout.Context, th *material.Theme, meta Answer, f
 	)
 }
 
-// layoutQuestionTitle — «Q3 (3/5): вопрос»; часть «вопрос» обрезается по числу
+// layoutQuestionTitle — «Q3 из 5: вопрос»; часть «вопрос» обрезается по числу
 // строк (maxQuestionHeaderLines) с ellipsis.
+//
+// Формат «Q<idx> из <total>» (а не «Q<idx> (<idx>/<total>)»): оба числа —
+// АБСОЛЮТНЫЕ (idx — номер метки, total — число заданных за сессию вопросов,
+// QuestionTimeline.TotalAsked), поэтому «(5/156)» читалось бы как «5-й из 156
+// видимых в ленте», хотя в окне кольца видно максимум questionStripMaxVisible
+// меток. Разделитель «из» однозначен и согласован с абсолютным номером в
+// markLabelStyle (лейбл метки «[N]маркер»).
 func layoutQuestionTitle(gtx layout.Context, th *material.Theme, meta Answer, fs int) layout.Dimensions {
 	prefix := ""
 	if meta.Total > 0 {
-		prefix = fmt.Sprintf("Q%d (%d/%d): ", meta.QuestionIdx+1, meta.QuestionIdx+1, meta.Total)
+		prefix = fmt.Sprintf("Q%d из %d: ", meta.QuestionIdx+1, meta.Total)
 	}
 	l := overlayLabel(th, unit.Sp(smallFontSize(fs)), prefix+meta.QuestionText)
 	l.Color = color.NRGBA{R: 220, G: 220, B: 230, A: 255}

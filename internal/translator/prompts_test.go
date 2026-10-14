@@ -283,3 +283,57 @@ func TestBuildAnswerPrompt_ClarificationTextNotEscaped(t *testing.T) {
 		t.Errorf("clarification must be inserted verbatim (no escaping), got:\n%s", prompt)
 	}
 }
+
+// baselineAnswerPrompt is the EXACT prompt produced for
+// AnswerRequest{Question: "Tell me about Go."} with no Clarifications slice,
+// no ConversationContext and CommandAnswer (F1).
+//
+// Значение снято с логики коммита a4ce96d (до появления блока уточнений) и
+// совпадает с текущим поведением при nil/пустом Clarifications: ветка
+// formatClarifications возвращает "" и блок не пишется. Здесь важна байтовая
+// идентичность — регрессию \n или порядка блоков подстрочные Contains-проверки
+// не поймают (review R2-min1).
+const baselineAnswerPrompt = "The interviewer asked:\n" +
+	"Tell me about Go.\n" +
+	"\n" +
+	"Generate 1 answer from the candidate's perspective (first person, ready to read aloud):"
+
+// R2-min1: golden-тест с ТОЧНЫМ (==) сравнением полного промпта.
+//   - nil Clarifications → байт-в-байт baseline (совместимость с a4ce96d);
+//   - []string{} → тот же байтовый вывод, что и nil (пустой блок опущен);
+//   - непустые Clarifications → блок «Clarifications from the interviewer:»
+//     стоит ровно между вопросом и «Generate 1 answer …» (точное сравнение
+//     полной строки, а не Contains).
+func TestBuildAnswerPrompt_NilClarificationsByteIdentical(t *testing.T) {
+	nilPrompt := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go."})
+	if nilPrompt != baselineAnswerPrompt {
+		t.Errorf("nil Clarifications: prompt must be byte-identical to a4ce96d baseline\n want: %q\n  got: %q", baselineAnswerPrompt, nilPrompt)
+	}
+
+	emptyPrompt := BuildAnswerPrompt(AnswerRequest{Question: "Tell me about Go.", Clarifications: []string{}})
+	if emptyPrompt != nilPrompt {
+		t.Errorf("empty (non-nil) Clarifications must render the same bytes as nil\n  nil: %q\nempty: %q", nilPrompt, emptyPrompt)
+	}
+}
+
+// R2-min1 (позиция блока): при наличии уточнений блок стоит РОВНО между
+// вопросом и строкой «Generate 1 answer …» — сравнение полной строки.
+func TestBuildAnswerPrompt_ClarificationsBlockPositionExact(t *testing.T) {
+	got := BuildAnswerPrompt(AnswerRequest{
+		Question:       "Tell me about Go.",
+		Clarifications: []string{"I mean at scale", "multi-region"},
+	})
+
+	want := "The interviewer asked:\n" +
+		"Tell me about Go.\n" +
+		"\n" +
+		"Clarifications from the interviewer:\n" +
+		"- I mean at scale\n" +
+		"- multi-region\n" +
+		"\n" +
+		"Generate 1 answer from the candidate's perspective (first person, ready to read aloud):"
+
+	if got != want {
+		t.Errorf("prompt with clarifications must match exactly (block between question and instruction)\n want: %q\n  got: %q", want, got)
+	}
+}

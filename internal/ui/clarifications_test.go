@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"testing"
 
+	"gioui.org/layout"
 	"gioui.org/widget/material"
 
 	"github.com/mastererik/translator/internal/logger"
@@ -194,6 +195,69 @@ func TestClarificationsZeroKeepsOldRender(t *testing.T) {
 	gtxZone, _ := newTestContext(800, 650)
 	if d := o.layoutAnswersZone(gtxZone, th, msg, true, UIMessage{}, fs, false); d.Size.Y < oneLineHeight(th, smallFontSize(fs)) {
 		t.Errorf("зона 3 без уточнений высота = %d, want >= строки подписей", d.Size.Y)
+	}
+}
+
+// TestClarificationsNilVsEmptySliceIdenticalRender — m-1: Answer с
+// Clarifications=nil и Clarifications=[]string{} должны давать БАЙТ-В-БАЙТ
+// идентичный рендер зоны ответов (layoutAnswers). Пустой, но не nil срез не
+// должен отличаться от nil: recentClarifications нормализует оба к «нет строк»,
+// layoutClarifications отдаёт нулевые размеры, и весь layoutAnswers совпадает по
+// Dimensions (Size+Baseline), а при доступном op-потоке — и по длине потока.
+// Фиксирует регрессию «пустой список → прежний рендер» поведенчески.
+func TestClarificationsNilVsEmptySliceIdenticalRender(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	// Обе Answer КОНТРАКТНЫЕ (несут QuestionIdx/Total/QuestionText/State) и с
+	// реальными строками ответа — чтобы layoutAnswers прошёл весь путь (лента +
+	// шапка + блок уточнений + скролл строк), а не ранний возврат old-format.
+	mkAnswer := func(clar []string) Answer {
+		return Answer{
+			Source: "Why did you leave?", Target: "Почему вы ушли?",
+			QuestionIdx: 2, Total: 5,
+			QuestionText: "Why did you leave your last job?",
+			State:        "ready", Mode: "answer",
+			Clarifications: clar,
+		}
+	}
+
+	renderWith := func(clar []string) (layout.Dimensions, int) {
+		o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: fs}, logger.NewNopSessionLogger())
+		msg := UIMessage{Type: AnswerCandidates, Answers: []Answer{mkAnswer(clar)}}
+		o.AddMessage(msg)
+		gtx, ops := newTestContext(800, 650)
+		dims := layoutAnswers(gtx, th, msg, fs, &o.answersList, false)
+		return dims, opsByteLen(ops)
+	}
+
+	// Предусловие честности теста: пустой срез — именно не-nil len==0.
+	var emptyNonNil = []string{}
+	if emptyNonNil == nil || len(emptyNonNil) != 0 {
+		t.Fatal("тест некорректен: []string{} не является не-nil пустым срезом")
+	}
+
+	nilDims, nilOps := renderWith(nil)
+	emptyDims, emptyOps := renderWith(emptyNonNil)
+
+	if nilDims != emptyDims {
+		t.Errorf("Dimensions различаются: nil=%v, []string{}=%v — пустой список не должен менять рендер (m-1)",
+			nilDims, emptyDims)
+	}
+	// Длина op-потока — более строгая проверка «байт-в-байт»; сравнима только если
+	// reflect-хелпер смог достать буфер Gio (иначе -1).
+	if nilOps >= 0 && emptyOps >= 0 {
+		if nilOps != emptyOps {
+			t.Errorf("длина op-потока различается: nil=%d, []string{}=%d — пустой список меняет рендер (m-1)",
+				nilOps, emptyOps)
+		}
+	} else {
+		t.Logf("op-поток недоступен (opsByteLen=-1) — сравнены только Dimensions")
+	}
+
+	// Санити: рендер непустой (иначе «идентичность» тривиальна и ничего не ловит).
+	if nilDims.Size.Y <= 0 {
+		t.Errorf("layoutAnswers вернул нулевую высоту (%v) — рендер прошёл ранним возвратом, тест не проверяет контракт", nilDims)
 	}
 }
 

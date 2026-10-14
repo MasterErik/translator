@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"reflect"
 
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -54,4 +55,23 @@ func renderFrame(o *Overlay, width, height int) FrameMetrics {
 	th := material.NewTheme()
 	gtx, _ := newTestContext(width, height)
 	return o.render(gtx, th)
+}
+
+// opsByteLen возвращает длину сериализованного op-потока Gio (байты) — примитив
+// для поведенческой проверки «рендер байт-в-байт идентичен». Публичного доступа
+// к длине op-потока в Gio v0.10.1 нет (op.Ops.Internal.data неэкспортировано),
+// поэтому читаем поле через reflect; если структура Gio изменится и поля не
+// найдётся, возвращаем -1 — вызывающий тест пропускает сравнение длины и
+// опирается на Dimensions. Так тест не падает при апгрейде Gio, но и не молчит
+// об отсутствии проверки.
+func opsByteLen(o *op.Ops) int {
+	v := reflect.ValueOf(o)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return -1
+	}
+	data := v.Elem().FieldByName("Internal").FieldByName("data")
+	if !data.IsValid() || data.Kind() != reflect.Slice {
+		return -1
+	}
+	return data.Len()
 }

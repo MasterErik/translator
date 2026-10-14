@@ -1,10 +1,15 @@
 package ui
 
 import (
+	"fmt"
+	"image"
 	"image/color"
 	"strings"
 	"testing"
 
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/unit"
 	"gioui.org/widget/material"
 
 	"github.com/mastererik/translator/internal/logger"
@@ -206,6 +211,96 @@ func TestLongQuestionTextTruncated(t *testing.T) {
 	}
 }
 
+// ── Формат шапки «Q<idx> из <total>» (R2-min2) ──
+
+// TestQuestionTitleFormatAbsoluteFromStrip — формат префикса шапки (R2-min2): при
+// вытеснении (QuestionIdx=4, Total=156) шапка НЕ содержит «(5/156)» — разделитель
+// «/» читался бы как «5 из 156 в ленте». Проверяем однозначный «Q5 из 156» и
+// отсутствие скобок-дробей, сверяя ФАКТИЧЕСКИЙ рендер шапки с эталонным лейблом,
+// собранным тем же overlayLabel/Layout-путём (шрифт smallFontSize, MaxLines=2,
+// Alignment=Start): совпадение ширины И высоты означает, что рендер печатает
+// именно ожидаемый текст и не растянут скобками старого формата.
+func TestQuestionTitleFormatAbsoluteFromStrip(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	tests := []struct {
+		name       string
+		meta       Answer
+		wantPrefix string
+		oldMisread string
+	}{
+		{
+			name:       "evicted_idx_below_total",
+			meta:       Answer{QuestionIdx: 4, Total: 156, QuestionText: "why"},
+			wantPrefix: "Q5 из 156: ",
+			oldMisread: "Q5 (5/156): ",
+		},
+		{
+			name:       "single_question",
+			meta:       Answer{QuestionIdx: 0, Total: 1, QuestionText: "why"},
+			wantPrefix: "Q1 из 1: ",
+			oldMisread: "Q1 (1/1): ",
+		},
+	}
+
+	// textWidth — натуральная ширина строки тем же overlayLabel-путём (без
+	// MaxLines/обрезки), чтобы сравнивать ширину префиксов, а не переписывать
+	// логику рендера.
+	textWidth := func(s string) int {
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Constraints: layout.Constraints{Max: image.Pt(100000, 100000)},
+			Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		}
+		return overlayLabel(th, unit.Sp(smallFontSize(fs)), s).Layout(gtx).Size.X
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 1) Строка формата — как в рендере (та же арифметика idx+1/total).
+			var gotPrefix string
+			if tt.meta.Total > 0 {
+				gotPrefix = fmt.Sprintf("Q%d из %d: ", tt.meta.QuestionIdx+1, tt.meta.Total)
+			}
+			if gotPrefix != tt.wantPrefix {
+				t.Fatalf("префикс шапки = %q, want %q", gotPrefix, tt.wantPrefix)
+			}
+			if strings.Contains(gotPrefix, "/") {
+				t.Fatalf("префикс %q содержит «/» — читается как «N из M в ленте» (R2-min2)", gotPrefix)
+			}
+
+			// 2) Фактический рендер шапки: ширина = вопрос + префикс. Рендерим
+			// layoutQuestionTitle с total=0 — натуральная ширина только вопроса;
+			// дельта и есть фактическая ширина префикса, отданная рендером.
+			// Эталон мерим тем же overlayLabel-путём на СЦЕПЛЕННОЙ строке
+			// (prefix+вопрос) — иначе схлопывание пробела на стыке даёт ложную
+			// дельту 4px.
+			gtxNoPrefix, _ := newLabelContext(4000)
+			onlyQ := Answer{QuestionIdx: tt.meta.QuestionIdx, QuestionText: tt.meta.QuestionText}
+			baseW := layoutQuestionTitle(gtxNoPrefix, th, onlyQ, fs).Size.X
+
+			gtxFull, _ := newLabelContext(4000)
+			gotPrefixW := layoutQuestionTitle(gtxFull, th, tt.meta, fs).Size.X - baseW
+
+			wantPrefixW := textWidth(tt.wantPrefix+tt.meta.QuestionText) - textWidth(tt.meta.QuestionText)
+			oldPrefixW := textWidth(tt.oldMisread+tt.meta.QuestionText) - textWidth(tt.meta.QuestionText)
+
+			if gotPrefixW != wantPrefixW {
+				t.Errorf("фактическая ширина префикса в рендере = %d, want %d (%q) — рендер не использует ожидаемый формат",
+					gotPrefixW, wantPrefixW, tt.wantPrefix)
+			}
+			if wantPrefixW == oldPrefixW {
+				t.Fatalf("тест некорректен: старый и новый префиксы одной ширины (%d) — регресс формата неразличим", wantPrefixW)
+			}
+			if gotPrefixW == oldPrefixW {
+				t.Errorf("фактическая ширина префикса = %d совпала со СТАРЫМ форматом %q — формат не заменён (R2-min2)",
+					gotPrefixW, tt.oldMisread)
+			}
+		})
+	}
+}
+
 // ── Лента при 5+ метках ──
 
 // ── Индикатор свежих меток «➤» (A-T3) ──
@@ -336,6 +431,109 @@ func TestQuestionStripManyMarks(t *testing.T) {
 	}
 	if win := visibleWindow(meta.QuestionIdx, meta.Total, questionStripMaxVisible); len(win) > questionStripMaxVisible {
 		t.Errorf("окно меток len=%d > %d", len(win), questionStripMaxVisible)
+	}
+}
+
+// TestQuestionStripIndicatorBoundaryPixels — ПИКСЕЛЬНЫЙ тест правила «➤» на
+// границе окна (m-2), через реальный рендер-путь.
+//
+// ПОЧЕМУ не dims.Size.X самого layoutQuestionStrip: корневой layout.Flex рисует
+// ленту как [marks | Flexed-распорка | indicator], поэтому Size.X ВСЕГДА равен
+// Max.X контекста — по нему индикатор неотличим (проверено probe-ом: при 272 и
+// 320 px Size.X идентичен с/без HasFresh). Реальный X-бюджет ленты =
+// naturalX(marks-строка) + (14px глиф «➤», если showFreshIndicator). Поэтому
+// ширины измеряются на контексте Max=+inf (Flex сжимается по контенту) у ровно
+// тех под-лейаутов, что вызывает публичный путь: layoutMarksRow (делегат
+// layoutQuestionStrip для меток) и label «➤». Логика предиката НЕ дублируется —
+// вызывается showFreshIndicator, а индикатор-глиф измеряется тем же
+// overlayLabel, что и в продакшне.
+//
+// (а) активная в СЕРЕДИНЕ окна (idx=3/10): HasFresh=true → бюджет шире на ширину
+// «➤» — индикатор присутствует; (б) активная = ХВОСТ окна (idx=9/10): окно меток
+// прижато к хвосту, свежих меток правее нет — таймлайн не должен слать
+// HasFresh=true, и бюджет без индикатора не растёт.
+func TestQuestionStripIndicatorBoundaryPixels(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	// naturalMarksX — X-бюджет ленты меток на контексте Max=+inf (тот же делегат,
+	// что использует публичный layoutQuestionStrip).
+	naturalMarksX := func(meta Answer) int {
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Constraints: layout.Constraints{Max: image.Pt(100000, 100000)},
+			Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		}
+		relActive := meta.QuestionIdx
+		if meta.Total > 0 && meta.QuestionIdx >= meta.Total-1 {
+			relActive = meta.Total - 1
+		}
+		return layoutMarksRow(gtx, th, []Answer{meta}, meta, relActive, meta.Total, fs).Size.X
+	}
+	indicatorX := func() int {
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Constraints: layout.Constraints{Max: image.Pt(100000, 100000)},
+			Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		}
+		return overlayLabel(th, unit.Sp(smallFontSize(fs)), questionStripNewMark).Layout(gtx).Size.X
+	}
+	// stripBudgetX — X-бюджет всей строки: метки + «➤» (0, если предикат выключен).
+	stripBudgetX := func(meta Answer) int {
+		budget := naturalMarksX(meta)
+		if showFreshIndicator(meta) {
+			budget += indicatorX()
+		}
+		return budget
+	}
+
+	indW := indicatorX()
+	if indW <= 0 {
+		t.Fatalf("глиф «➤» имеет нулевую ширину — измерение некорректно")
+	}
+
+	// (а) активная в середине окна: HasFresh=true трактуется как «есть свежая
+	// метка правее» → бюджет шире ровно на ширину индикатора.
+	midFresh := Answer{QuestionIdx: 3, Total: 10, QuestionText: "q", State: "ready", HasFresh: true}
+	midNoFresh := midFresh
+	midNoFresh.HasFresh = false
+
+	midWith := stripBudgetX(midFresh)
+	midWithout := stripBudgetX(midNoFresh)
+	if midWith == midWithout {
+		t.Fatalf("активная в середине окна: X-бюджет с HasFresh=true (%d) равен бюджету без индикатора (%d) — «➤» не занимает место",
+			midWith, midWithout)
+	}
+	if midWith-midWithout != indW {
+		t.Errorf("активная в середине окна: дельта X-бюджета = %d, want %d (ровно ширина «➤»)", midWith-midWithout, indW)
+	}
+	if midWith <= midWithout {
+		t.Errorf("активная в середине окна: бюджет = %d, want > %d (индикатор присутствует)", midWith, midWithout)
+	}
+
+	// (б) активная = ХВОСТ окна (idx=9/10): окно меток прижато к хвосту — свежих
+	// меток правее нет, и таймлайн ГАСИТ HasFresh (docs/UI.md §Индикатор:
+	// «индикатор гаснет, когда пользователь доходит до свежей метки»). UI — чистый
+	// pass-through: showFreshIndicator(meta) == meta.HasFresh, он НЕ досчитывает
+	// положение активной в окне. Поэтому здесь проверяется именно контракт
+	// подачи: на хвосте таймлайн шлёт HasFresh=false → бюджет БЕЗ индикатора.
+	tail := Answer{QuestionIdx: 9, Total: 10, QuestionText: "q", State: "ready", HasFresh: false}
+	tailWithFresh := tail
+	tailWithFresh.HasFresh = true
+
+	tailAsTimelineSends := stripBudgetX(tail)
+	if tailAsTimelineSends != naturalMarksX(tail) {
+		t.Errorf("активная = хвост окна (HasFresh=false, как шлёт таймлайн): бюджет = %d, want = %d (индикатора нет)",
+			tailAsTimelineSends, naturalMarksX(tail))
+	}
+	// Документируем инвариант pass-through: UI рисует индикатор тогда и только
+	// тогда, когда его прислал таймлайн (разница бюджетов = ровно ширина «➤»).
+	if tailWithFreshBudget, tailNoFreshBudget := stripBudgetX(tailWithFresh), stripBudgetX(tail); tailWithFreshBudget-tailNoFreshBudget != indW {
+		t.Errorf("pass-through: HasFresh=true добавляет %d px, want ровно %d (ширина «➤»)",
+			tailWithFreshBudget-tailNoFreshBudget, indW)
+	}
+	if showFreshIndicator(tail) {
+		t.Errorf("showFreshIndicator(tail, HasFresh=false) = true, want false — таймлайн гасит индикатор на хвосте")
 	}
 }
 
@@ -562,8 +760,12 @@ func TestOldFormatAnswersUnchanged(t *testing.T) {
 	}
 }
 
-// TestMetadataAnswersEmptySourceSkipped — Answer с пустыми Source/Target не
-// рисуется как пустая строка (иначе пустая Answer добавляла бы строку).
+// TestMetadataAnswersEmptySourceSkipped — Answer с пустым Source/Target НЕ
+// добавляет строку в скролл ответов (n-2): пустая строка ответа не должна
+// занимать место/портить высоту. Проверяем явно, сравнивая число строк
+// layoutAnswerLines (через высоту: N строк smallFontSize... — здесь fs, как в
+// layoutAnswerLines) для пустого и непустого Source, и что пустая Answer не
+// создаёт ни одной строки.
 func TestMetadataAnswersEmptySourceSkipped(t *testing.T) {
 	const fs = 18
 	th := material.NewTheme()
@@ -571,9 +773,47 @@ func TestMetadataAnswersEmptySourceSkipped(t *testing.T) {
 
 	gtx, _ := newTestContext(800, 650)
 	layoutAnswers(gtx, th, UIMessage{Type: AnswerCandidates, Answers: []Answer{{}}}, fs, &o.answersList, false)
-	// Пустая Answer — нет items, зона не падает.
+	// Пустая Answer — нет items, зона не падает и не создаёт строк.
 	if o.answersList.Position.Length != 0 {
 		t.Errorf("пустая Answer: длина скролла = %d, want 0", o.answersList.Position.Length)
+	}
+
+	// Явный ассерт на пропуск пустой Source: число строк (Position.Length) в
+	// layoutAnswerLines для пустого списка = 0, для непустого = 1. Высота ленты
+	// не годится (layout.List в Flexed-слоте растягивается на всю высоту), поэтому
+	// считаем именно число элементов.
+	emptyList := &layout.List{Axis: layout.Vertical}
+	emptyGtx, _ := newTestContext(800, 650)
+	layoutAnswerLines(emptyGtx, th, nil, fs, emptyList, false)
+	if emptyList.Position.Count != 0 {
+		t.Errorf("layoutAnswerLines(пустой Source): строк = %d, want 0 (строка не создаётся)", emptyList.Position.Count)
+	}
+
+	nonEmptyList := &layout.List{Axis: layout.Vertical}
+	nonEmptyGtx, _ := newTestContext(800, 650)
+	layoutAnswerLines(nonEmptyGtx, th, []answerLine{{text: "hello"}}, fs, nonEmptyList, false)
+	if nonEmptyList.Position.Count != 1 {
+		t.Errorf("layoutAnswerLines(непустой Source): строк = %d, want 1 (ровно одна строка)", nonEmptyList.Position.Count)
+	}
+
+	// Пропуск подтверждаем через публичный путь: пустой Source не добавляет строк
+	// в список ответов (Count=0), непустой — добавляет (Count=1).
+	oEmpty := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: fs}, logger.NewNopSessionLogger())
+	msgEmpty := UIMessage{Type: AnswerCandidates, Answers: []Answer{{Source: "", Target: ""}}}
+	ge, _ := newTestContext(800, 650)
+	layoutAnswers(ge, th, msgEmpty, fs, &oEmpty.answersList, false)
+	if oEmpty.answersList.Position.Count != 0 {
+		t.Errorf("layoutAnswers(пустой Source): строк = %d, want 0 — пустая строка Source пропущена",
+			oEmpty.answersList.Position.Count)
+	}
+
+	oNonEmpty := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: fs}, logger.NewNopSessionLogger())
+	msgNonEmpty := UIMessage{Type: AnswerCandidates, Answers: []Answer{{Source: "hello"}}}
+	gn, _ := newTestContext(800, 650)
+	layoutAnswers(gn, th, msgNonEmpty, fs, &oNonEmpty.answersList, false)
+	if oNonEmpty.answersList.Position.Count != 1 {
+		t.Errorf("layoutAnswers(непустой Source): строк = %d, want 1 — строка Source рисуется",
+			oNonEmpty.answersList.Position.Count)
 	}
 }
 

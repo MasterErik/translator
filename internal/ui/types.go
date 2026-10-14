@@ -26,6 +26,20 @@ const (
 // Answer is a single generated hint: the answer in the source language and its
 // translation into the target language. The pair of languages is configurable
 // (see common.Config.SourceLang/TargetLang), so the fields carry neutral names.
+//
+// ── КОНТРАКТ СИНХРОНИЗАЦИИ ПОЛЕЙ (R2-n1) ─────────────────────────────────────
+// Answer и UIMessage (ниже) — граница между dispatcher и ui: поля контракта
+// таймлайна добавляются СИНХРОННО в три места, иначе поле молча не доедет до
+// рендера (рассинхрон — регресс, который не поймает компилятор):
+//  1. тип Answer (здесь);
+//  2. тип UIMessage (ниже), если поле едет на уровне сообщения, а не Answer;
+//  3. dispatcher.pushHeader (dispatcher.go) — заполняет поля Answer при
+//     отправке шапки. Плюс answersMeta (overlay.go) должен распознавать поле
+//     как контрактное, иначе одна только новая ненулевая метаданность
+//     трактуется как «старый формат» и рендер идёт по старому пути.
+//
+// Порядок: сначала Answer/UIMessage, затем pushHeader, затем answersMeta, затем
+// тест на «только это поле ненулевое → контракт распознан».
 type Answer struct {
 	Source string
 	Target string
@@ -56,6 +70,10 @@ type Answer struct {
 }
 
 // UIMessage represents a single message displayed in the overlay.
+//
+// Контракт синхронизации полей — см. комментарий у типа Answer выше: при
+// добавлении поля на уровне сообщения обновляйте UIMessage и Answer синхронно
+// с dispatcher.pushHeader, иначе поле не доедет до рендера.
 type UIMessage struct {
 	Type      UIMessageType
 	Text      string
