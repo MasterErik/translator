@@ -65,6 +65,19 @@ Chrome/Teams → CABLE Input (Playback) → WASAPI Loopback → Translator
 | Loopback | `CABLE Input` (VB-Cable, Playback) | Речь собеседника → STT → перевод |
 | Микрофон | Системный микрофон (Recording) | Ваш голос → логирование |
 
+## Тестирование LLM без транскрибатора
+
+`test/interview_sim` — имитатор интервью: вопросы подаются напрямую в LLM (транскрибатор не задействуется — Gladia платный, это экономит API-квоту), промпт собирается так же, как в реальном pipeline (факты candidate_context по бюджету + hints-подсказка + Simple English). Печатает вопрос, сработавшую подсказку и полный ответ модели.
+
+```bash
+go run ./test/interview_sim            # список встроенных вопросов
+go run ./test/interview_sim -all        # все вопросы (с паузами против rate limit)
+go run ./test/interview_sim 3 7         # выборочные вопросы (номера с 1)
+go run ./test/interview_sim -questions my_questions.txt -all   # свои вопросы
+```
+
+Требует только `LLM_API_KEY` / `LLM_BASE_URL` из `.env`. Формат файла `-questions`: один вопрос на строку, пустые строки и `#`-комментарии игнорируются.
+
 ## Документация
 
 | Файл | Для чего |
