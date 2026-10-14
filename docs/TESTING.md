@@ -90,11 +90,23 @@ go test -v ./internal/common/...
 # Финальная проверка агента: полный набор включая integration
 go test -tags integration ./...
 
-# Только integration-тесты ui (окно Gio: TestWindowStarts)
-go test -tags integration -v ./internal/ui/...
-
 # Только integration-тесты LLM
 go test -tags integration -v ./internal/translator/...
+```
+
+### E2E-тесты (запуск полного приложения)
+
+Тесты, поднимающие всё приложение целиком (Gio-окно + pipeline), вынесены под
+build-тег `e2e` — например `TestWindowStarts` (`window_starts_integration_test.go`).
+Их запускает ТОЛЬКО главный планировщик один раз за фазу; исполнители/суб-агенты
+их не гоняют:
+
+```bash
+# Полный набор e2e (запуск приложения)
+go test -tags e2e ./...
+
+# Только e2e-тест окна Gio (TestWindowStarts)
+go test -tags e2e -v ./internal/ui/ -run TestWindowStarts
 ```
 
 Обычный `go test ./...` гоняет только юнит-тесты без запуска приложения.
