@@ -86,7 +86,7 @@ source-файла. Source-файлы не меняются в runtime — file w
 - `dispatcher.generateAnswers`: если `candidateContextFn` задан — вызывает его
   с текущим вопросом и кладёт результат (уже prompt-ready строка) в
   `AnswerRequest.CandidateContext`.
-- `buildSystemPrompt` не меняется: получает уже собранный prompt-ready контекст.
+- `BuildSystemPrompt` не меняется: получает уже собранный prompt-ready контекст.
 
 ## Конфигурация
 

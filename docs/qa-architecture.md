@@ -33,11 +33,11 @@ generateAnswers(question, command, idx)     // idx — метка таймлай
         ├─ ConversationContext = history.BuildContext()   // история интервью
         │
         ▼
-AnswerRequest{Question, CandidateContext, ConversationContext, Command}
+AnswerRequest{Question, CandidateContext, ConversationContext, Command, SourceLang, TargetLang}
         ▼
 ├─ BuildAnswerPrompt(req)          // user prompt
 │     "Recent conversation: …\nThe interviewer asked: <question>\n…[модификатор]"
-├─ buildSystemPrompt(candidate)    // system prompt
+├─ BuildSystemPrompt(srcLang, tgtLang)  // system prompt
 │     SystemPromptAnswerGen + "\n\nCandidate context:\n" + candidate
         ▼
 llm.GenerateAnswers(ctx, req)
@@ -73,6 +73,8 @@ type AnswerRequest struct {
     CandidateContext    string           // постоянные факты кандидата (база CV)
     ConversationContext string           // история интервью (ограниченная)
     Command             GenerationCommand
+    SourceLang          string           // ISO 639-1; пусто → дефолт en
+    TargetLang          string           // ISO 639-1; пусто → дефолт ru
 }
 
 type ConversationHistory struct { … }
@@ -102,6 +104,7 @@ const (
 )
 
 type QEntry struct {
+    Idx      int    // АБСОЛЮТНЫЙ номер метки (с 0, не сбрасывается при вытеснении)
     Question string
     Answer   []ui.Answer
     State    QState
@@ -111,18 +114,20 @@ type QEntry struct {
 
 type QuestionTimeline struct { … }
 func NewQuestionTimeline() *QuestionTimeline
-func (t *QuestionTimeline) Add(question string) int          // новая метка (QIdle), tail-follow
+func (t *QuestionTimeline) Add(question string) int          // новая метка (QIdle), tail-follow; возвращает АБСОЛЮТНЫЙ idx
 func (t *QuestionTimeline) Active() (int, QEntry, bool)
 func (t *QuestionTimeline) Prev() bool                       // F2, clamp по границе
 func (t *QuestionTimeline) Next() bool                       // F3, clamp по границе
 func (t *QuestionTimeline) OnTail() bool                     // активная метка — последняя?
-func (t *QuestionTimeline) HasFresh() (int, bool)            // индикатор «справа есть свежие метки»
+func (t *QuestionTimeline) HasFresh() (int, bool)            // свежая метка справа? (абсолютный idx)
 func (t *QuestionTimeline) ClearFresh()
 func (t *QuestionTimeline) SetState(idx int, s QState)
 func (t *QuestionTimeline) SetAnswer(idx int, answers []ui.Answer)
 func (t *QuestionTimeline) NextStep(idx int) (translator.GenerationCommand, bool)
 func (t *QuestionTimeline) SetMode(idx int, mode string)
 func (t *QuestionTimeline) ResetPending()                    // Queued/Generating → Idle (Esc)
+func (t *QuestionTimeline) ResetStep(idx int)                // Step метки → 0 (дроп задания)
+func (t *QuestionTimeline) TotalAsked() int                  // АБСОЛЮТНОЕ число вопросов за сессию
 func (t *QuestionTimeline) Snapshot() []QEntry               // глубокие копии
 
 // internal/dispatcher/hotkeys.go — действие функциональной клавиши (НЕ команда генерации)
@@ -185,7 +190,7 @@ conversation:
 - `auto_answer` (env `CONVERSATION_AUTO_ANSWER`, тип `*bool`): `nil`/отсутствует → **true**, т.е. вопрос сразу ставит задание `CommandAnswer`; `false` — вопрос лишь создаёт метку `QIdle`, ответ генерируется по F1. Указатель, а не `bool`, чтобы отличить «не задано» от «явно выключено».
 
 - Основной критерий — **размер текста**, а не число предложений.
-- `estimateTokens(s) = (len(s) + 3) / 4` — простая оценка (~1 токен на 4 символа для английского). Заменяется на tokenizer-реализацию текущей модели, когда она станет доступна.
+- `common.EstimateTokens(s) = (len(s) + 3) / 4` (файл `internal/common/tokens.go`) — простая оценка (~1 токен на 4 байта). Единственная точка оценки токенов (история и candidate context). Заменяется на tokenizer-реализацию текущей модели, когда она станет доступна.
 - При превышении лимита: удаляются **старые** turns (с начала), сохраняются самые свежие; текущий вопрос и Candidate Context не удаляются.
 - История не растёт бесконечно: `RecordAnswer` держит максимум `recentTurns` turns.
 
@@ -197,6 +202,7 @@ conversation:
 
 ```go
 type QEntry struct {
+    Idx      int     // АБСОЛЮТНЫЙ номер метки (окно кольца; не сбрасывается при вытеснении)
     Question string
     Answer   []ui.Answer
     State    QState  // QIdle/QQueued/QGenerating/QReady/QFailed
@@ -204,6 +210,29 @@ type QEntry struct {
     Mode     string  // "answer" / "more context" / "simpler"
 }
 ```
+
+### Кольцевой буфер
+
+Таймлайн хранит метки в **кольцевом буфере** вместимости
+`questionTimelineCapacity = 150` (~2 часа интервью при ~1 вопросе/мин):
+
+- `entries` — окно меток; `base` — абсолютный номер `entries[0]` (число
+  вытесненных меток); внутренняя позиция метки = `idx - base` (`rel`).
+- `QEntry.Idx` — **абсолютный** номер метки (с 0), совпадает с тем, что
+  возвращает `Add` и принимают `SetState`/`SetAnswer`/`NextStep`/`SetMode`/
+  `ResetStep`. Вытеснение головы (`evictLocked`: `base++`) не меняет номера
+  оставшихся меток, поэтому задания/шапки по старому абсолютному `idx`
+  продолжают указывать на ту же метку (или корректно игнорируются, если метка
+  вытеснена).
+- `totalAsked` — **абсолютный** счётчик всех `Add` за сессию; `evictLocked` его
+  НЕ сбрасывает, поэтому `TotalAsked() ≥ len(Snapshot())`. На нём строится
+  UI-контракт `ui.Answer.Total` (шапка «N из M» не «схлопывается» на 150-м
+  вопросе).
+- Внутренние позиции `active`/`freshAt` — индексы в `entries`; при вытеснении
+  `evictLocked` сдвигает их на `-1`, а если вытеснена активная метка — `active`
+  указывает на новую голову (ближайшую оставшуюся).
+- Наружу возвращаются только значения/копии: `Active`/`Snapshot`/`SetAnswer`
+  клонируют `Answer`, поэтому вызывающий не может повредить состояние таймлайна.
 
 ### Состояния метки (`QState`)
 
@@ -217,28 +246,46 @@ type QEntry struct {
 
 ### Навигация Prev/Next и tail-follow
 
-- `Active` — индекс активной метки; `Prev`/`Next` (F2/F3) двигают её с **clamp**
-  по границам `[0, total-1]` (на краю — no-op, возвращают `false`).
-- **Tail-follow**: новая метка становится активной **только если до этого активной
-  была хвостовая** (`OnTail`) — иначе пользователь листает историю и новая метка
-  не должна «утаскивать» вид. Если метка добавлена не с хвоста, выставляется флаг
-  `fresh` (`HasFresh`) — в зоне 3 рисуется индикатор `➤` о более свежих метках
-  справа; `ClearFresh` сбрасывает его при возврате к хвосту.
+- `Active` — **абсолютный** индекс активной метки; `Prev`/`Next` (F2/F3)
+  двигают активную позицию с **clamp** по границам окна (на краю — no-op,
+  возвращают `false`).
+- **Tail-follow**: новая метка становится активной **только если до этого
+  активной была прежняя хвостовая** (или таймлайн был пуст) — иначе пользователь
+  листает историю и новая метка не должна «утаскивать» вид. Если метка добавлена
+  не с хвоста, выставляется `freshAt` (внутренний индекс), который отдаётся
+  наружу через `HasFresh() (int, bool)` — в зоне 3 рисуется индикатор `➤` о
+  непросмотренной метке справа (`ui.Answer.HasFresh`).
+- **Сброс индикатора** — `clearFreshOn`, вызываемый из `Prev`/`Next` при
+  попадании на метку `freshAt` (индикатор гаснет, когда пользователь доходит до
+  свежей метки). Публичный `ClearFresh` — явный сброс (используется тестами),
+  активную позицию не меняет.
 - `Snapshot` возвращает **глубокие копии** `QEntry` (включая `Answer`) — worker
   работает со снимком, не гоняясь с мутациями таймлайна.
 
 ### Правило F1 (`HandleDemand`)
 
-Поведение F1 зависит от `State` активной метки:
+Поведение F1 зависит от `State` активной метки. Общий busy-guard: если идёт
+генерация (`busy`, `atomic.Bool`), F1 игнорируется с debug-логом независимо от
+`State` — во время долгой генерации не копятся дубли (см. также
+`HandlePrev`/`HandleNext`).
 
-- **`QIdle`** → ставится задание `CommandAnswer` (`Step` уже указывает на нужную команду).
+- **`QIdle`** → команда берётся из `NextStep(idx)` (шаг 0 всегда
+  `CommandAnswer`), а не хардкодится: `Step` метки мог быть уже сдвинут при
+  постановке авто-ответа (`enqueueQuestion` вызывает `NextStep`) или сброшен
+  `ResetPending`/дропом очереди. `SetState(QQueued)`, `SetMode(modeOf(cmd))`,
+  `enqueueAnswer`.
 - **`QReady`/`QFailed`** → выполняется **следующий шаг цикла** модификаторов:
   `0=CommandAnswer → 1=CommandMoreContext → 2=CommandSimplerEnglish`, далее снова `0`
   (`NextStep` по модулю 3). Итоговый `Step` и `Mode` сохраняются в метке.
-- **`QQueued`/`QGenerating`** → F1 **игнорируется**: коалесинг. Пока `busy`
-  (`atomic`) выставлен, повторные нажатия отбрасываются с debug-логом — во время
-  долгой генерации не копятся дубли. Дополнительно `hotkeyCh` неблокирующ
-  (при переполнении действие дропается).
+- **`QQueued`/`QGenerating`** → F1 **игнорируется**: коалесинг. Дополнительно
+  `hotkeyCh` неблокирующ (при переполнении действие дропается).
+
+**Сброс `Step` при отмене/дропе задания.** Если задание отдано в `Step`-цикле, но
+так и не дошло до LLM (Esc: `ResetPending`; переполнение очереди: `enqueueAnswer`;
+дроп очереди: `dropQueue`), `Step` метки сбрасывается в 0 — иначе следующий F1
+пропустил бы шаг цикла (регрессия A-1). `ResetPending` сбрасывает `Step` только
+у меток, вернувшихся из `QQueued`/`QGenerating` в `QIdle`; `ResetStep(idx)` —
+точечный сброс по абсолютному `idx`.
 
 Команды генерации хранятся **в метке** (`Step`/`Mode`), а не приходят из хоткея:
 прямых биндингов на `CommandMoreContext`/`CommandSimplerEnglish` больше нет.
@@ -250,16 +297,18 @@ F2/F3 вообще не запускают генерацию, только дв
 
 `Cancel` (Esc) отменяет активную генерацию (`activeCancel`) и очищает очередь
 (`cancelled` + `dropQueue`), затем `timeline.ResetPending()` переводит метки
-`QQueued`/`QGenerating` → `QIdle`. **Метки и уже готовые ответы сохраняются**;
-новый вопрос снова включает очередь (флаг `cancelled` снимается).
+`QQueued`/`QGenerating` → `QIdle` и сбрасывает их `Step` в 0 (отменённое задание
+не должно двигать цикл F1 — см. «Правило F1»). **Метки и уже готовые ответы
+сохраняются**; новый вопрос снова включает очередь (флаг `cancelled` снимается).
 
 ### AutoAnswer и RecordAnswer
 
 - `Config.AutoAnswer *bool`: `nil` → **true** (вопрос сразу ставит задание
   `CommandAnswer`); `false` — метка остаётся `QIdle`, ответ генерируется по F1.
-- **`pushHeader`/`RecordAnswer` — только для активной/хвостовой метки.**
-  Шапка в overlay отправляется, если метка задания всё ещё активна
-  (`isActive(idx)`), — устаревший ответ не перезаписывает шапку другого вопроса.
+- **`pushHeaderForState`/`RecordAnswer` — только для активной/хвостовой метки.**
+  Шапка после генерации отправляется через `pushHeaderForState(idx)`: если
+  метка задания хвостовая (`OnTail`), пушится её собственная шапка, иначе —
+  шапка активной метки; устаревший ответ не перезаписывает шапку другого вопроса.
   Ответ пишется в `ConversationHistory` (`RecordAnswer`) **только если метка
   хвостовая** (`OnTail`): иначе ответ на старый вопрос стал бы последним turn'ом
   интервью и сломал бы хронологию conversation context.
@@ -303,7 +352,7 @@ Prompt → LLM → answer
 Что можно добавить, не ломая структуру:
 
 1. **Semantic retrieval** — выбор релевантных проектов/фактов из личной БД → подмешивание в `CandidateContext` (или отдельное поле `RelevantContext`).
-2. **Tokenizer-based оценка** — замена `estimateTokens` на точный tokenizer модели.
+2. **Tokenizer-based оценка** — замена `common.EstimateTokens` на точный tokenizer модели.
 3. **Conversation summary** — LLM-саммари старой истории вместо простого отбрасывания (сейчас — только последние `recent_turns` turns).
 4. **Индексация документов** — личная БД = набор проиндексированных документов (CV, проекты, заметки), по которым ищется контекст под вопрос.
 
