@@ -1585,6 +1585,9 @@ func TestPipeline_ManualInputRouting(t *testing.T) {
 		if ev.Error != nil {
 			t.Errorf("Error = %v, want nil", ev.Error)
 		}
+		if ev.Timestamp.IsZero() {
+			t.Errorf("Timestamp = zero time, want non-zero (manual events must be stamped, was 0001-01-01 in CSV)")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ручное событие не появилось в textStream за 2s")
 	}

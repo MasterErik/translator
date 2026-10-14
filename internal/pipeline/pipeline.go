@@ -589,6 +589,7 @@ func (p *Pipeline) runSTT(ctx context.Context) {
 				Event:     common.EventEndOfTurn,
 				ChannelID: "speaker",
 				Text:      text,
+				Timestamp: time.Now(),
 			}
 			if p.sessLog != nil {
 				if err := p.sessLog.LogText(event); err != nil {
