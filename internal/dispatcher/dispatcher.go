@@ -314,17 +314,39 @@ func (d *Dispatcher) enqueueQuestion(question string) int {
 
 	idx := d.timeline.Add(question)
 
+	// Task 1: шапка метки уходит в overlay сразу, ДО генерации — иначе метка
+	// невидима, пока LLM молчит. Пуш идёт ПОСЛЕ перевода метки в очередь, чтобы
+	// шапка несла State=queued (при tail-follow — каркасная шапка активной
+	// метки; при просмотре истории — шапка остаётся на метке пользователя,
+	// новая только помечается fresh).
+	if d.autoAnswer {
+		d.timeline.SetState(idx, QQueued)
+		// Первый ответ всегда CommandAnswer, но Step метки продвигается вперёд:
+		// следующий F1 после готового авто-ответа сразу даёт CommandMoreContext.
+		d.timeline.NextStep(idx)
+		d.timeline.SetMode(idx, modeAnswer)
+	}
+
+	d.pushHeaderForState(idx)
+
 	if !d.autoAnswer {
 		return idx
 	}
 
-	d.timeline.SetState(idx, QQueued)
-	// Первый ответ всегда CommandAnswer, но Step метки продвигается вперёд:
-	// следующий F1 после готового авто-ответа сразу даёт CommandMoreContext.
-	d.timeline.NextStep(idx)
-	d.timeline.SetMode(idx, modeAnswer)
 	d.enqueueAnswer(answerTask{idx: idx, cmd: translator.CommandAnswer, question: question, fresh: true})
 	return idx
+}
+
+// pushHeaderForState отправляет шапку после изменения состояния метки: при
+// tail-follow — шапку самой метки idx (её новое состояние уже видно в
+// таймлайне), иначе — шапку активной метки пользователя (idx только помечена
+// fresh-индикатором).
+func (d *Dispatcher) pushHeaderForState(idx int) {
+	if d.timeline.OnTail() {
+		d.pushHeader(idx, nil)
+		return
+	}
+	d.pushActiveHeader()
 }
 
 // enqueueAnswer кладёт задание на генерацию в очередь (неблокирующе).
@@ -418,6 +440,13 @@ func (d *Dispatcher) handleHotkeyAction(act HotkeyAction) {
 //   - метка QIdle → первая генерация (всегда CommandAnswer, Step не трогаем);
 //   - метка QReady/QFailed → следующий шаг цикла (more context → simpler → ...).
 func (d *Dispatcher) handleDemand() {
+	// Task 4: F1 после Esc снова включает очередь — иначе задание, поставленное
+	// этим F1, молча дропается воркером (cancelled=true) и метка залипает в
+	// QQueued. Сброс здесь, а не в HandleDemand: только осознанный запрос
+	// пользователя реактивирует очередь (сброс в answerWorker бессмысленен —
+	// он читает флаг до вызова handleDemand).
+	d.cancelled.Store(false)
+
 	idx, entry, ok := d.timeline.Active()
 	if !ok {
 		if d.sessLog != nil {
@@ -522,12 +551,27 @@ func (d *Dispatcher) HandleDemand() {
 }
 
 // HandlePrev — F2: перейти к предыдущей метке таймлайна.
+// Коалесинг: во время генерации (busy) действие дропается — шапку диктует
+// генерация, а сдвиг метки под ней привёл бы к рассинхрону шапки и ответа.
 func (d *Dispatcher) HandlePrev() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: F2 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
 	d.sendHotkey(ActionPrev)
 }
 
 // HandleNext — F3: перейти к следующей метке таймлайна.
+// Коалесинг: см. HandlePrev.
 func (d *Dispatcher) HandleNext() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: F3 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
 	d.sendHotkey(ActionNext)
 }
 

@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,8 +37,9 @@ func startDispatcher(t *testing.T, engine *mockEngine) (*Dispatcher, chan common
 }
 
 // startDispatcherWithOverlay — как startDispatcher, но возвращает overlay для
-// проверки UI-сообщений (шапок AnswerCandidates).
-func startDispatcherWithOverlay(t *testing.T, engine *mockEngine, cfg Config) (*Dispatcher, *mockOverlay, chan common.STTEvent, context.CancelFunc) {
+// проверки UI-сообщений (шапок AnswerCandidates). engine принимает любой
+// AnswerGenerator (mockEngine или blockingEngine).
+func startDispatcherWithOverlay(t *testing.T, engine AnswerGenerator, cfg Config) (*Dispatcher, *mockOverlay, chan common.STTEvent, context.CancelFunc) {
 	t.Helper()
 	overlay := &mockOverlay{}
 	d := New(overlay, engine, &mockLogger{}, cfg)
@@ -68,6 +70,43 @@ func lastCandidates(overlay *mockOverlay) (ui.UIMessage, bool) {
 		}
 	}
 	return last, found
+}
+
+// blockingEngine — LLM-мок, который блокирует генерацию до закрытия release
+// (или отмены ctx). Позволяет проверить состояние UI/таймлайна в момент, когда
+// генерация ещё не завершена. Горутина освобождается через ctx.Done()/release.
+type blockingEngine struct {
+	answers []string
+	release <-chan struct{}
+
+	mu     sync.Mutex
+	calls  []string
+	closed bool
+	done   chan struct{}
+}
+
+func (b *blockingEngine) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
+	b.mu.Lock()
+	b.calls = append(b.calls, req.Question)
+	if b.done == nil {
+		b.done = make(chan struct{})
+	}
+	b.mu.Unlock()
+
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return b.answers, nil
+}
+
+func (b *blockingEngine) Calls() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, len(b.calls))
+	copy(out, b.calls)
+	return out
 }
 
 // snapshotOf возвращает снимок таймлайна под тестовым доступом.
@@ -234,7 +273,25 @@ func TestStaleAnswerDoesNotOverwriteHeader(t *testing.T) {
 	}
 	waitFor(t, func() bool { return len(snapshotOf(d)) == 3 }, 2*time.Second)
 
-	// Уходим на Q1 и запускаем долгую генерацию.
+	// Уходим на Q1 (навигация возможна: генерации ещё нет).
+	d.HandlePrev()
+	d.HandlePrev()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+
+	// Пока Q1 ещё не генерируется, пользователь уходит вперёд на Q3 —
+	// последняя шапка в overlay становится про Q3.
+	d.HandleNext()
+	d.HandleNext()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 2 }, 2*time.Second)
+
+	// Prev/Next отправили шапку Q3 — запомним её (последнее сообщение).
+	waitFor(t, func() bool {
+		msg, ok := lastCandidates(overlay)
+		return ok && len(msg.Answers) > 0 && msg.Answers[0].QuestionIdx == 2
+	}, 2*time.Second)
+
+	// Возвращаемся на Q1 и запускаем долгую генерацию (Task 3: навигация во
+	// время генерации дропается, поэтому уходим назад до её старта).
 	d.HandlePrev()
 	d.HandlePrev()
 	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
@@ -242,16 +299,14 @@ func TestStaleAnswerDoesNotOverwriteHeader(t *testing.T) {
 	// Даём worker'у взять задание Q1 (начинается длинная генерация).
 	waitFor(t, func() bool { return snapshotOf(d)[0].State == QGenerating }, 2*time.Second)
 
-	// Пока Q1 генерируется, пользователь уходит вперёд на Q3.
-	d.HandleNext()
-	d.HandleNext()
+	// Пока Q1 генерируется, пользователь снова уходит вперёд на Q3. Навигация
+	// во время генерации заблокирована (Task 3), поэтому активную метку
+	// выставляем напрямую через таймлайн + шлём шапку — имитируем, что
+	// пользователь ушёл на Q3 ещё до старта генерации.
+	d.timeline.Next()
+	d.timeline.Next()
+	d.pushActiveHeader()
 	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 2 }, 2*time.Second)
-
-	// Prev/Next успели отправить шапку Q3 — запомним её (последнее сообщение).
-	waitFor(t, func() bool {
-		msg, ok := lastCandidates(overlay)
-		return ok && len(msg.Answers) > 0 && msg.Answers[0].QuestionIdx == 2
-	}, 2*time.Second)
 
 	// Ждём завершения генерации Q1.
 	waitFor(t, func() bool { return snapshotOf(d)[0].State == QReady }, 2*time.Second)
@@ -446,6 +501,213 @@ func TestAutoAnswerFalseRegenerationDoesNotAddTurn(t *testing.T) {
 	}
 	if recent[0].Question != "Tell me about Project X." {
 		t.Errorf("вопрос в истории: %q", recent[0].Question)
+	}
+}
+
+// ── Task 1: немедленная шапка при обнаружении вопроса ────────────────────
+
+// TestEnqueueQuestionPushesHeaderImmediately — Task 1: шапка метки уходит в
+// overlay сразу при обнаружении вопроса, ДО завершения генерации. При
+// блокированном LLM-моке overlay должен получить AnswerCandidates с State
+// queued (AutoAnswer=true: задание поставлено) либо idle (AutoAnswer=false:
+// метка ждёт F1) — иначе метка невидима для пользователя, пока молчит LLM.
+func TestEnqueueQuestionPushesHeaderImmediately(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	// release блокирует мок LLM: генерация не завершится до конца теста.
+	release := make(chan struct{})
+	defer close(release)
+	engine := &blockingEngine{release: release}
+
+	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Tell me about Project X.")
+
+	// Шапка появляется до какой-либо генерации (release ещё не закрыт).
+	waitFor(t, func() bool {
+		msg, ok := lastCandidates(overlay)
+		return ok && len(msg.Answers) > 0
+	}, 2*time.Second)
+
+	msg, _ := lastCandidates(overlay)
+	a := msg.Answers[0]
+	if a.QuestionIdx != 0 {
+		t.Errorf("QuestionIdx шапки = %d, ожидался 0", a.QuestionIdx)
+	}
+	if a.Total != 1 {
+		t.Errorf("Total шапки = %d, ожидался 1", a.Total)
+	}
+	if a.QuestionText != "Tell me about Project X." {
+		t.Errorf("QuestionText шапки = %q, ожидался текст вопроса", a.QuestionText)
+	}
+	if a.Source != "" || a.Target != "" {
+		t.Errorf("каркасная шапка несёт текст ответа: Source=%q Target=%q", a.Source, a.Target)
+	}
+
+	// AutoAnswer=false: LLM не вызывался, метка ждёт F1 → idle.
+	if calls := engine.Calls(); len(calls) != 0 {
+		t.Fatalf("AutoAnswer=false: вызовов LLM %d, ожидалось 0", len(calls))
+	}
+	if snap := snapshotOf(d); len(snap) != 1 || snap[0].State != QIdle {
+		t.Fatalf("состояние метки = %+v, ожидалось QIdle", snap)
+	}
+	if a.State != QIdle.String() {
+		t.Errorf("State шапки = %q, ожидался %q", a.State, QIdle.String())
+	}
+}
+
+// TestEnqueueQuestionHeaderQueuedWhileGenerating — Task 1 + AutoAnswer=true:
+// шапка уходит с State=queued сразу, ещё до того как worker возьмёт задание
+// (генерация заблокирована моком LLM).
+func TestEnqueueQuestionHeaderQueuedWhileGenerating(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	engine := &blockingEngine{release: release}
+
+	_, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig())
+	defer cancel()
+
+	textStream <- question("Tell me about Project X.")
+
+	// Ждём старта генерации (мок получил запрос и заблокировался).
+	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
+
+	// К моменту старта генерации шапка уже должна была уйти в overlay.
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка не отправлена при обнаружении вопроса: %+v", msg)
+	}
+	if st := msg.Answers[0].State; st != QQueued.String() && st != QGenerating.String() {
+		t.Errorf("State шапки = %q, ожидался %q или %q (шапка должна уйти ПОСЛЕ перевода метки в очередь)", st, QQueued.String(), QGenerating.String())
+	}
+	if len(msg.Answers[0].Source) != 0 {
+		t.Errorf("до завершения генерации в шапке появился текст ответа: %q", msg.Answers[0].Source)
+	}
+}
+
+// ── Task 3: Prev/Next игнорируются во время генерации ────────────────────
+
+// TestPrevNextIgnoredDuringGeneration — Task 3: пока worker генерирует
+// (busy), HandlePrev/HandleNext дропаются (как HandleDemand). После
+// разблокировки LLM активная метка не сдвигается.
+func TestPrevNextIgnoredDuringGeneration(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	release := make(chan struct{})
+	engine := &blockingEngine{answers: []string{"EN: answer | RU: ответ"}, release: release}
+
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Q1?")
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QIdle
+	}, 2*time.Second)
+
+	d.HandleDemand()
+	// Генерация началась и заблокирована.
+	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
+	waitFor(t, func() bool { return d.busy.Load() }, 2*time.Second)
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QGenerating
+	}, 2*time.Second)
+
+	// Пока идёт генерация, сдвигаем таймлайн вперёд (метка Q1 активна, Prev
+	// доступен — но защёлкивается busy-guard'ом).
+	d.HandlePrev()
+	d.HandleNext()
+	time.Sleep(100 * time.Millisecond)
+
+	// Разблокируем LLM и ждём завершения генерации.
+	close(release)
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QReady
+	}, 2*time.Second)
+	// Даём worker'у разгрести возможные отложенные Prev/Next.
+	time.Sleep(100 * time.Millisecond)
+
+	if idx, _, _ := d.timeline.Active(); idx != 0 {
+		t.Errorf("активная метка сдвинулась во время генерации: idx = %d, ожидался 0", idx)
+	}
+}
+
+// ── Task 4: F1 после Esc снова доступен ──────────────────────────────────
+
+// TestHandleDemandResetsCancelledAfterEsc — Task 4: Esc отменяет активную
+// генерацию (cancelled=true). Последовательность Esc → F1 → F1 должна
+// снова довести метку до QReady: handleDemand сбрасывает cancelled, иначе
+// второе задание молча дропается воркером и метка навсегда остаётся QQueued.
+func TestHandleDemandResetsCancelledAfterEsc(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	release := make(chan struct{})
+	engine := &blockingEngine{answers: []string{"EN: A | RU: A"}, release: release}
+
+	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Q1?")
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QIdle
+	}, 2*time.Second)
+
+	d.HandleDemand()
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QGenerating
+	}, 2*time.Second)
+
+	// Esc: активная генерация отменяется, cancelled=true.
+	d.Cancel()
+	waitFor(t, func() bool { return d.cancelled.Load() }, 2*time.Second)
+	// Ждём, пока worker обработает отмену (busy снимется, метка → QIdle) —
+	// иначе следующий F1 защёлкнется busy-guard'ом самого HandleDemand.
+	waitFor(t, func() bool { return !d.busy.Load() }, 2*time.Second)
+	waitFor(t, func() bool { return snapshotOf(d)[0].State == QIdle }, 2*time.Second)
+
+	// F1 после Esc сбрасывает cancelled и снова ставит задание; генерация
+	// снова блокируется моком (release ещё открыт).
+	d.HandleDemand()
+	waitFor(t, func() bool { return d.busy.Load() }, 2*time.Second)
+
+	if d.cancelled.Load() {
+		t.Error("handleDemand не сбросил cancelled после Esc")
+	}
+
+	// Второй F1 во время генерации — коалесинг, но cancelled НЕ должен
+	// вернуться в true (иначе последующая метка залипнет).
+	d.HandleDemand()
+	if d.cancelled.Load() {
+		t.Error("F1 во время генерации вновь выставил cancelled")
+	}
+
+	// Разблокируем LLM: ответ должен дойти до overlay и метка стать QReady.
+	close(release)
+
+	waitFor(t, func() bool {
+		msg, ok := lastCandidates(overlay)
+		return ok && len(msg.Answers) > 0 && msg.Answers[0].State == QReady.String()
+	}, 3*time.Second)
+
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QReady
+	}, 3*time.Second)
+
+	msg, _ := lastCandidates(overlay)
+	if msg.Answers[0].Source != "EN: A" {
+		t.Errorf("ответ в overlay = %q, ожидался EN: A", msg.Answers[0].Source)
 	}
 }
 
