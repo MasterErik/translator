@@ -41,3 +41,6 @@ Thumbs.db
 # Go
 vendor/
 condidate/
+
+# Hermes local plans (not committed)
+.hermes/plans/
