@@ -12,6 +12,7 @@ import (
 
 	"github.com/mastererik/translator/internal/common"
 	"github.com/mastererik/translator/internal/dispatcher"
+	"github.com/mastererik/translator/internal/hotkey"
 	"github.com/mastererik/translator/internal/logger"
 	"github.com/mastererik/translator/internal/translator"
 	"github.com/mastererik/translator/internal/ui"
@@ -1374,4 +1375,162 @@ func TestPipeline_ShutdownGoroutineLeak(t *testing.T) {
 	if delta > 2 || delta < -2 {
 		t.Errorf("возможна утечка горутин: delta=%d (допуск ±2)", delta)
 	}
+}
+
+// =========================================================================
+// TestPipelineHotkeyRoutesShiftToClarify — Б-T3: Shift+F2/F3 в handleHotkey
+// маршрутизируются в Dispatcher.HandleClarify/HandleUnclarify.
+//
+// Проверка black-box: событие EndOfTurn интервьюера копится как lastFinal,
+// затем вызов p.handleHotkey(hotkey.KeyShiftF2) должен породить шапку метки
+// с уточнением (ui.AnswerCandidates → ui.Answer.Clarifications). Сценарий
+// F2 (навигация) для того же события уточнения не создаёт — что доказывает
+// различие маршрутов Shift+F2 и F2.
+// =========================================================================
+
+// startPipelineWithDispatch запускает dispatcher пайплайна в фоне и возвращает
+// cancel. textStream доступен как p.textStream.
+func startPipelineWithDispatch(t *testing.T, p *Pipeline) context.CancelFunc {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	go p.dispatch.Run(ctx, p.textStream, p.dispatchDone)
+	return cancel
+}
+
+// endOfTurn — финальное событие интервьюера.
+func endOfTurn(text string) common.STTEvent {
+	return common.STTEvent{
+		Event:     common.EventEndOfTurn,
+		ChannelID: "speaker",
+		Text:      text,
+		Timestamp: time.Now(),
+	}
+}
+
+// lastAnswerClarifications возвращает уточнения ПОСЛЕДНЕЙ шапки AnswerCandidates
+// (даже если пустые) — так видно и снятие уточнения.
+func lastAnswerClarifications(ovl *mockOverlay) []string {
+	var clar []string
+	found := false
+	for _, m := range ovl.GetMessages() {
+		if m.Type != ui.AnswerCandidates || len(m.Answers) == 0 {
+			continue
+		}
+		clar = m.Answers[0].Clarifications
+		found = true
+	}
+	if !found {
+		return nil
+	}
+	return clar
+}
+
+func TestPipelineHotkeyRoutesShiftF2ToClarify(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+	cancel := startPipelineWithDispatch(t, p)
+	defer cancel()
+
+	// Вопрос создаёт метку таймлайна, вторая фраза — кандидат уточнения.
+	p.textStream <- endOfTurn("Какой у вас опыт с Go?")
+	p.textStream <- endOfTurn("Имею в виду распределённые системы.")
+
+	// Ждём появления метки (шапка AnswerCandidates).
+	waitForCond(t, func() bool {
+		for _, m := range ovl.GetMessages() {
+			if m.Type == ui.AnswerCandidates && len(m.Answers) > 0 {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+
+	// Shift+F2 → HandleClarify: lastFinal прикрепляется уточнением.
+	p.handleHotkey(hotkey.KeyShiftF2)
+	waitForCond(t, func() bool {
+		return len(lastAnswerClarifications(ovl)) == 1
+	}, 2*time.Second)
+
+	if got := lastAnswerClarifications(ovl); len(got) != 1 || got[0] != "Имею в виду распределённые системы." {
+		t.Fatalf("уточнение Shift+F2 = %v, ожидалось [Имею в виду распределённые системы.]", got)
+	}
+}
+
+// TestPipelineHotkeyF2DoesNotClarify — чистая F2 (HandlePrev) НЕ добавляет
+// уточнение: маршруты Shift+F2 и F2 различны.
+func TestPipelineHotkeyF2DoesNotClarify(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+	cancel := startPipelineWithDispatch(t, p)
+	defer cancel()
+
+	p.textStream <- endOfTurn("Какой у вас опыт с Go?")
+	p.textStream <- endOfTurn("Имею в виду распределённые системы.")
+
+	waitForCond(t, func() bool {
+		for _, m := range ovl.GetMessages() {
+			if m.Type == ui.AnswerCandidates && len(m.Answers) > 0 {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+
+	// F2 (не Shift+F2) → HandlePrev: уточнение не создаётся.
+	p.handleHotkey(hotkey.KeyF2)
+	time.Sleep(100 * time.Millisecond)
+	if got := lastAnswerClarifications(ovl); len(got) != 0 {
+		t.Fatalf("чистая F2 добавила уточнение %v — маршрут Shift+F2 не отделён", got)
+	}
+}
+
+// TestPipelineHotkeyShiftF3Unclarify — Shift+F3 после Shift+F2 снимает уточнение.
+func TestPipelineHotkeyShiftF3Unclarify(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+	cancel := startPipelineWithDispatch(t, p)
+	defer cancel()
+
+	p.textStream <- endOfTurn("Какой у вас опыт с Go?")
+	p.textStream <- endOfTurn("Имею в виду распределённые системы.")
+
+	waitForCond(t, func() bool {
+		for _, m := range ovl.GetMessages() {
+			if m.Type == ui.AnswerCandidates && len(m.Answers) > 0 {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+
+	// Shift+F2 → уточнение добавлено.
+	p.handleHotkey(hotkey.KeyShiftF2)
+	waitForCond(t, func() bool { return len(lastAnswerClarifications(ovl)) == 1 }, 2*time.Second)
+
+	// Shift+F3 → HandleUnclarify: уточнение снято.
+	p.handleHotkey(hotkey.KeyShiftF3)
+	waitForCond(t, func() bool { return len(lastAnswerClarifications(ovl)) == 0 }, 2*time.Second)
+}
+
+// waitForCond — терминальное ожидание условия (локальный хелпер тестов
+// маршрутизации, чтобы не тянуть waitFor из пакета dispatcher).
+func waitForCond(t *testing.T, cond func() bool, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("условие не выполнено до таймаута")
 }

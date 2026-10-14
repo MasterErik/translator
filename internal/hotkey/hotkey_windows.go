@@ -11,7 +11,16 @@ import (
 	"unsafe"
 )
 
-// Виртуальные коды клавиш и сообщения WM_*.
+// idShiftF2/idShiftF3 — идентификаторы биндингов уточнений. Взяты из чужого
+// диапазона (1001/1002), а не из Key: KeyShiftF2/KeyShiftF3 — это внутренние
+// ключи маршрутизации, а WM_HOTKEY приносит именно зарегистрированный id.
+// Диапазон Key (0..6) и диапазон id (1001/1002) не пересекаются — инцидент с
+// дублем id (26cc31d) не повторится.
+const (
+	idShiftF2 = 1001
+	idShiftF3 = 1002
+)
+
 const (
 	vkF1  = 0x70
 	vkF2  = 0x71
@@ -31,6 +40,10 @@ const (
 	// modNorepeat — MOD_NOREPEAT (Windows Vista+): подавляет автоповтор
 	// WM_HOTKEY при удержании клавиши.
 	modNorepeat = 0x4000
+
+	// modShift — MOD_SHIFT (0x0004): модификатор Shift для биндингов уточнений
+	// Shift+F2/Shift+F3 (план, Б-T3).
+	modShift = 0x0004
 )
 
 var (
@@ -63,13 +76,41 @@ type hotkeyBinding struct {
 }
 
 // Все биндинги регистрируются с MOD_NOREPEAT: тумблер (F4) и Esc тоже
-// не должны спамиться при удержании клавиши.
+// не должны спамиться при удержании клавиши. Биндинги уточнений (1001/1002)
+// несут modShift|modNorepeat и те же vk, что чистые F2/F3 — модификатор
+// различает комбинации для Windows (пары (mods, vk) уникальны).
 var bindings = []hotkeyBinding{
 	{int32(KeyF1), modNorepeat, vkF1},
 	{int32(KeyF2), modNorepeat, vkF2},
 	{int32(KeyF3), modNorepeat, vkF3},
 	{int32(KeyF4), modNorepeat, vkF4},
 	{int32(KeyEsc), modNorepeat, vkEsc},
+	{int32(idShiftF2), modShift | modNorepeat, vkF2},
+	{int32(idShiftF3), modShift | modNorepeat, vkF3},
+}
+
+// keyForID мапит зарегистрированный id биндинга на внутренний Key. Диапазоны
+// не пересекаются: Key 0..4 — чистые F1–F4/Esc (id == Key), 1001/1002 —
+// Shift-уточнения. Неизвестный id → нет второго значения (окно не шлёт чужих).
+func keyForID(id int32) (Key, bool) {
+	switch id {
+	case int32(KeyF1):
+		return KeyF1, true
+	case int32(KeyF2):
+		return KeyF2, true
+	case int32(KeyF3):
+		return KeyF3, true
+	case int32(KeyF4):
+		return KeyF4, true
+	case int32(KeyEsc):
+		return KeyEsc, true
+	case idShiftF2:
+		return KeyShiftF2, true
+	case idShiftF3:
+		return KeyShiftF3, true
+	default:
+		return 0, false
+	}
 }
 
 // postThreadMessage отправляет сообщение в очередь текущего потока и проверяет
@@ -160,9 +201,10 @@ func Run(ctx context.Context, onKey func(Key)) error {
 			return nil
 		}
 		if m.message == wmHotkey {
-			switch Key(m.wParam) {
-			case KeyF1, KeyF2, KeyF3, KeyF4, KeyEsc:
-				onKey(Key(m.wParam))
+			// WM_HOTKEY.wParam — зарегистрированный id; мапим его на Key.
+			// Чистые F1–F4/Esc имеют id == Key, уточнения — 1001/1002.
+			if k, ok := keyForID(int32(m.wParam)); ok {
+				onKey(k)
 			}
 		}
 	}

@@ -622,8 +622,10 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 	p.dispatch.Run(ctx, p.textStream, p.dispatchDone)
 }
 
-// runHotkeys запускает глобальные hotkeys (F1–F4, Esc) и маршрутизирует их
-// в dispatcher: F1–F3 → HandleDemand/Prev/Next, Esc → Cancel.
+// runHotkeys запускает глобальные hotkeys (F1–F4, Esc, Shift+F2/F3) и
+// маршрутизирует их в dispatcher: F1–F3 → HandleDemand/Prev/Next,
+// Shift+F2/F3 → HandleClarify/HandleUnclarify (уточнения, план Б-T3),
+// Esc → Cancel.
 //
 // По завершении (в т.ч. при штатной отмене ctx) сигнализирует hotkeyDone,
 // чтобы shutdown мог дождаться выхода Run и не оставить висящую goroutine (B-2).
@@ -644,7 +646,9 @@ func (p *Pipeline) runHotkeys(ctx context.Context) {
 
 // handleHotkey маппит функциональную клавишу на действие диспетчера.
 // Раскладка: F1 — ответить (HandleDemand), F2 — предыдущий вопрос (HandlePrev),
-// F3 — следующий вопрос (HandleNext), F4 — тумблер окна истории оригиналов.
+// F3 — следующий вопрос (HandleNext),
+// Shift+F2 — добавить уточнение (HandleClarify), Shift+F3 — убрать последнее
+// уточнение (HandleUnclarify), F4 — тумблер окна истории оригиналов.
 // F4 работает без dispatcher и маршрутизируется прямо в overlay.
 func (p *Pipeline) handleHotkey(k hotkey.Key) {
 	switch k {
@@ -652,7 +656,8 @@ func (p *Pipeline) handleHotkey(k hotkey.Key) {
 		if p.overlay != nil {
 			p.overlay.ToggleTranscriptionHistory()
 		}
-	case hotkey.KeyF1, hotkey.KeyF2, hotkey.KeyF3, hotkey.KeyEsc:
+	case hotkey.KeyF1, hotkey.KeyF2, hotkey.KeyF3, hotkey.KeyEsc,
+		hotkey.KeyShiftF2, hotkey.KeyShiftF3:
 		if p.dispatch == nil {
 			return
 		}
@@ -663,6 +668,10 @@ func (p *Pipeline) handleHotkey(k hotkey.Key) {
 			p.dispatch.HandlePrev()
 		case hotkey.KeyF3:
 			p.dispatch.HandleNext()
+		case hotkey.KeyShiftF2:
+			p.dispatch.HandleClarify()
+		case hotkey.KeyShiftF3:
+			p.dispatch.HandleUnclarify()
 		case hotkey.KeyEsc:
 			p.dispatch.Cancel()
 		}
