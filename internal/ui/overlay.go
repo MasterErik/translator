@@ -507,6 +507,21 @@ type answerLine struct {
 // отличимый от белого (Interim/подсказки) и зелёного (перевод подсказки).
 var layoutErrorColor = color.NRGBA{R: 255, G: 96, B: 96, A: 255}
 
+// Цвета меток ленты вопросов по состоянию (Task 2): сигнализация статуса
+// вопроса по цвету, различимая не только прозрачностью.
+var (
+	// questionPendingColor — янтарный: вопрос отправлен/генерируется (queued/generating).
+	questionPendingColor = color.NRGBA{R: 200, G: 200, B: 120, A: 255}
+	// questionReadyColor — зелёный: ответ готов (ready).
+	questionReadyColor = color.NRGBA{R: 120, G: 200, B: 120, A: 255}
+	// questionIdleColor — серый: ответ ещё не запрошен (idle/неизвестное состояние).
+	questionIdleColor = color.NRGBA{R: 160, G: 160, B: 180, A: 255}
+)
+
+// markInactiveAlpha — прозрачность неактивной метки ленты: приглушает оттенок
+// состояния, сохраняя его различимость (активная — A=255).
+const markInactiveAlpha = 200
+
 // ── Task 5: таймлайн вопросов в зоне 3 ──
 
 // questionStripMaxVisible — максимум одновременно видимых меток [1][2]… в ленте.
@@ -642,27 +657,57 @@ func layoutMarksRow(gtx layout.Context, th *material.Theme, answers []Answer, me
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
 }
 
-// layoutMark рисует одну метку «[N]маркер». Активная — белым, остальные — серым.
-// Маркер состояния берётся из Answer этой метки (если dispatcher прислал только
-// шапку — у активной метки известен лишь её State; остальные получают ○/…).
+// layoutMark рисует одну метку «[N]маркер». Цвет задаётся состоянием метки
+// (questionMarkColor): янтарный — генерация, зелёный — готово, красный — ошибка,
+// серый — idle; активная метка ярче, неактивные приглушены (alpha). Маркер
+// состояния берётся из Answer этой метки (если dispatcher прислал только шапку —
+// у активной метки известен лишь её State; остальные получают ○/…).
 func layoutMark(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, idx int, active bool, fs int) layout.Dimensions {
-	mark := "○"
+	return markLabelStyle(th, answers, meta, idx, active, fs).Layout(gtx)
+}
+
+// markLabelStyle собирает стилизованный лейбл метки «[N]маркер»: маркер и цвет —
+// из состояния Answer этой метки (единая точка выбора цвета рендера метки;
+// выделено для юнит-тестов цвета без обхода op-потока Gio).
+func markLabelStyle(th *material.Theme, answers []Answer, meta Answer, idx int, active bool, fs int) material.LabelStyle {
+	state := ""
 	if a, ok := answerByQuestionIdx(answers, idx); ok {
-		if a.State != "" {
-			mark = questionStateMark(a.State)
-		}
+		state = a.State
+	}
+	mark := "○"
+	if state != "" {
+		mark = questionStateMark(state)
 	} else if meta.Total > 0 && idx < meta.QuestionIdx {
 		// Метка «слева» от активной уже отжила — готовый ответ или без статуса.
 		mark = "○"
 	}
 	text := "[" + fmt.Sprintf("%d", idx+1) + "]" + mark
 	l := overlayLabel(th, unit.Sp(smallFontSize(fs)), text)
-	if active {
-		l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-	} else {
-		l.Color = color.NRGBA{R: 160, G: 160, B: 180, A: 255}
+	l.Color = questionMarkColor(state, active)
+	return l
+}
+
+// questionMarkColor — цвет метки ленты по состоянию вопроса: янтарный для
+// queued/generating, зелёный для ready, красный (layoutErrorColor) для failed,
+// серый для idle/неизвестного. Активная метка — непрозрачная (A=255), неактивная
+// приглушена (A=markInactiveAlpha) тем же оттенком: сигнализация состояния
+// читается и на невыделенной метке.
+func questionMarkColor(state string, active bool) color.NRGBA {
+	c := questionIdleColor
+	switch state {
+	case "queued", "generating":
+		c = questionPendingColor
+	case "ready":
+		c = questionReadyColor
+	case "failed":
+		c = layoutErrorColor
 	}
-	return l.Layout(gtx)
+	if active {
+		c.A = 255
+	} else {
+		c.A = markInactiveAlpha
+	}
+	return c
 }
 
 // answerByQuestionIdx ищет Answer по индексу вопроса портала.

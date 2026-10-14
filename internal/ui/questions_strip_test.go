@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -248,6 +249,149 @@ func TestQuestionStripManyMarks(t *testing.T) {
 	}
 	if win := visibleWindow(meta.QuestionIdx, meta.Total, questionStripMaxVisible); len(win) > questionStripMaxVisible {
 		t.Errorf("окно меток len=%d > %d", len(win), questionStripMaxVisible)
+	}
+}
+
+// ── Цветовая сигнализация состояний меток (Task 2) ──
+
+// questionStripTestColors — цвета меток ленты по контракту Task 2: янтарный для
+// queued/generating, зелёный для ready, красный (layoutErrorColor) для failed,
+// серый для idle/неизвестного.
+var questionStripTestColors = map[string]color.NRGBA{
+	"queued":     {R: 200, G: 200, B: 120, A: 255},
+	"generating": {R: 200, G: 200, B: 120, A: 255},
+	"ready":      {R: 120, G: 200, B: 120, A: 255},
+	"failed":     {R: 255, G: 96, B: 96, A: 255},   // layoutErrorColor
+	"idle":       {R: 160, G: 160, B: 180, A: 255}, // серый
+	"":           {R: 160, G: 160, B: 180, A: 255},
+	"unknown":    {R: 160, G: 160, B: 180, A: 255},
+}
+
+// TestQuestionMarkColorByState — чистая функция цвета метки: оттенок задаётся
+// состоянием метки; активная метка — непрозрачная (A=255), неактивная приглушена
+// (A≈200), оттенок при этом НЕ меняется.
+func TestQuestionMarkColorByState(t *testing.T) {
+	for state, want := range questionStripTestColors {
+		t.Run(state, func(t *testing.T) {
+			// Активная: полная непрозрачность.
+			gotActive := questionMarkColor(state, true)
+			if gotActive != want {
+				t.Errorf("questionMarkColor(%q, active=true) = %+v, want %+v", state, gotActive, want)
+			}
+			// Неактивная: тот же оттенок (R/G/B), но приглушённая A.
+			gotInactive := questionMarkColor(state, false)
+			if gotInactive.R != want.R || gotInactive.G != want.G || gotInactive.B != want.B {
+				t.Errorf("Неактивная метка %q: R/G/B = {%d,%d,%d}, want {%d,%d,%d} (оттенок не меняется)",
+					state, gotInactive.R, gotInactive.G, gotInactive.B, want.R, want.G, want.B)
+			}
+			if gotInactive.A >= gotActive.A {
+				t.Errorf("Неактивная метка %q: A = %d, want < %d (приглушение)",
+					state, gotInactive.A, gotActive.A)
+			}
+			if gotInactive.A == 0 {
+				t.Errorf("Неактивная метка %q: A = 0 (невидима), want > 0", state)
+			}
+		})
+	}
+}
+
+// TestQuestionMarkColorDistinctStates — состояния РАЗЛИЧИМЫ по цвету: пары
+// (queued/generating), ready, failed, idle дают разные оттенки (не только
+// прозрачность) — сигнализация читается.
+func TestQuestionMarkColorDistinctStates(t *testing.T) {
+	states := []string{"queued", "ready", "failed", "idle"}
+	for i := 0; i < len(states); i++ {
+		for j := i + 1; j < len(states); j++ {
+			a := questionMarkColor(states[i], true)
+			b := questionMarkColor(states[j], true)
+			if a.R == b.R && a.G == b.G && a.B == b.B {
+				t.Errorf("Состояния %q и %q неразличимы по цвету: оба %+v", states[i], states[j], a)
+			}
+		}
+	}
+}
+
+// TestQuestionMarkLabelColorByState — цвет лейбла метки из РЕАЛЬНОГО пути
+// рендера (markLabelStyle, используемого layoutMark): state берётся из Answer
+// метки (answerByQuestionIdx), активная — A=255, неактивная — приглушена.
+func TestQuestionMarkLabelColorByState(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	for state, want := range questionStripTestColors {
+		t.Run(state, func(t *testing.T) {
+			answers := []Answer{{QuestionIdx: 2, Total: 5, State: state, Mode: "answer"}}
+			meta := Answer{QuestionIdx: 2, Total: 5, State: state}
+
+			active := markLabelStyle(th, answers, meta, 2, true, fs)
+			if active.Color != want {
+				t.Errorf("активная метка state=%q: цвет = %+v, want %+v", state, active.Color, want)
+			}
+			active.Color.A = 255 // нормализация не нужна, но фиксируем контракт
+
+			inactive := markLabelStyle(th, answers, meta, 2, false, fs)
+			if inactive.Color.R != want.R || inactive.Color.G != want.G || inactive.Color.B != want.B {
+				t.Errorf("неактивная метка state=%q: оттенок = {%d,%d,%d}, want {%d,%d,%d}",
+					state, inactive.Color.R, inactive.Color.G, inactive.Color.B, want.R, want.G, want.B)
+			}
+			if inactive.Color.A >= 255 {
+				t.Errorf("неактивная метка state=%q: A = %d, want < 255 (приглушение)",
+					state, inactive.Color.A)
+			}
+			if inactive.Color.A != markInactiveAlpha {
+				t.Errorf("неактивная метка state=%q: A = %d, want %d", state, inactive.Color.A, markInactiveAlpha)
+			}
+		})
+	}
+}
+
+// TestQuestionMarkLabelColorMarkMatchesState — лейбл метки несёт и ЦВЕТ, и
+// МАРКЕР состояния: generating → «…», ready → «●», failed → «!», idle → «○».
+func TestQuestionMarkLabelColorMarkMatchesState(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+	cases := map[string]string{
+		"generating": "…",
+		"queued":     "…",
+		"ready":      "●",
+		"failed":     "!",
+		"idle":       "○",
+	}
+	for state, wantMark := range cases {
+		answers := []Answer{{QuestionIdx: 1, Total: 3, State: state}}
+		meta := Answer{QuestionIdx: 1, Total: 3, State: state}
+		l := markLabelStyle(th, answers, meta, 1, true, fs)
+		if !strings.Contains(l.Text, wantMark) {
+			t.Errorf("state=%q: лейбл %q не содержит маркер %q", state, l.Text, wantMark)
+		}
+		if !strings.Contains(l.Text, "[2]") {
+			t.Errorf("state=%q: лейбл %q не содержит номер метки [2]", state, l.Text)
+		}
+	}
+}
+
+// TestQuestionStripRendersStateColors — полный рендер ленты (layoutQuestionStrip)
+// с метками в разных состояниях не паникует и занимает высоту строки; активная
+// метка несёт янтарный цвет генерации (проверяем через markLabelStyle на тех же
+// данных, что рендерит лента).
+func TestQuestionStripRendersStateColors(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	const active, total = 2, 5
+	ans := []Answer{
+		{Source: "EN", Target: "RU", QuestionIdx: active, Total: total, State: "generating", Mode: "answer"},
+	}
+	gtx, _ := newLabelContext(800)
+	dims := layoutQuestionStrip(gtx, th, ans, Answer{QuestionIdx: active, Total: total, State: "generating"}, fs)
+	if dims.Size.Y <= 0 {
+		t.Fatalf("layoutQuestionStrip высота = %d, want > 0", dims.Size.Y)
+	}
+
+	l := markLabelStyle(th, ans, Answer{QuestionIdx: active, Total: total, State: "generating"}, active, true, fs)
+	want := color.NRGBA{R: 200, G: 200, B: 120, A: 255}
+	if l.Color != want {
+		t.Errorf("активная метка generating: цвет = %+v, want янтарный %+v", l.Color, want)
 	}
 }
 
