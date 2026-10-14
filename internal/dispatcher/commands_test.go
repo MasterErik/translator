@@ -25,6 +25,23 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	t.Fatal("условие не выполнено до таймаута")
 }
 
+// waitIdle ожидает, пока worker закончит текущую генерацию (busy=false) и
+// очередь заданий опустеет. Замена фиксированного time.Sleep после серии
+// входных событий: даёт детерминированную точку «всё обработано», не завязываясь
+// на скорость машины (флак-риск D7).
+func waitIdle(t *testing.T, d *Dispatcher) {
+	t.Helper()
+	waitFor(t, func() bool {
+		return !d.busy.Load() && len(d.answerCh) == 0
+	}, 2*time.Second)
+}
+
+// waitMessages ожидает, пока overlay накопит хотя бы n сообщений.
+func waitMessages(t *testing.T, overlay *mockOverlay, n int) {
+	t.Helper()
+	waitFor(t, func() bool { return len(overlay.GetMessages()) >= n }, 2*time.Second)
+}
+
 // startDispatcher запускает Dispatcher.Run в фоне и возвращает его,
 // textStream и cancel для завершения.
 func startDispatcher(t *testing.T, engine *mockEngine) (*Dispatcher, chan common.STTEvent, context.CancelFunc) {
@@ -321,6 +338,107 @@ func TestStaleAnswerDoesNotOverwriteHeader(t *testing.T) {
 	if msg.Answers[0].QuestionIdx != 2 {
 		t.Errorf("шапку перезаписал устаревший ответ: QuestionIdx = %d, ожидался 2 (Q3)", msg.Answers[0].QuestionIdx)
 	}
+}
+
+// TestNavigationDuringGenerationIgnoredAnswerToCorrectLabel (D6) — РЕАЛЬНЫЙ путь
+// навигации (публичные HandleNext/HandlePrev), а не прямая мутация таймлайна:
+//
+//  1. навигация во время генерации игнорируется busy-guard'ом (метка НЕ едет);
+//  2. ответ приходит в метку своего задания (Q1), шапка активного вопроса не
+//     перезаписывается ответом чужой метки;
+//  3. после генерации навигация снова работает (игнор был именно busy-guard,
+//     а не залипание).
+//
+// Дополняет синтетический TestStaleAnswerDoesNotOverwriteHeader.
+func TestNavigationDuringGenerationIgnoredAnswerToCorrectLabel(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	release := make(chan struct{})
+	engine := &blockingEngine{answers: []string{"EN: Q1 answer | RU: ответ Q1"}, release: release}
+
+	overlay := &mockOverlay{}
+	logger := &mockLogger{}
+	d := New(overlay, engine, logger, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	textStream := make(chan common.STTEvent, 8)
+	done := make(chan struct{}, 1)
+	go d.Run(ctx, textStream, done)
+
+	// Создаём Q1, Q2, Q3 (генерации нет — AutoAnswer=false).
+	for _, q := range []string{"Q1?", "Q2?", "Q3?"} {
+		textStream <- question(q)
+	}
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 3 }, 2*time.Second)
+
+	// Реальная навигация назад на Q1 (публичный API, генерации нет → работает).
+	d.HandlePrev()
+	d.HandlePrev()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+
+	// Запускаем генерацию Q1 и удерживаем её (busy) через blockingEngine.
+	d.HandleDemand()
+	waitFor(t, func() bool { return d.busy.Load() }, 2*time.Second)
+	if idx, _, _ := d.timeline.Active(); idx != 0 {
+		t.Fatalf("активная метка до навигации = %d, ожидалась 0", idx)
+	}
+
+	// Пока генерация идёт — реальная навигация (HandleNext×2 → на Q3) ДОЛЖНА
+	// быть проигнорирована busy-guard'ом: активная метка остаётся Q1.
+	d.HandleNext()
+	d.HandleNext()
+
+	// Ждём коалесинг-лог (детерминированно, без sleep): навигация отброшена.
+	waitFor(t, func() bool {
+		return logger.HasDebug("F3 во время генерации пропущен (коалесинг)")
+	}, 2*time.Second)
+
+	if idx, _, _ := d.timeline.Active(); idx != 0 {
+		t.Errorf("навигация во время генерации НЕ игнорирована: активная метка = %d, ожидалась 0 (Q1)", idx)
+	}
+
+	// Освобождаем генерацию Q1.
+	close(release)
+	waitFor(t, func() bool { return snapshotOf(d)[0].State == QReady }, 2*time.Second)
+	waitIdle(t, d)
+	// Даём закрыться возможным отложенным hotkey-действиям (их быть не должно).
+	if idx, _, _ := d.timeline.Active(); idx != 0 {
+		t.Errorf("после генерации активная метка = %d, ожидалась 0 (навигация не должна была примениться)", idx)
+	}
+
+	// Ответ ушёл в правильную метку Q1 и в её шапку; Q2/Q3 ответов не получили.
+	snap := snapshotOf(d)
+	if len(snap[0].Answer) == 0 {
+		t.Errorf("ответ не записан в метку задания Q1: %+v", snap[0])
+	}
+	if snap[0].Answer[0].Target != "ответ Q1" {
+		t.Errorf("ответ в метку Q1 перепутан: %+v", snap[0].Answer)
+	}
+	if len(snap[1].Answer) != 0 || len(snap[2].Answer) != 0 {
+		t.Errorf("Q2/Q3 получили чужие ответы: %+v / %+v", snap[1].Answer, snap[2].Answer)
+	}
+
+	// Шапка активного вопроса — про Q1, а не перезаписана чужой меткой.
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("AnswerCandidates не найдены: %+v", msg)
+	}
+	if msg.Answers[0].QuestionIdx != 0 {
+		t.Errorf("шапка активного вопроса = idx %d, ожидался 0 (Q1)", msg.Answers[0].QuestionIdx)
+	}
+	if msg.Answers[0].QuestionText != "Q1?" {
+		t.Errorf("текст шапки = %q, ожидался %q (шапка перезаписана чужим вопросом)", msg.Answers[0].QuestionText, "Q1?")
+	}
+
+	// После завершения генерации (busy снят) навигация снова работает —
+	// подтверждает, что игнор был busy-guard'ом, а не залипанием метки.
+	d.HandleNext()
+	d.HandleNext()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 2 }, 2*time.Second)
 }
 
 // ── Коалесинг F1 во время генерации ─────────────────────────────────────

@@ -164,7 +164,7 @@ func TestDispatcherInterim(t *testing.T) {
 	}
 
 	// Ждём обработки.
-	time.Sleep(50 * time.Millisecond)
+	waitMessages(t, overlay, 1)
 
 	msgs := overlay.GetMessages()
 	if len(msgs) != 1 {
@@ -205,7 +205,7 @@ func TestDispatcherFinalTranscript(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitMessages(t, overlay, 2)
 
 	// После финального транскрипта: History (зона 4) + Interim с ФИНАЛЬНЫМ
 	// текстом (зона 1 — заменяет последний partial, Task 1.2).
@@ -257,7 +257,7 @@ func TestDispatcherFinalTranscriptReplacesPartial(t *testing.T) {
 		Text:      "I have five",
 		Timestamp: time.Now(),
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitMessages(t, overlay, 1)
 
 	// 2. EndOfTurn — финальная полная/исправленная версия фразы.
 	textStream <- common.STTEvent{
@@ -266,7 +266,7 @@ func TestDispatcherFinalTranscriptReplacesPartial(t *testing.T) {
 		Text:      "I have five years of experience",
 		Timestamp: time.Now(),
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitMessages(t, overlay, 3)
 
 	cancel()
 	<-done
@@ -324,7 +324,7 @@ func TestDispatcherTranslationPaired(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	waitMessages(t, overlay, 2)
 
 	// 2. Перевод.
 	textStream <- common.STTEvent{
@@ -334,7 +334,7 @@ func TestDispatcherTranslationPaired(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitMessages(t, overlay, 3)
 
 	msgs := overlay.GetMessages()
 	// 3 сообщения: History (default) + Interim (финал в зоне 1, Task 1.2) + Translation.
@@ -397,7 +397,14 @@ func TestDispatcherQuestionTriggersAnswers(t *testing.T) {
 	}
 
 	// Ждём генерации подсказок.
-	time.Sleep(200 * time.Millisecond)
+	waitFor(t, func() bool {
+		for _, m := range overlay.GetMessages() {
+			if m.Type == ui.AnswerCandidates {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
 
 	cancel()
 	<-done
@@ -508,21 +515,21 @@ func TestDispatcherHistoryDedup(t *testing.T) {
 		Event: common.EventEndOfTurn, ChannelID: "speaker",
 		Text: original, Timestamp: time.Now(),
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitMessages(t, overlay, 2)
 
 	// Первый перевод.
 	textStream <- common.STTEvent{
 		Event: common.EventEndOfTurn, ChannelID: "translation",
 		Text: "У меня пять лет опыта", Timestamp: time.Now(),
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitMessages(t, overlay, 3)
 
 	// Второй перевод (дубль).
 	textStream <- common.STTEvent{
 		Event: common.EventEndOfTurn, ChannelID: "translation",
 		Text: "У меня пять лет опыта v2", Timestamp: time.Now(),
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitMessages(t, overlay, 4)
 
 	msgs := overlay.GetMessages()
 	// 3 сообщения: History (от default) + Translation1 + Translation2.
@@ -622,10 +629,13 @@ func TestDispatcherReportDrop(t *testing.T) {
 
 func TestDispatcherAnswerQueueSequential(t *testing.T) {
 	// Проверяем, что с очередью вопросы обрабатываются последовательно
-	// одним consumer'ом, а не параллельными горутинами.
-	engine := &mockEngine{
-		answers: []string{"ответ"},
-		delay:   50 * time.Millisecond,
+	// одним consumer'ом, а не параллельными горутинами. Первая генерация
+	// удерживается blockingEngine, пока все 4 задания не встанут в очередь —
+	// детерминированная координация вместо фиксированной задержки мока (D7).
+	release := make(chan struct{})
+	engine := &blockingEngine{
+		answers: []string{"EN: answer | RU: ответ"},
+		release: release,
 	}
 	overlay := &mockOverlay{}
 	logger := &mockLogger{}
@@ -648,11 +658,22 @@ func TestDispatcherAnswerQueueSequential(t *testing.T) {
 			Text:      q,
 			Timestamp: time.Now(),
 		}
-		time.Sleep(5 * time.Millisecond) // небольшая пауза между событиями
 	}
 
-	// Ждём обработки всех вопросов (4 × 50ms + запас).
-	time.Sleep(500 * time.Millisecond)
+	// Первая генерация стартовала и держит worker (busy) — ждём это событие
+	// вместо sleep. Остальные задания при этом копятся в очереди.
+	waitFor(t, func() bool { return d.busy.Load() }, 2*time.Second)
+
+	// Пока первая генерация удерживается, в очереди должны быть остальные 3
+	// (последовательный consumer не запускает их параллельно).
+	waitFor(t, func() bool { return len(d.answerCh) == 3 }, 2*time.Second)
+
+	// Освобождаем генерацию — worker обрабатывает оставшиеся последовательно.
+	close(release)
+
+	// Ждём обработки всех вопросов.
+	waitFor(t, func() bool { return len(engine.Calls()) == 4 }, 2*time.Second)
+	waitIdle(t, d)
 
 	cancel()
 	<-done
@@ -696,10 +717,11 @@ func TestDispatcherAnswerQueueDedup(t *testing.T) {
 			Text:      "What is Redis?",
 			Timestamp: time.Now(),
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	// Ждём обработки очереди (дедупликация дропает 2-й и 3-й вопросы).
+	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
+	waitIdle(t, d)
 
 	cancel()
 	<-done
@@ -720,8 +742,12 @@ func TestDispatcherAnswerQueueDedup(t *testing.T) {
 
 func TestDispatcherAnswerQueueOverflow(t *testing.T) {
 	// При переполнении очереди вопросы должны дропаться с логом.
-	engine := &mockEngine{
-		delay: 200 * time.Millisecond, // медленный consumer
+	// blockingEngine держит consumer занятым, пока очередь не переполнится —
+	// детерминированная эмуляция «медленного consumer'а» вместо delay (D7).
+	release := make(chan struct{})
+	engine := &blockingEngine{
+		answers: []string{"EN: answer | RU: ответ"},
+		release: release,
 	}
 	overlay := &mockOverlay{}
 	logger := &mockLogger{}
@@ -749,11 +775,13 @@ func TestDispatcherAnswerQueueOverflow(t *testing.T) {
 			Text:      fmt.Sprintf("Question %d?", i),
 			Timestamp: time.Now(),
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 
-	time.Sleep(800 * time.Millisecond)
+	// Первый вопрос занял worker (busy), очередь (2) заполнена, остальные
+	// задания дропаются с логом переполнения — ждём сам лог, а не sleep.
+	waitFor(t, func() bool { return logger.HasDebug("очередь подсказок переполнена") }, 2*time.Second)
 
+	close(release)
 	cancel()
 	<-done
 
@@ -789,7 +817,7 @@ func TestDispatcherEmptyAnswerLogged(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	waitFor(t, func() bool { return logger.HasDebug("подсказки пусты") }, 2*time.Second)
 
 	cancel()
 	<-done
@@ -817,7 +845,8 @@ func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
 
 	go d.Run(ctx, textStream, done)
 
-	// Отправляем 3 вопроса и сразу отменяем контекст.
+	// Отправляем 3 вопроса и сразу отменяем контекст после того, как они
+	// поставлены в очередь (без sleep): worker должен дренировать остаток.
 	questions := []string{"Q1?", "Q2?", "Q3?"}
 	for _, q := range questions {
 		textStream <- common.STTEvent{
@@ -827,7 +856,9 @@ func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
 			Timestamp: time.Now(),
 		}
 	}
-	time.Sleep(10 * time.Millisecond)
+	waitFor(t, func() bool {
+		return len(engine.Calls())+len(d.answerCh) == 3
+	}, 2*time.Second)
 
 	// Отменяем контекст — worker должен дренировать очередь.
 	cancel()
@@ -958,8 +989,7 @@ func TestDispatcherAnswerWorkerChannelClose(t *testing.T) {
 	// Запускаем worker вручную.
 	go d.answerWorker(ctx)
 
-	// Ждём немного и закрываем канал.
-	time.Sleep(20 * time.Millisecond)
+	// Закрываем канал — worker должен выйти (чтение закрытого канала даёт !ok).
 	close(d.answerCh)
 
 	// Ждём завершения worker'а.
@@ -1053,7 +1083,7 @@ func TestDispatcherNewDefaultQueueSize(t *testing.T) {
 	go d.answerWorker(ctx)
 
 	d.answerCh <- answerTask{idx: 0, cmd: translator.CommandAnswer, question: "Test?"}
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
 
 	cancel()
 	<-d.answerDone
@@ -1084,8 +1114,8 @@ func TestDispatcherLogTranslationError(t *testing.T) {
 	}
 	d.route(transEvent, &lastOriginal)
 
-	// Логирование теперь асинхронное — ждём завершения горутины.
-	time.Sleep(50 * time.Millisecond)
+	// Логирование теперь асинхронное — ждём завершения горутины по логу.
+	waitFor(t, func() bool { return errLogger.HasDebug("ошибка логирования перевода") }, 2*time.Second)
 
 	// Должен быть лог об ошибке.
 	if !errLogger.HasDebug("ошибка логирования перевода") {
@@ -1120,7 +1150,7 @@ func TestDispatcher_LogTranslationSurvivesShutdown(t *testing.T) {
 		Text:      "Hello world",
 		Timestamp: time.Now(),
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitMessages(t, overlay, 2)
 
 	// Перевод — запускает асинхронную LogTranslation.
 	textStream <- common.STTEvent{
@@ -1130,8 +1160,8 @@ func TestDispatcher_LogTranslationSurvivesShutdown(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	// Даём горутине логирования стартовать.
-	time.Sleep(20 * time.Millisecond)
+	// Даём горутине логирования завершиться, дождавшись записи перевода.
+	waitFor(t, func() bool { return len(logger.Translations()) == 1 }, 2*time.Second)
 
 	// Закрываем textStream — dispatcher должен дождаться лог-горутины.
 	close(textStream)
