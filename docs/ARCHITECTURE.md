@@ -353,16 +353,22 @@ config.yaml) включает режим отладки без транскри�
 ```
 .env DEBUG_INPUT → common.Config.DebugInput → pipeline.Config.DebugInput
                                                         │
+pipeline.New: cfg.OverlayCfg.DebugInput = cfg.DebugInput (проводка в оверлей:
+             зона ввода + пропуск стилей окна)
 pipeline.New: manualCh = make(chan string, 8) → overlay.SetManualInput(manualCh)
                                                         │
 pipeline.runSTT: select { src | manualCh | ctx.Done }
   manual-ветка → common.STTEvent{Event: EventEndOfTurn, ChannelID: "speaker",
-                                  Text: TrimSpace(текст)}
+                                  Text: TrimSpace(текст), Timestamp: time.Now()}
   → p.routeSTTEvent(ctx, event) — тот же путь, что у Gladia
 ```
 
 - Живой транскрибатор (Gladia + capture) продолжает работать параллельно;
   введённая строка идёт полным путём STT-события (pipeline → dispatcher → QA → UI).
+- Ответ генерируется, только если строка распознана вопросом эвристикой
+  `translator.IsQuestion` («?» в строке или англ. вопросное слово в начале);
+  при `AutoAnswer=false` вопрос копится меткой `QIdle`, ответ по F1
+  (подробности — `docs/UI.md`, раздел debug-режима).
 - `manualCh` создаёт pipeline (буфер 8); `close` не нужен — владелец живёт до
   конца, выход по `ctx.Done()`. Ветка select по nil-каналу блокируется вечно
   (эквивалент отсутствия ветки при `DEBUG_INPUT=0`).
