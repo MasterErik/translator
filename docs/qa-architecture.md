@@ -33,10 +33,11 @@ generateAnswers(question, command, idx)     // idx — метка таймлай
         ├─ ConversationContext = history.BuildContext()   // история интервью
         │
         ▼
-AnswerRequest{Question, CandidateContext, ConversationContext, Command, SourceLang, TargetLang}
+AnswerRequest{Question, Clarifications, CandidateContext, ConversationContext, Command, SourceLang, TargetLang}
         ▼
 ├─ BuildAnswerPrompt(req)          // user prompt
-│     "Recent conversation: …\nThe interviewer asked: <question>\n…[модификатор]"
+│     "Recent conversation: …\nThe interviewer asked: <question>\n[Clarifications from the interviewer: …]…[модификатор]"
+│     // блок уточнений — только если Clarifications непусто (пусто → опускается, >3 → последние 3)
 ├─ BuildSystemPrompt(srcLang, tgtLang)  // system prompt
 │     SystemPromptAnswerGen + "\n\nCandidate context:\n" + candidate
         ▼
@@ -70,6 +71,7 @@ type ConversationTurn struct {
 
 type AnswerRequest struct {
     Question            string           // текущий вопрос
+    Clarifications      []string         // уточняющие реплики интервьюера (в промпт идут последние 3; nil/пусто → блок опускается)
     CandidateContext    string           // постоянные факты кандидата (база CV)
     ConversationContext string           // история интервью (ограниченная)
     Command             GenerationCommand
@@ -300,12 +302,21 @@ F2/F3 вообще не запускают генерацию, только дв
 (`Clarifications []string` в `QEntry`), **не** создавая новой метки.
 
 - **`lastFinal`** (`Dispatcher`, собственный мьютекс `lastFinalMu`): каждая
-  **финальная реплика интервьюера** (EndOfTurn, вопрос ИЛИ не-вопрос)
-  сохраняется как кандидат уточнения. Пустой текст игнорируется.
+  непустая **финальная реплика интервьюера** (EndOfTurn, вопрос ИЛИ не-вопрос)
+  сохраняется как кандидат уточнения. Это осознанный дизайн: `lastFinal` — не
+  «последний вопрос», а «последняя реплика собеседника». Пустой текст
+  игнорируется (уточнение из пустой строки бессмысленно).
 - **`HandleClarify` (Shift+F2)**: пустой таймлайн или нет `lastFinal` → no-op.
-  Иначе сначала `AbsorbLast(lastFinal)` — если последняя метка окна является
-  дублем-вопросом (её `Question == lastFinal`), метка удаляется, её текст идёт
-  уточнением в предыдущую метку (это решает случай «уточнение распознано как
+  Иначе сначала `AbsorbLast(lastFinal)` — **слияние однозначно определено
+  равенством текста**: последняя метка окна удаляется, а её текст идёт
+  уточнением в предыдущую метку, если и только если
+  `strings.TrimSpace(Question последней метки) == strings.TrimSpace(lastFinal)`
+  (точно, после нормализации краевых пробелов), при условии `len(окна) ≥ 2`.
+  `IsQuestion`
+  или LLM в решении о слиянии **не участвуют** — фильтра «только вопросы» нет:
+  поскольку `lastFinal` пишется на каждую непустую EndOfTurn-реплику (вопрос и
+  не-вопрос), любая реплика, точно совпадающая по тексту с последней меткой,
+  уйдёт в merge. Это ожидаемое поведение (случай «уточнение распознано как
   вопрос»); если слияние не выполнено — `AddClarification(activeIdx, lastFinal)`.
   Затем шапка активной метки обновляется (`pushHeaderForState`). `lastFinal`
   **потребляется** (очищается) — повторный Shift+F2 без новой фразы = no-op.
