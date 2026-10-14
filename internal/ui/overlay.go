@@ -639,16 +639,77 @@ func isMetadataOnly(a Answer) bool {
 }
 
 // answersMeta возвращает метаданные таймлайна из первого Answer с заданным
-// контрактом (QuestionIdx/Total/State/Mode/HasFresh). ok=false для старого
-// формата, где все поля метаданных нулевые — тогда зона 3 рендерится как раньше.
+// контрактом (QuestionIdx/Total/State/Mode/HasFresh/Clarifications). ok=false
+// для старого формата, где все поля метаданных нулевые — тогда зона 3 рендерится
+// как раньше. Непустые Clarifications тоже признак контракта: иначе уточнения
+// молча терялись бы у Answer без прочих метаданных.
 func answersMeta(answers []Answer) (Answer, bool) {
 	for _, a := range answers {
-		if a.Total != 0 || a.State != "" || a.Mode != "" || a.QuestionText != "" || a.HasFresh {
+		if a.Total != 0 || a.State != "" || a.Mode != "" || a.QuestionText != "" || a.HasFresh || len(a.Clarifications) > 0 {
 			return a, true
 		}
 	}
 	return Answer{}, false
 }
+
+// maxClarificationsShown — сколько уточнений активной метки показывает зона 3.
+// Ровно столько же уходит в промпт (последние 3): UI честный — ничего скрытого.
+const maxClarificationsShown = 3
+
+// clarificationMark — префикс строки уточнения под шапкой активной метки.
+const clarificationMark = "↳ "
+
+// recentClarifications возвращает последние maxClarificationsShown уточнений в
+// ХРОНОЛОГИЧЕСКОМ порядке (старое → новое), как они уходят в промпт. Пустой
+// список — nil: рендер уточнений пропускается, высота зоны не меняется.
+// Возвращает копию — fmt.Errorf-инвариант не затронут, но вызывающий не алиасит
+// стек уточнений активной метки (копирование как в dispatcher.Clarifications).
+func recentClarifications(a Answer) []string {
+	if len(a.Clarifications) == 0 {
+		return nil
+	}
+	start := len(a.Clarifications) - maxClarificationsShown
+	if start < 0 {
+		start = 0
+	}
+	out := make([]string, len(a.Clarifications)-start)
+	copy(out, a.Clarifications[start:])
+	return out
+}
+
+// layoutClarifications рисует строки уточнений активной метки под её шапкой:
+// каждая на своей строке с префиксом «↳», шрифт smallFontSize(fs) (fs-2, пол 10),
+// затемнённый цвет — визуально вложено под вопрос. Пустой список — нулевые
+// размеры (ничего не занимает): прежний рендер сохраняется байт-в-байт.
+//
+// Высота блока НЕ резервируется заранее: строки идут Rigid-элементами подряд
+// после шапки, поэтому 1–3 уточнения «вытесняют» столько же строк ответа снизу
+// (зона 3 — Flexed, ответы в остатке высоты) — окно не раздувается.
+func layoutClarifications(gtx layout.Context, th *material.Theme, clarifications []string, fs int) layout.Dimensions {
+	if len(clarifications) == 0 {
+		return layout.Dimensions{}
+	}
+	children := make([]layout.FlexChild, 0, len(clarifications))
+	for _, c := range clarifications {
+		if c == "" {
+			continue
+		}
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			l := overlayLabel(th, unit.Sp(smallFontSize(fs)), clarificationMark+c)
+			l.Color = clarificationColor
+			l.Alignment = text.Start
+			return l.Layout(gtx)
+		}))
+	}
+	if len(children) == 0 {
+		return layout.Dimensions{}
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+// clarificationColor — цвет строк уточнений: приглушённый серо-голубой, отличим
+// и от шапки вопроса (светло-серый), и от строк ответа (белый/зелёный).
+var clarificationColor = color.NRGBA{R: 150, G: 170, B: 200, A: 255}
 
 // layoutQuestionStrip рисует ленту меток [1] [2] [3] над ответами: активная
 // выделена цветом, у каждой — маркер состояния, справа — индикатор более
@@ -895,6 +956,12 @@ func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 				return layout.Dimensions{}
 			}
 			return layoutQuestionHeader(gtx, th, meta, fs)
+		}),
+		// Б-T4: строки уточнений активной метки — подряд под шапкой вопроса,
+		// каждая на своей строке. Пустой список → нулевые размеры (прежний
+		// рендер байт-в-байт); строки вытесняют ответы сверху в остатке высоты.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutClarifications(gtx, th, recentClarifications(meta), fs)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if len(items) > 0 {
