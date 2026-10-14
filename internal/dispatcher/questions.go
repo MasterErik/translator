@@ -1,6 +1,7 @@
 package dispatcher
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/mastererik/translator/internal/translator"
@@ -200,9 +201,15 @@ func (t *QuestionTimeline) Clarifications(idx int) []string {
 // указатель, смотревший на удалённую метку, смещается на слитую.
 // Возвращает (новый абсолютный индекс активной метки, true).
 //
+// Совпадение проверяется по тексту, НОРМАЛИЗОВАННОМУ strings.TrimSpace с обеих
+// сторон: реплика интервьюера приходит из STT с возможными ведущими/концевыми
+// пробелами/табами, а полное совпадение при этом должно считаться дублем.
+// Само слияние — точное равенство нормализованных текстов (никакой эвристики,
+// IsQuestion/LLM не привлекаются).
+//
 // Слияние невозможно (no-op, false), если последней метки нет, метка всего одна
-// (сливать не с чем) или её Question != q. В этом случае возвращается текущий
-// хвостовой абсолютный idx.
+// (сливать не с чем) или её Question != q (после TrimSpace). В этом случае
+// возвращается текущий хвостовой абсолютный idx.
 func (t *QuestionTimeline) AbsorbLast(q string) (int, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -212,7 +219,7 @@ func (t *QuestionTimeline) AbsorbLast(q string) (int, bool) {
 		return 0, false
 	}
 	lastAbs := t.base + n - 1 // абсолютный номер последней метки окна
-	if n < 2 || t.entries[n-1].Question != q {
+	if n < 2 || strings.TrimSpace(t.entries[n-1].Question) != strings.TrimSpace(q) {
 		return lastAbs, false
 	}
 

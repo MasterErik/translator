@@ -97,15 +97,17 @@ type blockingEngine struct {
 	answers []string
 	release <-chan struct{}
 
-	mu     sync.Mutex
-	calls  []string
-	closed bool
-	done   chan struct{}
+	mu       sync.Mutex
+	calls    []string
+	commands []translator.GenerationCommand
+	closed   bool
+	done     chan struct{}
 }
 
 func (b *blockingEngine) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
 	b.mu.Lock()
 	b.calls = append(b.calls, req.Question)
+	b.commands = append(b.commands, req.Command)
 	if b.done == nil {
 		b.done = make(chan struct{})
 	}
@@ -124,6 +126,15 @@ func (b *blockingEngine) Calls() []string {
 	defer b.mu.Unlock()
 	out := make([]string, len(b.calls))
 	copy(out, b.calls)
+	return out
+}
+
+// Commands возвращает команды всех вызовов в порядке поступления.
+func (b *blockingEngine) Commands() []translator.GenerationCommand {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]translator.GenerationCommand, len(b.commands))
+	copy(out, b.commands)
 	return out
 }
 
@@ -179,8 +190,10 @@ func TestAutoAnswerFalseF1ThenMoreContext(t *testing.T) {
 	defer cancel()
 
 	textStream <- question("Tell me about Project X.")
+	// Убеждаемся, что метка создана и обработана, но генерации не случилось.
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	waitIdle(t, d)
 	// Вопрос не должен запускать генерацию.
-	time.Sleep(100 * time.Millisecond)
 	if calls := engine.Calls(); len(calls) != 0 {
 		t.Fatalf("AutoAnswer=false: генерация запущена без F1, вызовов %d", len(calls))
 	}
@@ -274,69 +287,29 @@ func TestF1AfterNavigationAnswersQ1(t *testing.T) {
 	}
 }
 
-// TestStaleAnswerDoesNotOverwriteHeader — ответ Q1 приходит, когда пользователь
-// уже на Q3: шапка Q3 НЕ перезаписана (последнее AnswerCandidates — про Q3).
-func TestStaleAnswerDoesNotOverwriteHeader(t *testing.T) {
-	auto := false
-	cfg := DefaultConfig()
-	cfg.AutoAnswer = &auto
+// TestPushHeaderIgnoresUnknownIdx — чистый юнит-тест pushHeader по НЕверному idx:
+// метка с таким абсолютным номером в окне не найдена → шапка не отправляется,
+// overlay не получает ни одного AnswerCandidates. Так pushHeader защищает
+// активную метку от перезаписи чужой/устаревшей меткой.
+//
+// (Прежний TestStaleAnswerDoesNotOverwriteHeader имитировал «пользователь ушёл
+// на Q3 во время генерации Q1» прямой мутацией таймлайна, но сценарий
+// недостижим: tail-follow (questions.go Add) сам двигает активную метку на
+// хвост, а busy-guard блокирует навигацию во время генерации. Реальный путь
+// навигации-при-генерации покрыт TestNavigationDuringGenerationIgnoredAnswerToCorrectLabel.)
+func TestPushHeaderIgnoresUnknownIdx(t *testing.T) {
+	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
+	overlay := d.overlay.(*mockOverlay)
 
-	engine := &mockEngine{answers: []string{"EN: answer | RU: ответ"}, delay: 150 * time.Millisecond}
-	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
-	defer cancel()
-
-	// Создаём Q1, Q2, Q3.
 	for _, q := range []string{"Q1?", "Q2?", "Q3?"} {
-		textStream <- question(q)
+		d.timeline.Add(q)
 	}
-	waitFor(t, func() bool { return len(snapshotOf(d)) == 3 }, 2*time.Second)
 
-	// Уходим на Q1 (навигация возможна: генерации ещё нет).
-	d.HandlePrev()
-	d.HandlePrev()
-	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+	// idx вне окна (метка не существует) — шапка не уходит.
+	d.pushHeader(99, nil)
 
-	// Пока Q1 ещё не генерируется, пользователь уходит вперёд на Q3 —
-	// последняя шапка в overlay становится про Q3.
-	d.HandleNext()
-	d.HandleNext()
-	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 2 }, 2*time.Second)
-
-	// Prev/Next отправили шапку Q3 — запомним её (последнее сообщение).
-	waitFor(t, func() bool {
-		msg, ok := lastCandidates(overlay)
-		return ok && len(msg.Answers) > 0 && msg.Answers[0].QuestionIdx == 2
-	}, 2*time.Second)
-
-	// Возвращаемся на Q1 и запускаем долгую генерацию (Task 3: навигация во
-	// время генерации дропается, поэтому уходим назад до её старта).
-	d.HandlePrev()
-	d.HandlePrev()
-	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
-	d.HandleDemand()
-	// Даём worker'у взять задание Q1 (начинается длинная генерация).
-	waitFor(t, func() bool { return snapshotOf(d)[0].State == QGenerating }, 2*time.Second)
-
-	// Пока Q1 генерируется, пользователь снова уходит вперёд на Q3. Навигация
-	// во время генерации заблокирована (Task 3), поэтому активную метку
-	// выставляем напрямую через таймлайн + шлём шапку — имитируем, что
-	// пользователь ушёл на Q3 ещё до старта генерации.
-	d.timeline.Next()
-	d.timeline.Next()
-	d.pushActiveHeader()
-	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 2 }, 2*time.Second)
-
-	// Ждём завершения генерации Q1.
-	waitFor(t, func() bool { return snapshotOf(d)[0].State == QReady }, 2*time.Second)
-
-	// Последнее AnswerCandidates должно по-прежнему указывать на Q3 (idx 2),
-	// а не быть перезаписанным устаревшим ответом Q1.
-	msg, ok := lastCandidates(overlay)
-	if !ok || len(msg.Answers) == 0 {
-		t.Fatalf("AnswerCandidates не найдены: %+v", msg)
-	}
-	if msg.Answers[0].QuestionIdx != 2 {
-		t.Errorf("шапку перезаписал устаревший ответ: QuestionIdx = %d, ожидался 2 (Q3)", msg.Answers[0].QuestionIdx)
+	if msgs := overlay.GetMessages(); len(msgs) != 0 {
+		t.Errorf("pushHeader по неизвестному idx отправил сообщения в UI: %+v", msgs)
 	}
 }
 
@@ -349,7 +322,7 @@ func TestStaleAnswerDoesNotOverwriteHeader(t *testing.T) {
 //  3. после генерации навигация снова работает (игнор был именно busy-guard,
 //     а не залипание).
 //
-// Дополняет синтетический TestStaleAnswerDoesNotOverwriteHeader.
+// Дополняет юнит-тест TestPushHeaderIgnoresUnknownIdx.
 func TestNavigationDuringGenerationIgnoredAnswerToCorrectLabel(t *testing.T) {
 	auto := false
 	cfg := DefaultConfig()
@@ -461,15 +434,16 @@ func TestF1DuringGenerationIgnored(t *testing.T) {
 	// Ждём начала генерации.
 	waitFor(t, func() bool { return snapshotOf(d)[0].State == QGenerating }, 2*time.Second)
 
-	// Несколько F1 во время генерации — игнор.
+	// Несколько F1 во время генерации — игнор (серия без пауз: сами вызовы не
+	// ставят заданий).
 	for i := 0; i < 5; i++ {
 		d.HandleDemand()
-		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Даём завершиться единственной генерации.
+	// Даём завершиться единственной генерации и опустеть очереди (без sleep:
+	// негативный ассерт обязан проверяться ПОСЛЕ полного покоя воркера).
 	waitFor(t, func() bool { return snapshotOf(d)[0].State == QReady }, 2*time.Second)
-	time.Sleep(100 * time.Millisecond)
+	waitIdle(t, d)
 
 	if calls := engine.Calls(); len(calls) != 1 {
 		t.Errorf("F1 во время генерации не должен создавать заданий: вызовов %d, ожидалось 1", len(calls))
@@ -540,7 +514,9 @@ func TestHotkeysEmptyTimelineNoPanic(t *testing.T) {
 	d.HandleDemand()
 	d.HandlePrev()
 	d.HandleNext()
-	time.Sleep(100 * time.Millisecond)
+	// Даём воркеру обработать все действия до полного покоя, затем проверяем,
+	// что на пустом таймлайне не ушло ни одного запроса в LLM.
+	waitIdle(t, d)
 
 	if calls := engine.Calls(); len(calls) != 0 {
 		t.Errorf("на пустом таймлайне вызовов %d, ожидалось 0", len(calls))
@@ -612,7 +588,7 @@ func TestAutoAnswerFalseRegenerationDoesNotAddTurn(t *testing.T) {
 	// Второй F1 — regeneration (MoreContext) на хвостовую метку.
 	d.HandleDemand()
 	waitFor(t, func() bool { return len(engine.Calls()) == 2 }, 2*time.Second)
-	time.Sleep(50 * time.Millisecond)
+	waitIdle(t, d)
 
 	recent := d.history.Recent()
 	if len(recent) != 1 {
@@ -742,7 +718,11 @@ func TestPrevNextIgnoredDuringGeneration(t *testing.T) {
 	// доступен — но защёлкивается busy-guard'ом).
 	d.HandlePrev()
 	d.HandleNext()
-	time.Sleep(100 * time.Millisecond)
+	// Ждём коалесинг-логи hotkey-действий (детерминированно, без sleep):
+	// Prev и Next отброшены busy-guard'ом.
+	waitFor(t, func() bool {
+		return len(d.hotkeyCh) == 0 && d.busy.Load()
+	}, 2*time.Second)
 
 	// Разблокируем LLM и ждём завершения генерации.
 	close(release)
@@ -750,8 +730,9 @@ func TestPrevNextIgnoredDuringGeneration(t *testing.T) {
 		snap := snapshotOf(d)
 		return len(snap) == 1 && snap[0].State == QReady
 	}, 2*time.Second)
-	// Даём worker'у разгрести возможные отложенные Prev/Next.
-	time.Sleep(100 * time.Millisecond)
+	// Ждём полного покоя воркера: отложенных Prev/Next быть не должно, поэтому
+	// ассерт ниже проверяет состояние ПОСЛЕ обработки, а не по таймингу.
+	waitIdle(t, d)
 
 	if idx, _, _ := d.timeline.Active(); idx != 0 {
 		t.Errorf("активная метка сдвинулась во время генерации: idx = %d, ожидался 0", idx)
@@ -891,6 +872,157 @@ func TestEscThenF1KeepsCommandCycle(t *testing.T) {
 	reqs = engine.Reqs()
 	if got := reqs[callsBefore].Command; got != translator.CommandMoreContext {
 		t.Errorf("второй F1 после Esc: Command = %v, ожидался CommandMoreContext (CommandSimplerEnglish = пропуск шага)", got)
+	}
+}
+
+// ── C1: cancelled-дроп задания не должен двигать Step ────────────────────
+
+// TestCancelledDropResetsStep — регресс C1 (остаточный A-1). Ветка
+// dispatcher.go, где worker читает задание из answerCh при cancelled=true
+// (дроп после Esc), ОБЯЗАНА сбрасывать Step — симметрично dropQueue/
+// enqueueAnswer. Иначе у дропнутой метки остаётся Step=1, и первый F1 после
+// Esc в QIdle-ветке вернёт CommandMoreContext вместо CommandAnswer (A-1).
+//
+// Ветка выбрана ДЕТЕРМИНИРОВАННО, а не лотереей select (worker читает
+// answerCh и cancelCh с равной вероятностью):
+//  1. Q1 генерируется (blockingEngine держит worker занятым);
+//  2. Cancel() — cancelled=true + токен в cancelCh;
+//  3. worker берёт токен cancelCh (answerCh пуст → взять больше нечего) и
+//     опустошает пустую очередь (dropQueue — no-op);
+//  4. только теперь в answerCh кладутся Q2/Q3 (Step=1) — worker читает их
+//     при cancelled=true, т.е. именно в целевой ветке.
+//
+// Без фиксированных sleep: состояния читаются через waitFor/waitIdle.
+func TestCancelledDropResetsStep(t *testing.T) {
+	release := make(chan struct{})
+	engine := &blockingEngine{answers: []string{"EN: A | RU: A"}, release: release}
+
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig()) // AutoAnswer=true
+	defer cancel()
+
+	// 1. Q1 берётся в работу (генерируется, worker занят).
+	textStream <- question("Q1?")
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 1 && snap[0].State == QGenerating && d.busy.Load()
+	}, 2*time.Second)
+
+	// 2. Esc во время генерации: cancelled=true, активная генерация отменяется.
+	d.Cancel()
+	waitFor(t, func() bool { return d.cancelled.Load() }, 2*time.Second)
+
+	// 3. Освобождаем Q1. Worker выходит из генерации, возвращает Q1 в QIdle и
+	// читает токен cancelCh (answerCh пуст) — очередь уже опустошена dropQueue.
+	close(release)
+	waitIdle(t, d)
+	waitFor(t, func() bool { return len(d.cancelCh) == 0 }, 2*time.Second)
+
+	// 4. Кладём в очередь Q2/Q3 при живом cancelled=true. enqueueAnswer — только
+	// постановка задания (не сбрасывает cancelled, в отличие от enqueueQuestion).
+	// Каждой метке даём Step=1 (как это делает авто-постановка через NextStep);
+	// Step=1 фиксируем ДО enqueueAnswer, пока задание ещё не в канале, — иначе
+	// worker (idle, cancelled=true) успел бы сбросить Step в целевой ветке.
+	enqueueQueued := func(q string) int {
+		idx := d.timeline.Add(q)
+		d.timeline.NextStep(idx) // Step 0→1, как авто-постановка
+		d.timeline.SetState(idx, QQueued)
+		if e := entryByIdx(snapshotOf(d), idx); e.Step != 1 {
+			t.Fatalf("предусловие: Step метки %q = %d, ожидалось 1 (авто-постановка)", q, e.Step)
+		}
+		d.enqueueAnswer(answerTask{idx: idx, cmd: translator.CommandMoreContext, question: q, fresh: true})
+		return idx
+	}
+	q2 := enqueueQueued("Q2?")
+	q3 := enqueueQueued("Q3?")
+
+	// Worker читает Q2/Q3 при cancelled=true → целевая ветка дропа. Ждём именно
+	// эффект (обе метки QIdle+Step=0), а не опустошение канала: чтение задания
+	// и его SetState/ResetStep происходят в одной горутине, но между receive и
+	// мутацией таймлайна есть окно.
+	waitFor(t, func() bool {
+		snap := snapshotOf(d)
+		return len(snap) == 3 &&
+			entryByIdx(snap, q2).State == QIdle && entryByIdx(snap, q2).Step == 0 &&
+			entryByIdx(snap, q3).State == QIdle && entryByIdx(snap, q3).Step == 0
+	}, 2*time.Second)
+	waitIdle(t, d)
+
+	// Обе метки — QIdle со Step=0 (симметрично dropQueue).
+	for _, idx := range []int{q2, q3} {
+		entry := entryByIdx(snapshotOf(d), idx)
+		if entry.State != QIdle {
+			t.Errorf("метка idx=%d после cancelled-дропа: State = %v, ожидалось QIdle", idx, entry.State)
+		}
+		if entry.Step != 0 {
+			t.Errorf("метка idx=%d после cancelled-дропа: Step = %d, ожидалось 0 (иначе F1 пропустит CommandAnswer)", idx, entry.Step)
+		}
+	}
+
+	// Последующий F1 (сбрасывает cancelled) обязан начать цикл с CommandAnswer.
+	// Активная метка — хвост Q3 (tail-follow). Step=0 ⇒ NextStep вернёт Answer.
+	callsBefore := len(engine.Calls())
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
+
+	if got := engine.Commands()[callsBefore]; got != translator.CommandAnswer {
+		t.Errorf("F1 после cancelled-дропа: Command = %v, ожидался CommandAnswer (CommandMoreContext = пропуск шага, регресс C1)", got)
+	}
+}
+
+// entryByIdx возвращает метку снапшота по абсолютному idx (fatalf, если нет).
+func entryByIdx(snap []QEntry, idx int) QEntry {
+	for i := range snap {
+		if snap[i].Idx == idx {
+			return snap[i]
+		}
+	}
+	return QEntry{Idx: -1}
+}
+
+// ── C2: потерянное уточнение возвращается в lastFinal ────────────────────
+
+// TestClarifyRestoresLastFinalOnEvictedLabel — регресс C2. Если AddClarification
+// не удался (активная метка вытеснена из окна кольца между Active() и правкой),
+// потреблённый из lastFinal текст возвращается обратно: реплика интервьюера не
+// теряется безвозвратно и «оживёт» при следующем Shift+F2 на валидной метке.
+//
+// Настоящую гонку вытеснения детерминированно не воспроизвести, поэтому тест
+// проверяет контракт restoreLastFinal напрямую (публичный/тестовый доступ к
+// полям пакета): после takeLastFinal текст уходит в локальную переменную и, если
+// AddClarification по вытесненному idx возвращает false, restoreLastFinal
+// кладёт текст назад.
+func TestClarifyRestoresLastFinalOnEvictedLabel(t *testing.T) {
+	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
+
+	const text = "I mean horizontally."
+	d.setLastFinal(text)
+
+	// Имитируем путь handleClarify: потребляем кандидат…
+	got, ok := d.takeLastFinal()
+	if !ok || got != text {
+		t.Fatalf("takeLastFinal: (%q, %v), ожидалось (%q, true)", got, ok, text)
+	}
+	if v := lastFinalOf(d); v != "" {
+		t.Fatalf("lastFinal после потребления = %q, ожидалось пусто", v)
+	}
+	// …и убеждаемся, что правка по пустому таймлайну невозможна.
+	if d.timeline.AddClarification(0, got) {
+		t.Fatal("предусловие: AddClarification по пустому таймлайну вернул true")
+	}
+	// Провал правки → текст возвращается в lastFinal (как в handleClarify).
+	d.restoreLastFinal(got)
+
+	if v := lastFinalOf(d); v != text {
+		t.Errorf("lastFinal после restoreLastFinal = %q, ожидалось %q (текст потерян)", v, text)
+	}
+
+	// Восстановленный текст применяется обычным путём к существующей метке.
+	d.timeline.Add("How do you scale?")
+	if !d.timeline.AddClarification(0, text) {
+		t.Fatal("AddClarification по существующей метке вернул false")
+	}
+	if got := d.timeline.Clarifications(0); len(got) != 1 || got[0] != text {
+		t.Errorf("Clarifications = %v, ожидалось [%s]", got, text)
 	}
 }
 
@@ -1181,7 +1313,8 @@ func TestClarifyEmptyTimelineNoOp(t *testing.T) {
 
 	d.HandleClarify()
 	d.HandleUnclarify()
-	time.Sleep(100 * time.Millisecond)
+	// Ждём полного покоя воркера: ни одного действия не должно примениться.
+	waitIdle(t, d)
 
 	if snap := snapshotOf(d); len(snap) != 0 {
 		t.Errorf("пустой таймлайн изменён: %+v", snap)
@@ -1298,7 +1431,7 @@ func TestClarifyWithoutNewFinalIsNoOp(t *testing.T) {
 	// Повторный Shift+F2 — lastFinal уже потреблён → no-op.
 	d.HandleClarify()
 	d.HandleClarify()
-	time.Sleep(100 * time.Millisecond)
+	waitIdle(t, d)
 
 	if got := snapshotOf(d)[0].Clarifications; len(got) != 1 {
 		t.Errorf("повторный Shift+F2 добавил уточнения: %v", got)
@@ -1347,7 +1480,7 @@ func TestUnclarifyRemovesLast(t *testing.T) {
 	d.HandleUnclarify()
 	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 0 }, 2*time.Second)
 	d.HandleUnclarify()
-	time.Sleep(100 * time.Millisecond)
+	waitIdle(t, d)
 	if got := snapshotOf(d)[0].Clarifications; len(got) != 0 {
 		t.Errorf("Shift+F3 на пустом списке изменил состояние: %v", got)
 	}

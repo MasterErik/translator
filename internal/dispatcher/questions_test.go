@@ -569,6 +569,109 @@ func TestQuestionTimeline_AbsorbLastMergesDuplicate(t *testing.T) {
 	}
 }
 
+// TestQuestionTimeline_AbsorbLastTrimSpaceMatch — table-driven: совпадение
+// хвоста окна и q проверяется по НОРМАЛИЗОВАННОМУ тексту (strings.TrimSpace с
+// обеих сторон). Дубль с ведущими/концевыми пробелами/табом всё равно
+// сливается; различие внутри текста (не пробелы) — не сливается. Никаких
+// эвристик: только точное равенство после нормализации.
+func TestQuestionTimeline_AbsorbLastTrimSpaceMatch(t *testing.T) {
+	tests := []struct {
+		name        string
+		tail        string // текст хвостовой метки (в таймлайне)
+		replica     string // реплика, пришедшая в lastFinal (аргумент AbsorbLast)
+		wantAbsorb  bool
+		wantMergedQ string // ожидаемое уточнение на idx-1 при wantAbsorb
+	}{
+		{
+			name:        "реплика с ведущими пробелами",
+			tail:        "Tell me about Project X.",
+			replica:     "   Tell me about Project X.",
+			wantAbsorb:  true,
+			wantMergedQ: "Tell me about Project X.",
+		},
+		{
+			name:        "реплика с концевым табом",
+			tail:        "Tell me about Project X.",
+			replica:     "Tell me about Project X.	",
+			wantAbsorb:  true,
+			wantMergedQ: "Tell me about Project X.",
+		},
+		{
+			name:        "пробелы с обеих сторон и табл-микс",
+			tail:        "  How do you scale?  ",
+			replica:     "	 How do you scale? 	",
+			wantAbsorb:  true,
+			wantMergedQ: "  How do you scale?  ",
+		},
+		{
+			name:       "различие внутри текста — не сливается",
+			tail:       "Tell me about Project X.",
+			replica:    " Tell me about Project Y.",
+			wantAbsorb: false,
+		},
+		{
+			name:       "отличается одним словом в середине",
+			tail:       "How do you handle contention?",
+			replica:    "How do you handle consistency?",
+			wantAbsorb: false,
+		},
+		{
+			name:       "пробел внутри текста значим",
+			tail:       "a b",
+			replica:    "ab",
+			wantAbsorb: false,
+		},
+		{
+			name:        "точное совпадение без пробелов",
+			tail:        "What is RAID?",
+			replica:     "What is RAID?",
+			wantAbsorb:  true,
+			wantMergedQ: "What is RAID?",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Раскладка: [0]=prev (к нему уйдёт уточнение), [1]=tail (кандидат).
+			tl := NewQuestionTimeline()
+			tl.Add("prev-question")
+			tl.Add(tc.tail)
+
+			beforeLen := len(tl.Snapshot())
+			newIdx, ok := tl.AbsorbLast(tc.replica)
+
+			if ok != tc.wantAbsorb {
+				t.Fatalf("AbsorbLast(%q) при tail=%q: ok=%v, ожидалось %v", tc.replica, tc.tail, ok, tc.wantAbsorb)
+			}
+
+			snap := tl.Snapshot()
+			if tc.wantAbsorb {
+				if len(snap) != beforeLen-1 {
+					t.Fatalf("после слияния len(Snapshot())=%d, ожидалось %d (хвост удалён)", len(snap), beforeLen-1)
+				}
+				if newIdx != 0 {
+					t.Fatalf("AbsorbLast вернул newIdx=%d, ожидалось 0 (активность на слитую метку)", newIdx)
+				}
+				// Текст удалённого хвоста ушёл уточнением в idx-1 (prev).
+				got := tl.Clarifications(0)
+				if len(got) != 1 || got[0] != tc.wantMergedQ {
+					t.Fatalf("Clarifications(0) = %v, ожидалось [%q]", got, tc.wantMergedQ)
+				}
+			} else {
+				if len(snap) != beforeLen {
+					t.Fatalf("no-op изменил число меток: %d → %d", beforeLen, len(snap))
+				}
+				if newIdx != mustActiveIdx(t, tl) {
+					t.Fatalf("AbsorbLast вернул newIdx=%d, ожидался текущий хвост %d", newIdx, mustActiveIdx(t, tl))
+				}
+				if got := tl.Clarifications(0); len(got) != 0 {
+					t.Fatalf("no-op добавил уточнение в prev: %v", got)
+				}
+			}
+		})
+	}
+}
+
 // TestQuestionTimeline_AbsorbLastMismatchNoOp — несовпадение текста последней
 // метки и q → no-op: метки не тронуты, ok=false, активность не двигается.
 func TestQuestionTimeline_AbsorbLastMismatchNoOp(t *testing.T) {

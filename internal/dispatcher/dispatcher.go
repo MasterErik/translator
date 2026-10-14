@@ -346,6 +346,19 @@ func (d *Dispatcher) takeLastFinal() (string, bool) {
 	return text, true
 }
 
+// restoreLastFinal возвращает потреблённый текст обратно в lastFinal (C2):
+// вызывается, когда уточнение применить не удалось (метка вытеснена из окна
+// между Active() и правкой) — иначе реплика интервьюера теряется безвозвратно.
+// Пустой текст игнорируется, как в setLastFinal.
+func (d *Dispatcher) restoreLastFinal(text string) {
+	if text == "" {
+		return
+	}
+	d.lastFinalMu.Lock()
+	d.lastFinal = text
+	d.lastFinalMu.Unlock()
+}
+
 // enqueueQuestion регистрирует вопрос в таймлайне и, при включённом
 // AutoAnswer, ставит задание на генерацию (неблокирующе). Возвращает индекс
 // метки. Если AutoAnswer выключен, метка остаётся в QIdle — ответ по F1.
@@ -429,8 +442,12 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 				return
 			}
 			// Очередь отменена (Esc) — дропаем оставшиеся задания.
+			// Step сбрасывается симметрично dropQueue/enqueueAnswer: команда так
+			// и не отдана LLM, поэтому цикл F1 не должен считаться продвинутым
+			// (иначе после Esc первый F1 в QIdle-ветке вернёт CommandMoreContext).
 			if d.cancelled.Load() {
 				d.timeline.SetState(task.idx, QIdle)
+				d.timeline.ResetStep(task.idx)
 				continue
 			}
 			// Дедупликация: пропускаем точный повтор предыдущего вопроса,
@@ -523,18 +540,30 @@ func (d *Dispatcher) handleClarify() {
 
 	// Слияние хвостового дубля-вопроса: если удалось — активная метка переехала
 	// на слитую (её индекс вернул таймлайн), иначе текст идёт активной метке.
+	absorbedTail := false
 	if newIdx, absorbed := d.timeline.AbsorbLast(text); absorbed {
 		idx = newIdx
+		absorbedTail = true
 	} else if !d.timeline.AddClarification(idx, text) {
 		// Метка вытеснена между Active() и правкой — правка невозможна.
+		// Текст уже потреблён из lastFinal (takeLastFinal) — возвращаем его,
+		// иначе реплика интервьюера теряется безвозвратно (C2).
+		d.restoreLastFinal(text)
 		if d.sessLog != nil {
-			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: Shift+F2 уточнение потеряно (метка %d вне окна)", idx))
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: Shift+F2 уточнение потеряно (метка %d вне окна), текст восстановлен в lastFinal", idx))
 		}
 		return
 	}
 
 	if d.sessLog != nil {
-		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: уточнение добавлено: idx=%v, text=%v", idx, text))
+		if absorbedTail {
+			// C3: слияние произошло с хвостовым дублем — сообщаем фактический
+			// контекст (слитый хвост стал уточнением активной метки idx), а не
+			// только «уточнение добавлено», что читалось как источник = активная.
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: уточнение добавлено слиянием хвостового дубля в активную метку: idx=%v, text=%v", idx, text))
+		} else {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: уточнение добавлено: idx=%v, text=%v", idx, text))
+		}
 	}
 	d.pushHeaderForState(idx)
 }
