@@ -216,6 +216,10 @@ func New(cfg Config) (*Pipeline, error) {
 	}
 
 	// Overlay.
+	// DebugInput прокидываем в конфиг оверлея: зона ввода и пропуск стилей
+	// окна (NOACTIVATE/TRANSPARENT) решаются по OverlayConfig.DebugInput,
+	// а канал ниже передаётся отдельным сеттером.
+	cfg.OverlayCfg.DebugInput = cfg.DebugInput
 	overlay := ui.NewOverlay(cfg.OverlayCfg, sessLog)
 
 	// Debug-режим ручного ввода: создаём канал (владелец — pipeline, живёт до
