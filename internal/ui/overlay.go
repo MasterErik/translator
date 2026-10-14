@@ -361,7 +361,7 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 		// 1. Interim — речь, фиксированная высота interimVisibleLines строк,
 		// внутри — вертикальный скролл (длинная фраза видна целиком). Белый.
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			h := emptyZoneHeight(fs) * interimVisibleLines
+			h := lineHeightPx(fs) * interimVisibleLines
 			maxX := gtx.Constraints.Max.X
 			if h > 0 && gtx.Constraints.Max.Y > h {
 				gtx.Constraints = layout.Constraints{Max: image.Pt(maxX, h)}
@@ -420,9 +420,52 @@ const lineSpacingScale = 1.0
 // interimVisibleLines — высота зоны Interim (пустая) в строках — стартовый каркас.
 const interimVisibleLines = 3
 
-// emptyZoneHeight — высота пустой строки для стартового каркаса: простой множитель
-// от fs (дефолтное межстрочное продвижение Gio ≈ 1.0em, глиф-бокс ≈ 1.25em).
-func emptyZoneHeight(fs int) int { return fs * 5 / 4 }
+// lineHeightCache — кэш измеренной высоты строки по fs. Высота строки зависит
+// только от fs (шрифт и LineSpacingScale едины для всех зон), поэтому измеряется
+// один раз и переиспользуется во всех кадрах. Мьютекс — потому что render
+// вызывается из горутины окна, а тесты читают/пишут конкурентно.
+var lineHeightCache = struct {
+	mu sync.RWMutex
+	m  map[int]int
+}{m: make(map[int]int)}
+
+// lineHeightPx — фактическая высота одной строки текста в px для заданного fs.
+// Измеряется оффскрин-рендером однострочного label'а тем же путём (overlayLabel),
+// что и зоны, и кэшируется по fs. Заменяет эвристику fs*5/4: высота зоны теперь
+// всегда кратна настоящей строке — k × lineHeightPx(fs) — и k видимых строк
+// помещаются без обрезки последней.
+func lineHeightPx(fs int) int {
+	lineHeightCache.mu.RLock()
+	if h, ok := lineHeightCache.m[fs]; ok {
+		lineHeightCache.mu.RUnlock()
+		return h
+	}
+	lineHeightCache.mu.RUnlock()
+
+	h := measureLineHeightPx(fs)
+
+	lineHeightCache.mu.Lock()
+	lineHeightCache.m[fs] = h
+	lineHeightCache.mu.Unlock()
+	return h
+}
+
+// measureLineHeightPx — одно измерение: однострочный label (шрифт fs, метрика
+// PxPerSp=1, как в оверлее) в оффскрин-контексте; натуральная высота глиф-бокса
+// строки. Ширина заведомо велика — перенос не мешает.
+func measureLineHeightPx(fs int) int {
+	th := material.NewTheme()
+	ops := new(op.Ops)
+	gtx := layout.Context{
+		Ops: ops,
+		Constraints: layout.Constraints{
+			Min: image.Pt(0, 0),
+			Max: image.Pt(2000, 100000),
+		},
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	return overlayLabel(th, unit.Sp(fs), "Hg").Layout(gtx).Size.Y
+}
 
 // emptyZoneDims — размеры пустой зоны: ширина окна, высота ровно height px.
 // Стартовый каркас: пустые зоны резервируют высоту, чтобы separator-линии
@@ -436,7 +479,7 @@ const historyVisibleLines = 4
 
 // historyVisibleHeightPx — высота видимой области TranscriptionHistory в px:
 // ровно historyVisibleLines строк текста зоны истории (единый шрифт fs).
-func historyVisibleHeightPx(fs int) int { return emptyZoneHeight(fs) * historyVisibleLines }
+func historyVisibleHeightPx(fs int) int { return lineHeightPx(fs) * historyVisibleLines }
 
 // lastInterim возвращает текущую речь (зона 1) — последнее Interim.
 func (o *Overlay) lastInterim() UIMessage {
@@ -483,7 +526,7 @@ func zoneSeparator(gtx layout.Context) layout.Dimensions {
 // Автоскролл к концу — через ScrollToEnd (последняя строка у нижней границы).
 func layoutInterim(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
 	if msg.Text == "" {
-		return emptyZoneDims(gtx, emptyZoneHeight(fs)*interimVisibleLines)
+		return emptyZoneDims(gtx, lineHeightPx(fs)*interimVisibleLines)
 	}
 	list.Axis = layout.Vertical
 	if needScroll {

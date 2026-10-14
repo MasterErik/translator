@@ -26,7 +26,7 @@ func TestRenderEmptyFrameworkSeparatorsVisible(t *testing.T) {
 	gtx, _ := newTestContext(800, 650)
 	fs := o.cfg.FontSize
 
-	oneLine := emptyZoneHeight(fs)
+	oneLine := lineHeightPx(fs)
 
 	// Зона 1 — Interim: пустой текст резервирует interimVisibleLines строк.
 	var interimList layout.List

@@ -109,9 +109,9 @@ func TestRenderHistoryVisibleCappedAt4Lines(t *testing.T) {
 	if wantHeight <= 0 || wantHeight >= 650 {
 		t.Errorf("historyVisibleHeightPx(18) = %d — вне разумных границ", wantHeight)
 	}
-	// Каркас — ровно 4 × emptyZoneHeight(fs) (Task 3.0: простой множитель).
-	if want := emptyZoneHeight(18) * historyVisibleLines; wantHeight != want {
-		t.Errorf("historyVisibleHeightPx(18) = %d, want 4 × emptyZoneHeight(18) = %d", wantHeight, want)
+	// Каркас — ровно 4 × lineHeightPx(fs) (Task 7: измеренная высота строки).
+	if want := lineHeightPx(18) * historyVisibleLines; wantHeight != want {
+		t.Errorf("historyVisibleHeightPx(18) = %d, want 4 × lineHeightPx(18) = %d", wantHeight, want)
 	}
 }
 

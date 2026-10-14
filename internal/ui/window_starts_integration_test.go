@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -87,6 +88,32 @@ func TestWindowStarts(t *testing.T) {
 	// Проверяем автоскролл: рендерим кадр как в Run() и читаем FrameMetrics.
 	// Раньше проверялись геттеры TranscriptionScrollLen/TranslationAtEnd/
 	// TranscriptionAtEnd — теперь метрики кадра возвращает сам render().
+	//
+	// ВАЖНО: layout.List в Gio НЕ потокобезопасен, а Run() рисует кадры в своей
+	// горутине. Чтобы ручной render() ниже не гонялся с кадровым циклом Run()
+	// (это давало «panic: unfinished child»), сначала останавливаем Run() и
+	// дожидаемся его выхода — после этого списки принадлежат только тесту.
+	cancel()
+	// Разбудить Run(): он блокируется на w.Event() и замечает ctx.Done() только
+	// на следующей итерации цикла. Invalidate порождает событие кадра, которое
+	// выводит Run() из ожидания — иначе cancel не наблюдаем без внешних событий.
+	o.invalidateIf()
+	select {
+	case err := <-errCh:
+		// Штатное завершение по cancel: Run() возвращает ctx.Err()
+		// (context.Canceled) после DestroyEvent — это не ошибка.
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run завершился с ошибкой: %v", err)
+		}
+	case <-time.After(destroyEventTimeout + 3*time.Second):
+		t.Fatal("Run не завершился после cancel")
+	}
+
+	// Зона 4 (Transcription History) по умолчанию СКРЫТА (F4 включается
+	// пользователем), а её высота кратна измеренной строке. Чтобы проверить
+	// автоскролл именно этой зоны, включаем её перед рендером — иначе
+	// TranscriptionAtEnd структурно false (needScroll только у видимой зоны).
+	o.ToggleTranscriptionHistory()
 	th := material.NewTheme()
 	gtx, _ := newTestContext(1200, 650)
 	m := o.render(gtx, th)
@@ -98,6 +125,13 @@ func TestWindowStarts(t *testing.T) {
 	}
 	if !m.InterimAtEnd {
 		t.Error("Interim: скролл НЕ в конце (InterimAtEnd=false)")
+	}
+
+	// Высота зоны 4 кратна фактической высоте строки: 4 × lineHeightPx(fs),
+	// и вмещает 4 строки без обрезки последней.
+	if got, want := historyVisibleHeightPx(o.cfg.FontSize), lineHeightPx(o.cfg.FontSize)*historyVisibleLines; got != want {
+		t.Errorf("historyVisibleHeightPx(%d) = %d, want %d × %d = %d",
+			o.cfg.FontSize, got, lineHeightPx(o.cfg.FontSize), historyVisibleLines, want)
 	}
 
 	// Проверяем размеры окна.

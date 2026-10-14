@@ -35,24 +35,22 @@ func TestOverlayLabelDefaultSpacing(t *testing.T) {
 	}
 }
 
-// TestEmptyZoneHeightSimpleMultiplier — Task 3.0: каркас — простой множитель
-// fs*5/4, без измерений (18→22, 20→25). historyVisibleHeightPx = 4 × строка.
-func TestEmptyZoneHeightSimpleMultiplier(t *testing.T) {
-	tests := []struct {
-		fs   int
-		want int
-	}{
-		{fs: 18, want: 22},
-		{fs: 20, want: 25},
-		{fs: 16, want: 20},
-		{fs: 10, want: 12},
-	}
-	for _, tt := range tests {
-		if got := emptyZoneHeight(tt.fs); got != tt.want {
-			t.Errorf("emptyZoneHeight(%d) = %d, want %d", tt.fs, got, tt.want)
+// TestLineHeightPxMeasuredNotMultiplier — Task 7 (замена TestEmptyZoneHeightSimpleMultiplier):
+// каркас — измеренная высота строки lineHeightPx(fs), а не эвристика fs*5/4.
+// historyVisibleHeightPx = historyVisibleLines × строка.
+func TestLineHeightPxMeasuredNotMultiplier(t *testing.T) {
+	th := material.NewTheme()
+	for _, fs := range []int{10, 16, 18, 20} {
+		got := lineHeightPx(fs)
+		measured := oneLineHeight(th, fs)
+		if got != measured {
+			t.Errorf("lineHeightPx(%d) = %d, want измеренную %d", fs, got, measured)
+		}
+		if old := fs * 5 / 4; got == old && measured != old {
+			t.Errorf("lineHeightPx(%d) = %d совпал со старой эвристикой fs*5/4", fs, got)
 		}
 	}
-	if got, want := historyVisibleHeightPx(18), emptyZoneHeight(18)*historyVisibleLines; got != want {
+	if got, want := historyVisibleHeightPx(18), lineHeightPx(18)*historyVisibleLines; got != want {
 		t.Errorf("historyVisibleHeightPx(18) = %d, want %d", got, want)
 	}
 }

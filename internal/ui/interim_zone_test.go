@@ -11,7 +11,7 @@ import (
 )
 
 // TestInterimZoneEmptyScaffold — пустая зона 1: каркас фиксированной высоты
-// interimVisibleLines × emptyZoneHeight(fs), ширина окна (Task 1.2, п.4).
+// interimVisibleLines × lineHeightPx(fs), ширина окна (Task 7: измеренная строка).
 func TestInterimZoneEmptyScaffold(t *testing.T) {
 	const fs = 18
 	th := material.NewTheme()
@@ -22,8 +22,8 @@ func TestInterimZoneEmptyScaffold(t *testing.T) {
 	if dims.Size.X != 800 {
 		t.Errorf("empty interim width = %d, want 800", dims.Size.X)
 	}
-	if want := emptyZoneHeight(fs) * interimVisibleLines; dims.Size.Y != want {
-		t.Errorf("empty interim height = %d, want %d (%d строк × %d)", dims.Size.Y, want, interimVisibleLines, emptyZoneHeight(fs))
+	if want := lineHeightPx(fs) * interimVisibleLines; dims.Size.Y != want {
+		t.Errorf("empty interim height = %d, want %d (%d строк × %d)", dims.Size.Y, want, interimVisibleLines, lineHeightPx(fs))
 	}
 }
 
@@ -57,7 +57,7 @@ func TestInterimZoneScrollableFullText(t *testing.T) {
 	}
 
 	// Контент действительно длиннее видимой высоты (иначе тест не о том).
-	visible := emptyZoneHeight(fs) * interimVisibleLines
+	visible := lineHeightPx(fs) * interimVisibleLines
 	if o.interimList.Position.Length <= visible {
 		t.Fatalf("контент (%d) не превышает видимую высоту (%d) — тест некорректен", o.interimList.Position.Length, visible)
 	}
@@ -77,10 +77,10 @@ func TestInterimZoneFixedHeightInRender(t *testing.T) {
 	}
 
 	// Зона 1 (Rigid) фиксирована: при тексте высота = interimVisibleLines строк.
-	visGtx, _ := newTestContext(800, emptyZoneHeight(18)*interimVisibleLines)
+	visGtx, _ := newTestContext(800, lineHeightPx(18)*interimVisibleLines)
 	var list layout.List
 	zd := layoutInterim(visGtx, th, o.lastInterim(), 18, &list, true)
-	if want := emptyZoneHeight(18) * interimVisibleLines; zd.Size.Y != want {
+	if want := lineHeightPx(18) * interimVisibleLines; zd.Size.Y != want {
 		t.Errorf("зона 1 при тексте: высота = %d, want %d (фиксированная)", zd.Size.Y, want)
 	}
 }
