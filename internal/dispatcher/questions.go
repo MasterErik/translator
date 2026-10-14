@@ -65,6 +65,11 @@ type QEntry struct {
 	// копируется в Snapshot; нужен, чтобы Prev/Next могли показать шапку
 	// существующей метки, не зная команду (F1/F2/F3).
 	Mode string
+	// Clarifications — стек уточнений к вопросу (в порядке добавления, хвост —
+	// последнее). Живёт в самой метке: при вытеснении кольца уезжает вместе с
+	// ней, а AbsorbLast переносит стек метки-дубля в предыдущую метку.
+	// Наружу отдаётся только копией (Clarifications/Snapshot/Active).
+	Clarifications []string
 }
 
 // QuestionTimeline — потокобезопасный таймлайн обнаруженных вопросов интервью.
@@ -135,6 +140,150 @@ func (t *QuestionTimeline) rel(idx int) (int, bool) {
 		return 0, false
 	}
 	return r, true
+}
+
+// --- уточнения (фаза 2, часть Б: Б-T1) ---
+
+// AddClarification добавляет уточнение text к метке с АБСОЛЮТНЫМ номером idx.
+// Возвращает false (no-op), если метка вытеснена из кольца / не существует либо
+// text пуст. Стек уточнений живёт в самой QEntry и уезжает вместе с меткой при
+// вытеснении — отдельной синхронизации не требует.
+func (t *QuestionTimeline) AddClarification(idx int, text string) bool {
+	if text == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e := t.lookupLocked(idx)
+	if e == nil {
+		return false
+	}
+	e.Clarifications = append(e.Clarifications, text)
+	return true
+}
+
+// RemoveLastClarification убирает последнее уточнение метки idx. Возвращает
+// false (no-op), если метки нет в окне или у неё нет уточнений. После удаления
+// последнего уточнения срез сбрасывается в nil — контракт Clarifications().
+func (t *QuestionTimeline) RemoveLastClarification(idx int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e := t.lookupLocked(idx)
+	if e == nil || len(e.Clarifications) == 0 {
+		return false
+	}
+	e.Clarifications = e.Clarifications[:len(e.Clarifications)-1]
+	if len(e.Clarifications) == 0 {
+		e.Clarifications = nil
+	}
+	return true
+}
+
+// Clarifications возвращает КОПИЮ стека уточнений метки idx (nil для пустого
+// стека и для метки вне окна). Копия не алиасит внутренний срез.
+func (t *QuestionTimeline) Clarifications(idx int) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e := t.lookupLocked(idx)
+	if e == nil || len(e.Clarifications) == 0 {
+		return nil
+	}
+	return cloneClarifications(e.Clarifications)
+}
+
+// AbsorbLast — слияние реплики-дубля вопроса. Если ПОСЛЕДНЯЯ метка окна — дубль
+// вопроса q (её Question == q), она удаляется, а её текст добавляется уточнением
+// к предыдущей метке (idx-1). Активность и индикатор свежести пересчитываются:
+// указатель, смотревший на удалённую метку, смещается на слитую.
+// Возвращает (новый абсолютный индекс активной метки, true).
+//
+// Слияние невозможно (no-op, false), если последней метки нет, метка всего одна
+// (сливать не с чем) или её Question != q. В этом случае возвращается текущий
+// хвостовой абсолютный idx.
+func (t *QuestionTimeline) AbsorbLast(q string) (int, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	n := len(t.entries)
+	if n == 0 {
+		return 0, false
+	}
+	lastAbs := t.base + n - 1 // абсолютный номер последней метки окна
+	if n < 2 || t.entries[n-1].Question != q {
+		return lastAbs, false
+	}
+
+	// Слияние: текст удаляемой метки становится уточнением предыдущей.
+	absorbed := t.entries[n-1]
+	prev := &t.entries[n-2]
+	if absorbed.Question != "" {
+		prev.Clarifications = append(prev.Clarifications, absorbed.Question)
+	}
+
+	// Удаляем только хвост буфера: у него внутренняя позиция n-1, поэтому
+	// удаление сводится к усечению entries — Clarifications, Step и State
+	// остальных меток не сдвигаются (в отличие от evictLocked, который режет
+	// голову и сдвигает base).
+	t.entries = t.entries[:n-1]
+	absorbedPos := n - 1 // внутренняя позиция удалённой метки
+
+	// Активность: указатель, смотревший на удалённую метку, переносится на
+	// слитую (та же позиция — последняя оставшаяся); иначе clamp в новое окно,
+	// чтобы active не вышел за пределы буфера.
+	if t.active == absorbedPos {
+		t.active = absorbedPos - 1
+	}
+	t.clampActiveLocked()
+
+	// Индикатор свежести: если он указывал на удалённую метку, свежести больше
+	// нет; прочие значения clamp'ятся в новое окно.
+	if t.freshAt == absorbedPos {
+		t.freshAt = -1
+	}
+	t.clampFreshLocked()
+
+	// Нумерация не «схлопывается» и не переиспользует номер удалённой метки:
+	// следующий Add получит idx = base + len(entries) == lastAbs, но это уже
+	// новый вопрос (totalAsked продолжает расти).
+	return t.base + t.active, true
+}
+
+// lookupLocked возвращает метку с абсолютным номером idx или nil, если idx
+// вытеснен из окна кольца либо ещё не существует. Вызывается под мьютексом.
+func (t *QuestionTimeline) lookupLocked(idx int) *QEntry {
+	r, ok := t.rel(idx)
+	if !ok {
+		return nil
+	}
+	return &t.entries[r]
+}
+
+// clampActiveLocked удерживает active в границах буфера. Вызывается под мьютексом.
+func (t *QuestionTimeline) clampActiveLocked() {
+	if len(t.entries) == 0 {
+		return
+	}
+	if t.active < 0 {
+		t.active = 0
+	}
+	if t.active > len(t.entries)-1 {
+		t.active = len(t.entries) - 1
+	}
+}
+
+// clampFreshLocked удерживает freshAt в границах буфера либо сбрасывает его
+// (-1), если индикатора нет. Вызывается под мьютексом.
+func (t *QuestionTimeline) clampFreshLocked() {
+	if t.freshAt < 0 {
+		t.freshAt = -1
+		return
+	}
+	if len(t.entries) == 0 || t.freshAt > len(t.entries)-1 {
+		t.freshAt = -1
+	}
 }
 
 // Add добавляет вопрос в конец таймлайна в состоянии QIdle и возвращает его
@@ -395,10 +544,21 @@ func stepCommand(step int) translator.GenerationCommand {
 	}
 }
 
-// cloneEntry возвращает копию метки с копией слайса Answer.
+// cloneEntry возвращает копию метки с копиями слайсов Answer и Clarifications.
 func cloneEntry(e QEntry) QEntry {
 	out := e
 	out.Answer = cloneAnswers(e.Answer)
+	out.Clarifications = cloneClarifications(e.Clarifications)
+	return out
+}
+
+// cloneClarifications возвращает копию слайса уточнений (nil для пустого входа).
+func cloneClarifications(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
 	return out
 }
 

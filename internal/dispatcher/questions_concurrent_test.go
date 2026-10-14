@@ -70,3 +70,87 @@ func TestQuestionTimelineConcurrent(t *testing.T) {
 		}
 	}
 }
+
+// TestQuestionTimelineConcurrentClarify — Add ∥ AddClarification ∥ чтения под
+// -race (фаза 2, Б-T1). Писатели параллельно добавляют метки и уточнения,
+// читатели снимают Snapshot/Clarifications/Active и мутируют копии.
+// Инвариант: без data race и паники; ни одна метка не получила «mutated» —
+// копии не алиасят внутренний стек уточнений.
+func TestQuestionTimelineConcurrentClarify(t *testing.T) {
+	tl := NewQuestionTimeline()
+
+	const (
+		adders      = 4
+		perAdd      = 25
+		clarifiers  = 4
+		perClar     = 40
+		readers     = 4
+		perRead     = 100
+		wantEntries = adders * perAdd
+	)
+	_ = clarifiers
+
+	var wg sync.WaitGroup
+	wg.Add(adders + clarifiers + readers)
+
+	// Писатели: Add + уточнение к только что добавленной метке.
+	for w := 0; w < adders; w++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perAdd; i++ {
+				idx := tl.Add("q")
+				tl.AddClarification(idx, "c")
+			}
+		}()
+	}
+
+	// Писатели: уточнения к уже существующим меткам (idx может быть вытеснен —
+	// тогда AddClarification возвращает false, это часть контракта).
+	for w := 0; w < clarifiers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perClar; i++ {
+				tl.AddClarification(tl.TotalAsked()-1, "c")
+			}
+		}()
+	}
+
+	// Читатели: срезы + мутации копий.
+	for r := 0; r < readers; r++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perRead; i++ {
+				for _, e := range tl.Snapshot() {
+					for j := range e.Clarifications {
+						e.Clarifications[j] = "mutated"
+					}
+				}
+				if idx, _, ok := tl.Active(); ok {
+					if got := tl.Clarifications(idx); len(got) > 0 {
+						got[0] = "mutated"
+					}
+					_ = tl.RemoveLastClarification(idx)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	snap := tl.Snapshot()
+	if len(snap) != wantEntries {
+		t.Fatalf("len(Snapshot()) = %d, ожидалось %d", len(snap), wantEntries)
+	}
+	total := 0
+	for i, e := range snap {
+		for j, c := range e.Clarifications {
+			if c != "c" {
+				t.Fatalf("snap[%d].Clarifications[%d] = %q, ожидалось \"c\" (алиас копии просочился)", i, j, c)
+			}
+		}
+		total += len(e.Clarifications)
+	}
+	if total == 0 {
+		t.Fatal("ни одного уточнения не сохранилось — писатели не сработали")
+	}
+}

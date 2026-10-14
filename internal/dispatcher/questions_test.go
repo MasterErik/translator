@@ -368,6 +368,352 @@ func TestQuestionTimeline_NextStepCycle(t *testing.T) {
 	}
 }
 
+// --- уточнения (фаза 2, часть Б: Б-T1) ---
+
+// TestQuestionTimeline_AddClarification — добавление уточнения к метке:
+// возвращает true, текст попадает в метку по абсолютному idx, чужие метки не
+// затронуты; пустой текст и неверный/вытесненный idx — false (no-op).
+func TestQuestionTimeline_AddClarification(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.Add("Q2")
+
+	if !tl.AddClarification(1, "уточнение 1") {
+		t.Fatal("AddClarification(1) с непустым текстом: false, ожидалось true")
+	}
+	if !tl.AddClarification(1, "уточнение 2") {
+		t.Fatal("AddClarification(1) второе: false, ожидалось true")
+	}
+
+	got := tl.Clarifications(1)
+	if len(got) != 2 || got[0] != "уточнение 1" || got[1] != "уточнение 2" {
+		t.Fatalf("Clarifications(1) = %v, ожидалось [уточнение 1 уточнение 2]", got)
+	}
+	// Соседняя метка не получила чужое уточнение.
+	if got := tl.Clarifications(0); len(got) != 0 {
+		t.Fatalf("Clarifications(0) = %v, ожидалось пусто", got)
+	}
+
+	// Пустой текст — false, состояние не меняется.
+	if tl.AddClarification(1, "") {
+		t.Fatal("AddClarification с пустым текстом: true, ожидалось false")
+	}
+	if got := tl.Clarifications(1); len(got) != 2 {
+		t.Fatalf("пустой текст добавился: %v", got)
+	}
+
+	// Неверный/вытесненный idx — false, без паники.
+	for _, idx := range []int{-1, 2, 99} {
+		if tl.AddClarification(idx, "x") {
+			t.Fatalf("AddClarification(%d): true, ожидалось false (idx вне окна)", idx)
+		}
+	}
+}
+
+// TestQuestionTimeline_ClarificationsNilForEmpty — у метки без уточнений
+// Clarifications() возвращает nil (контракт: nil для пустого), неверный idx — nil.
+func TestQuestionTimeline_ClarificationsNilForEmpty(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+
+	if got := tl.Clarifications(0); got != nil {
+		t.Fatalf("Clarifications(0) без уточнений = %#v, ожидалось nil", got)
+	}
+	if got := tl.Clarifications(-1); got != nil {
+		t.Fatalf("Clarifications(-1) = %#v, ожидалось nil", got)
+	}
+	if got := tl.Clarifications(99); got != nil {
+		t.Fatalf("Clarifications(99) = %#v, ожидалось nil", got)
+	}
+}
+
+// TestQuestionTimeline_RemoveLastClarification — убирает только последнее
+// уточнение метки; на пустом списке/неверном idx — false (no-op).
+func TestQuestionTimeline_RemoveLastClarification(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.Add("Q2")
+	tl.AddClarification(1, "первое")
+	tl.AddClarification(1, "второе")
+
+	if !tl.RemoveLastClarification(1) {
+		t.Fatal("RemoveLastClarification(1): false, ожидалось true")
+	}
+	if got := tl.Clarifications(1); len(got) != 1 || got[0] != "первое" {
+		t.Fatalf("после первого RemoveLastClarification: %v, ожидалось [первое]", got)
+	}
+	if !tl.RemoveLastClarification(1) {
+		t.Fatal("RemoveLastClarification(1) второй: false, ожидалось true")
+	}
+	if got := tl.Clarifications(1); got != nil {
+		t.Fatalf("после полного опустошения: %#v, ожидалось nil", got)
+	}
+
+	// Нет уточнений — false.
+	if tl.RemoveLastClarification(1) {
+		t.Fatal("RemoveLastClarification на пустом списке: true, ожидалось false")
+	}
+	// Неверный idx — false, чужие уточнения не трогаются.
+	if tl.RemoveLastClarification(-1) {
+		t.Fatal("RemoveLastClarification(-1): true, ожидалось false")
+	}
+	if tl.RemoveLastClarification(99) {
+		t.Fatal("RemoveLastClarification(99): true, ожидалось false")
+	}
+}
+
+// TestQuestionTimeline_ClarificationsNoAlias — возвращённые копии не алиасят
+// внутренний стек уточнений: мутация среза (и его элементов) не влияет на
+// таймлайн ни через Clarifications(), ни через Snapshot()/Active().
+func TestQuestionTimeline_ClarificationsNoAlias(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.AddClarification(0, "оригинал")
+
+	got := tl.Clarifications(0)
+	if len(got) != 1 {
+		t.Fatalf("Clarifications(0) = %v, ожидалось 1 элемент", got)
+	}
+	got[0] = "MUTATED"
+
+	if after := tl.Clarifications(0); after[0] != "оригинал" {
+		t.Fatalf("мутация Clarifications() просочилась внутрь: %q", after[0])
+	}
+
+	// Snapshot() отдаёт копию — мутация не влияет ни на таймлайн, ни на
+	// последующие снапшоты.
+	snap := tl.Snapshot()
+	if len(snap) != 1 || len(snap[0].Clarifications) != 1 {
+		t.Fatalf("Snapshot(): неверная структура: %+v", snap)
+	}
+	snap[0].Clarifications[0] = "SNAP-MUTATED"
+	if got := tl.Clarifications(0); got[0] != "оригинал" {
+		t.Fatalf("мутация Snapshot() просочилась внутрь: %q", got[0])
+	}
+	if got := tl.Snapshot()[0].Clarifications[0]; got != "оригинал" {
+		t.Fatalf("мутация Snapshot() сохранилась во внутреннем стеке: %q", got)
+	}
+
+	// Active() — тоже копия.
+	tl.AddClarification(0, "второе")
+	_, e, _ := tl.Active()
+	if len(e.Clarifications) != 2 {
+		t.Fatalf("Active().Clarifications = %v, ожидалось 2 элемента", e.Clarifications)
+	}
+	e.Clarifications[0] = "ACTIVE-MUTATED"
+	if got := tl.Clarifications(0); got[0] != "оригинал" {
+		t.Fatalf("мутация Active() просочилась внутрь: %q", got[0])
+	}
+}
+
+// TestQuestionTimeline_AbsorbLastMergesDuplicate — слияние: последняя метка окна
+// является репликой-дублем вопроса (её Question == q). Метка удаляется, её текст
+// уходит уточнением в метку idx-1, активность указывает на слитую метку.
+func TestQuestionTimeline_AbsorbLastMergesDuplicate(t *testing.T) {
+	// Раскладка: [0]=Q1 (prev, с уточнением), [1]=Q3, [2]=дубль (удаляется).
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.AddClarification(0, "уточнение A")
+	tl.Add("Q3")
+	tl.Add("Дубль")
+
+	// Активность на хвосте (idx 2) — это и есть удаляемая метка.
+	if idx, _, _ := tl.Active(); idx != 2 {
+		t.Fatalf("подготовка: активная метка idx=%d, ожидалось 2", idx)
+	}
+
+	newIdx, ok := tl.AbsorbLast("Дубль")
+	if !ok {
+		t.Fatal("AbsorbLast с совпадающей последней меткой: ok=false, ожидалось true")
+	}
+	if newIdx != 1 {
+		t.Fatalf("AbsorbLast вернул newIdx=%d, ожидалось 1 (указатель смещён на слитую метку Q3)", newIdx)
+	}
+
+	snap := tl.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("после слияния len(Snapshot())=%d, ожидалось 2 (метка удалена)", len(snap))
+	}
+	if snap[0].Idx != 0 || snap[0].Question != "Q1" {
+		t.Fatalf("после слияния snap[0] = %+v, ожидалось idx=0 Q1", snap[0])
+	}
+	if snap[1].Idx != 1 || snap[1].Question != "Q3" {
+		t.Fatalf("после слияния snap[1] = %+v, ожидалось idx=1 Q3 (слитая метка стала хвостом)", snap[1])
+	}
+	// Текст удалённой метки ушёл уточнением в idx-1 (Q3), а не в Q1.
+	if got := tl.Clarifications(1); len(got) != 1 || got[0] != "Дубль" {
+		t.Fatalf("Clarifications(1) = %v, ожидалось [Дубль] (текст слитой метки в метке idx-1)", got)
+	}
+	got := tl.Clarifications(0)
+	want := []string{"уточнение A"}
+	if len(got) != len(want) {
+		t.Fatalf("Clarifications(0) = %v, ожидалось %v (стек Q1 не тронут)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Clarifications(0)[%d] = %q, ожидалось %q", i, got[i], want[i])
+		}
+	}
+
+	// Активность пересчитана: указатель, смотревший на удалённую метку (idx 2),
+	// перенесён на слитую (idx 1), а не «залип» на прежнем абсолютном номере.
+	if idx, e, ok := tl.Active(); !ok || idx != 1 || e.Question != "Q3" {
+		t.Fatalf("Active() после слияния: idx=%d ok=%v question=%q, ожидалось idx=1 ok=true Q3", idx, ok, e.Question)
+	}
+	if !tl.OnTail() {
+		t.Fatal("OnTail() после слияния: false, ожидалось true (слитая метка стала хвостом)")
+	}
+	// Слияние не пересоздаёт метки: счётчик заданных вопросов не сбрасывается.
+	if got := tl.TotalAsked(); got != 3 {
+		t.Fatalf("TotalAsked() после слияния = %d, ожидалось 3 (метка была добавлена)", got)
+	}
+}
+
+// TestQuestionTimeline_AbsorbLastMismatchNoOp — несовпадение текста последней
+// метки и q → no-op: метки не тронуты, ok=false, активность не двигается.
+func TestQuestionTimeline_AbsorbLastMismatchNoOp(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.Add("Что такое Kafka?")
+
+	before := tl.Snapshot()
+	idxBefore := mustActiveIdx(t, tl)
+
+	newIdx, ok := tl.AbsorbLast("Что такое RAID?")
+	if ok {
+		t.Fatal("AbsorbLast при несовпадении Question: ok=true, ожидалось false")
+	}
+	if newIdx != idxBefore {
+		t.Fatalf("AbsorbLast вернул newIdx=%d, ожидалось текущий хвост %d", newIdx, idxBefore)
+	}
+
+	after := tl.Snapshot()
+	if len(after) != len(before) {
+		t.Fatalf("no-op изменил число меток: %d → %d", len(before), len(after))
+	}
+	for i := range after {
+		if after[i].Idx != before[i].Idx || after[i].Question != before[i].Question || len(after[i].Clarifications) != 0 {
+			t.Fatalf("no-op изменил метку %d: %+v (было %+v)", i, after[i], before[i])
+		}
+	}
+	if idx := mustActiveIdx(t, tl); idx != idxBefore {
+		t.Fatalf("no-op сдвинул активную метку: %d → %d", idxBefore, idx)
+	}
+}
+
+// TestQuestionTimeline_AbsorbLastSingleEntryNoOp — единственная метка: сливать
+// не с чем, ok=false, таймлайн не изменён.
+func TestQuestionTimeline_AbsorbLastSingleEntryNoOp(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+
+	newIdx, ok := tl.AbsorbLast("Q1")
+	if ok {
+		t.Fatal("AbsorbLast при единственной метке: ok=true, ожидалось false")
+	}
+	if newIdx != 0 {
+		t.Fatalf("AbsorbLast при единственной метке вернул newIdx=%d, ожидалось 0", newIdx)
+	}
+	if snap := tl.Snapshot(); len(snap) != 1 || snap[0].Question != "Q1" {
+		t.Fatalf("таймлайн изменён при единственной метке: %+v", snap)
+	}
+}
+
+// TestQuestionTimeline_AbsorbLastEmptyTimelineNoOp — пустой таймлайн: no-op без
+// паники, ok=false.
+func TestQuestionTimeline_AbsorbLastEmptyTimelineNoOp(t *testing.T) {
+	tl := NewQuestionTimeline()
+
+	newIdx, ok := tl.AbsorbLast("Q1")
+	if ok {
+		t.Fatal("AbsorbLast на пустом таймлайне: ok=true, ожидалось false")
+	}
+	if newIdx != 0 {
+		t.Fatalf("AbsorbLast на пустом таймлайне вернул newIdx=%d, ожидалось 0", newIdx)
+	}
+	if snap := tl.Snapshot(); len(snap) != 0 {
+		t.Fatalf("пустой таймлайн изменён: %+v", snap)
+	}
+}
+
+// TestQuestionTimeline_AbsorbLastResetsFreshOn — если индикатор freshAt указывал
+// на удаляемую метку, после слияния он сбрасывается (метки больше нет).
+func TestQuestionTimeline_AbsorbLastResetsFreshOn(t *testing.T) {
+	tl := NewQuestionTimeline()
+	tl.Add("Q1")
+	tl.Add("Q2")
+	tl.Prev() // уходим с хвоста (active -> 0) — следующие Add дают freshAt
+	tl.Add("Q3")
+	tl.Add("Дубль")
+
+	freshIdx, fresh := tl.HasFresh()
+	if !fresh || freshIdx != 3 {
+		t.Fatalf("подготовка: HasFresh() = (%d,%v), ожидалось (3,true)", freshIdx, fresh)
+	}
+
+	// Слияние удаляет метку freshAt — индикатор исчезает; активность остаётся
+	// на Q1 (idx 0): пользователь не смотрел на удалённую, поэтому указатель не
+	// смещается, а лишь clamp'ится в новое окно.
+	newIdx, ok := tl.AbsorbLast("Дубль")
+	if !ok {
+		t.Fatal("AbsorbLast с совпадающим текстом: ok=false, ожидалось true")
+	}
+	if newIdx != 0 {
+		t.Fatalf("AbsorbLast вернул newIdx=%d, ожидалось 0", newIdx)
+	}
+	if idx, fresh := tl.HasFresh(); fresh {
+		t.Fatalf("HasFresh() после слияния с freshAt-меткой: ok=true (idx=%d), ожидалось false", idx)
+	}
+	if idx, e, _ := tl.Active(); idx != 0 || e.Question != "Q1" {
+		t.Fatalf("Active() = idx %d question %q, ожидалось idx=0 Q1 (указатель не смотрел на удалённую)", idx, e.Question)
+	}
+}
+
+// TestQuestionTimeline_ClarificationsSurviveEviction — уточнения живут в QEntry и
+// переживают вытеснение головы кольца: >cap Add'ов, уточнение в хвостовой метке,
+// вытеснение головы — уточнение на месте, соседние метки не «унаследовали» его.
+func TestQuestionTimeline_ClarificationsSurviveEviction(t *testing.T) {
+	tl := NewQuestionTimeline()
+
+	// Голова с уточнением — уедет при вытеснении.
+	headIdx := tl.Add("head")
+	tl.AddClarification(headIdx, "уточнение головы")
+
+	// Хвост с уточнением — переживёт вытеснение.
+	var tailIdx int
+	for i := 0; i < questionTimelineCapacity+10; i++ {
+		tailIdx = tl.Add("q")
+	}
+	tl.AddClarification(tailIdx, "уточнение хвоста")
+
+	snap := tl.Snapshot()
+	if len(snap) != questionTimelineCapacity {
+		t.Fatalf("len(Snapshot())=%d, ожидалось %d (вместимость)", len(snap), questionTimelineCapacity)
+	}
+	// Голова вытеснена — её уточнение недоступно вместе с меткой.
+	if got := tl.Clarifications(headIdx); got != nil {
+		t.Fatalf("Clarifications вытесненной метки = %v, ожидалось nil", got)
+	}
+	if tl.AddClarification(headIdx, "позднее") {
+		t.Fatal("AddClarification вытесненной метки: true, ожидалось false")
+	}
+
+	// Уточнение хвоста на месте и ровно одно.
+	got := tl.Clarifications(tailIdx)
+	if len(got) != 1 || got[0] != "уточнение хвоста" {
+		t.Fatalf("Clarifications(tail)=%v, ожидалось [уточнение хвоста]", got)
+	}
+	// Ни одна другая метка окна не получила чужой стек уточнений.
+	for i, e := range snap {
+		if e.Idx == tailIdx {
+			continue
+		}
+		if len(e.Clarifications) != 0 {
+			t.Fatalf("метка snap[%d] (idx=%d) получила чужие уточнения: %v", i, e.Idx, e.Clarifications)
+		}
+	}
+}
+
 // --- некорректный idx ---
 
 func TestQuestionTimeline_InvalidIdxNoOp(t *testing.T) {
@@ -633,8 +979,6 @@ func TestQuestionTimeline_AbsoluteIdxAfterEviction(t *testing.T) {
 		t.Fatalf("SetState вытесненного idx попал в голову окна: %+v", head)
 	}
 }
-
-// --- вспомогательные проверки для тестов кольца ---
 
 // mustActiveIdx возвращает абсолютный номер активной метки или падает.
 func mustActiveIdx(t *testing.T, tl *QuestionTimeline) int {
