@@ -208,6 +208,93 @@ func TestLongQuestionTextTruncated(t *testing.T) {
 
 // ── Лента при 5+ метках ──
 
+// ── Индикатор свежих меток «➤» (A-T3) ──
+
+// TestShowFreshIndicator — «➤» показывается ИСКЛЮЧИТЕЛЬНО по полю Answer.HasFresh,
+// которое заполняет dispatcher из таймлайна. Никакой локальной арифметики
+// QuestionIdx/Total: на >150 вопросах окно кольца короче Total, и старая логика
+// (meta.QuestionIdx < meta.Total-1) давала неверный ответ (баг D4).
+func TestShowFreshIndicator(t *testing.T) {
+	tests := []struct {
+		name string
+		meta Answer
+		want bool
+	}{
+		{"has_fresh_true", Answer{QuestionIdx: 145, Total: 155, HasFresh: true}, true},
+		{"has_fresh_false", Answer{QuestionIdx: 145, Total: 155, HasFresh: false}, false},
+		{"zero_value_old_format", Answer{}, false},
+		// Кейс D4: активная не на хвосте (idx < total), но свежая метка есть.
+		{"absolute_idx_below_total", Answer{QuestionIdx: 10, Total: 156, HasFresh: true}, true},
+		// Обратный кейс: активная на хвосте и HasFresh=true не приходит (таймлайн
+		// гасит индикатор) — показывать нечего.
+		{"tail_no_fresh", Answer{QuestionIdx: 155, Total: 156, HasFresh: false}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := showFreshIndicator(tt.meta); got != tt.want {
+				t.Errorf("showFreshIndicator(%+v) = %v, want %v", tt.meta, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestQuestionStripIndicatorRendersWithFresh — лента с HasFresh=true рендерится
+// без паники (индикатор — Rigid-элемент у правого края) и занимает строку;
+// HasFresh=false и нулевое значение старого формата тоже рендерятся.
+func TestQuestionStripIndicatorRendersWithFresh(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+	cases := map[string]Answer{
+		"fresh":         {QuestionIdx: 145, Total: 155, QuestionText: "вопрос", State: "ready", HasFresh: true},
+		"no_fresh":      {QuestionIdx: 145, Total: 155, QuestionText: "вопрос", State: "ready"},
+		"old_format":    {},
+		"fresh_wide":    {QuestionIdx: 0, Total: 1, QuestionText: "единственный", State: "idle", HasFresh: true},
+		"fresh_narrow":  {QuestionIdx: 2, Total: 156, QuestionText: "v", State: "generating", HasFresh: true},
+		"fresh_at_tail": {QuestionIdx: 155, Total: 156, QuestionText: "v", State: "ready", HasFresh: true},
+	}
+	for name, meta := range cases {
+		t.Run(name, func(t *testing.T) {
+			gtx, _ := newLabelContext(800)
+			dims := layoutQuestionStrip(gtx, th, []Answer{meta}, meta, fs)
+			if dims.Size.Y <= 0 {
+				t.Errorf("layoutQuestionStrip высота = %d, want > 0", dims.Size.Y)
+			}
+		})
+	}
+}
+
+// TestQuestionStripIndicatorNotDrawnWhenFreshFalse — индикатор при HasFresh=false
+// не занимает места: ширина, отданная Rigid-элементу справа, нулевая. Проверяем
+// через измерение ленты на узком контексте (индикатор «съел» бы место у метки).
+func TestQuestionStripIndicatorNotDrawnWhenFreshFalse(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+	// На очень узком контексте лишний Rigid-индикатор сдвинул бы метки, но высота
+	// строки не меняется; проверяем прежде всего что рендер не паникует и
+	// предикат показывает индикатор только при HasFresh.
+	meta := Answer{QuestionIdx: 1, Total: 3, QuestionText: "q", State: "ready"}
+	if showFreshIndicator(meta) {
+		t.Fatalf("showFreshIndicator без HasFresh = true, want false")
+	}
+	gtx, _ := newLabelContext(120)
+	if dims := layoutQuestionStrip(gtx, th, []Answer{meta}, meta, fs); dims.Size.Y <= 0 {
+		t.Errorf("высота ленты = %d, want > 0", dims.Size.Y)
+	}
+}
+
+// TestAnswersMetaHasFreshOnlyContract — Answer с единственным ненулевым полем
+// HasFresh распознаётся как контрактная (иначе индикатор молча терялся бы), а
+// полностью нулевая Answer — нет.
+func TestAnswersMetaHasFreshOnlyContract(t *testing.T) {
+	meta, ok := answersMeta([]Answer{{HasFresh: true}})
+	if !ok || !meta.HasFresh {
+		t.Fatalf("answersMeta({HasFresh:true}) = (%+v, %v), want (HasFresh=true, true)", meta, ok)
+	}
+	if _, ok := answersMeta([]Answer{{}}); ok {
+		t.Fatalf("answersMeta({}) = ok=true, want false (нулевые поля = старый формат)")
+	}
+}
+
 // TestQuestionStripManyMarks — лента рендерится без паники при большом таймлайне
 // (Total=10): окно вокруг активной не превышает questionStripMaxVisible, зона 3
 // скроллится к концу.

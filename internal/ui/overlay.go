@@ -639,11 +639,11 @@ func isMetadataOnly(a Answer) bool {
 }
 
 // answersMeta возвращает метаданные таймлайна из первого Answer с заданным
-// контрактом (QuestionIdx/Total/State/Mode). ok=false для старого формата,
-// где все поля метаданных нулевые — тогда зона 3 рендерится как раньше.
+// контрактом (QuestionIdx/Total/State/Mode/HasFresh). ok=false для старого
+// формата, где все поля метаданных нулевые — тогда зона 3 рендерится как раньше.
 func answersMeta(answers []Answer) (Answer, bool) {
 	for _, a := range answers {
-		if a.Total != 0 || a.State != "" || a.Mode != "" || a.QuestionText != "" {
+		if a.Total != 0 || a.State != "" || a.Mode != "" || a.QuestionText != "" || a.HasFresh {
 			return a, true
 		}
 	}
@@ -652,13 +652,14 @@ func answersMeta(answers []Answer) (Answer, bool) {
 
 // layoutQuestionStrip рисует ленту меток [1] [2] [3] над ответами: активная
 // выделена цветом, у каждой — маркер состояния, справа — индикатор более
-// свежих меток. Ширина ленты ограничена questionStripMaxVisible; окно вокруг
+// свежих меток «➤». Ширина ленты ограничена questionStripMaxVisible; окно вокруг
 // активной считает visibleWindow. Высота — одна строка smallFontSize(fs).
 //
 // QuestionIdx/Total — АБСОЛЮТНЫЕ номера меток (не сбрасываются при вытеснении
 // старых из кольца): видимое окно считается от относительной позиции активной
 // в диапазоне [QuestionIdx-Total+1, QuestionIdx], а лейбл метки показывает её
-// абсолютный номер.
+// абсолютный номер. Признак свежести (HasFresh) тоже абсолютный и приходит от
+// таймлайна — сравнение QuestionIdx с Total на уровне UI недопустимо.
 func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, fs int) layout.Dimensions {
 	total := meta.Total
 	active := meta.QuestionIdx
@@ -685,7 +686,11 @@ func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answe
 			return layout.Dimensions{Size: image.Pt(gtx.Constraints.Min.X, 0)}
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if total <= active+1 {
+			// «➤» — есть непросмотренная метка правее активной. Признак
+			// приходит из dispatcher (Answer.HasFresh) и считается по
+			// АБСОЛЮТНОМУ idx свежей метки; сравнение QuestionIdx с Total здесь
+			// недопустимо — на >150 вопросах окно кольца короче Total (баг D4).
+			if !showFreshIndicator(meta) {
 				return layout.Dimensions{}
 			}
 			l := overlayLabel(th, unit.Sp(smallFontSize(fs)), questionStripNewMark)
@@ -693,6 +698,15 @@ func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answe
 			return l.Layout(gtx)
 		}),
 	)
+}
+
+// showFreshIndicator решает, рисовать ли индикатор «➤» у правого края ленты.
+// Признак приходит от таймлайна (Answer.HasFresh, абсолютный idx свежей метки) —
+// UI ничего не досчитывает: сравнение meta.QuestionIdx с meta.Total здесь было бы
+// смешением абсолютного номера с числом вопросов и врало бы на >cap вопросах
+// (окно кольца короче Total). Вынесено отдельной чистой функцией для юнит-теста.
+func showFreshIndicator(meta Answer) bool {
+	return meta.HasFresh
 }
 
 // layoutMarksRow рисует видимые метки ленты: видимое окно вокруг активной.

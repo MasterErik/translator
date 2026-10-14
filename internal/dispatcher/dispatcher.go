@@ -806,12 +806,18 @@ func (d *Dispatcher) pushHeader(idx int, answers []ui.Answer) {
 	// Total — абсолютный счётчик вопросов за сессию (не сбрасывается при
 	// вытеснении меток из кольца), поэтому берём его из таймлайна, а не len(snap).
 	total := d.timeline.TotalAsked()
+	// hasFresh — в окне кольца есть непросмотренная метка правее активной
+	// (tail-follow выключен): UI рисует индикатор «➤». Свежесть определяет сам
+	// таймлайн (freshAt, АБСОЛЮТНЫЙ индекс), а не сравнение Total с QuestionIdx
+	// в UI — последнее смешивало абсолютный idx с оконным total (баг D4).
+	_, hasFresh := d.timeline.HasFresh()
 	for i := range header {
 		header[i].QuestionIdx = idx
 		header[i].Total = total
 		header[i].QuestionText = entry.Question
 		header[i].State = entry.State.String()
 		header[i].Mode = entry.Mode
+		header[i].HasFresh = hasFresh
 	}
 
 	d.overlay.AddMessage(ui.UIMessage{

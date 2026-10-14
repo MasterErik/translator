@@ -862,6 +862,138 @@ func TestHeaderTotalGrowsMonotonicallyAcrossEviction(t *testing.T) {
 	}
 }
 
+// ── A-T3: индикатор свежих меток «➤» (HasFresh в шапке) ──────────────────
+
+// TestPushHeaderHasFreshFalseWhenAtTail — метка на хвосте (tail-follow): шапка
+// уходит с HasFresh=false — индикатора «➤» нет.
+func TestPushHeaderHasFreshFalseWhenAtTail(t *testing.T) {
+	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
+	overlay := d.overlay.(*mockOverlay)
+
+	const n = 3
+	for i := 0; i < n; i++ {
+		d.timeline.Add(fmt.Sprintf("Q%d?", i))
+	}
+	d.pushActiveHeader()
+
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка на хвосте не найдена: %+v", msg)
+	}
+	if msg.Answers[0].HasFresh {
+		t.Errorf("HasFresh на хвосте = true, ожидалось false (индикатор гаснет)")
+	}
+	if msg.Answers[0].QuestionIdx != n-1 {
+		t.Errorf("QuestionIdx = %d, ожидалось %d (активная = хвост)", msg.Answers[0].QuestionIdx, n-1)
+	}
+}
+
+// TestPushHeaderHasFreshTrueOffTail — регрессия D4: окно кольца ограничено 150,
+// TotalAsked=156 (абсолютный), активная НЕ на хвосте, а свежая метка правее неё
+// существует → шапка несёт HasFresh=true, хотя QuestionIdx (153) заметно меньше
+// Total (156). Старая UI-логика («➤» при QuestionIdx < Total) ошибалась бы в
+// обе стороны, потому что сравнивала абсолютный idx с оконным total.
+func TestPushHeaderHasFreshTrueOffTail(t *testing.T) {
+	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
+	overlay := d.overlay.(*mockOverlay)
+
+	// 155 добавлений: голова окна вытеснена, окно хранит 150 меток (idx 5..154).
+	const reached = questionTimelineCapacity + 5
+	for i := 0; i < reached; i++ {
+		d.timeline.Add(fmt.Sprintf("Q%d?", i))
+	}
+	// Уходим с хвоста (tail-follow выключается) — теперь новая метка станет fresh.
+	if !d.timeline.Prev() {
+		t.Fatal("Prev() с хвоста: false, ожидалось true")
+	}
+	// Вопрос приходит при просмотре истории: активная не двигается, свежая метка
+	// запоминается (freshAt = последняя) — это и есть индикатор «➤».
+	if idx := d.timeline.Add("Qnew?"); idx != reached {
+		t.Fatalf("Add вне хвоста вернул idx=%d, ожидалось %d", idx, reached)
+	}
+
+	total := d.timeline.TotalAsked()
+	if total != reached+1 {
+		t.Fatalf("TotalAsked() = %d, ожидалось %d", total, reached+1)
+	}
+	if snap := snapshotOf(d); len(snap) != questionTimelineCapacity {
+		t.Fatalf("len(Snapshot()) = %d, ожидалось %d (окно кольца)", len(snap), questionTimelineCapacity)
+	}
+	activeAbs, _, ok := d.timeline.Active()
+	if !ok || activeAbs != reached-2 {
+		t.Fatalf("активная метка idx=%d ok=%v, ожидалось %d", activeAbs, ok, reached-2)
+	}
+
+	d.pushActiveHeader()
+
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка не найдена: %+v", msg)
+	}
+	a := msg.Answers[0]
+	if !a.HasFresh {
+		t.Errorf("HasFresh = false при active=%d total=%d, ожидалось true (в окне есть свежая метка правее)",
+			a.QuestionIdx, a.Total)
+	}
+	if a.QuestionIdx != reached-2 || a.Total != total {
+		t.Errorf("шапка = {idx:%d total:%d}, ожидалось {idx:%d total:%d}",
+			a.QuestionIdx, a.Total, reached-2, total)
+	}
+}
+
+// TestPushHeaderHasFreshClearedOnReturnToTail — возврат на свежую метку (Next)
+// сбрасывает индикатор: HasFresh=false на хвосте, снова true после уходa назад.
+func TestPushHeaderHasFreshClearedOnReturnToTail(t *testing.T) {
+	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
+	overlay := d.overlay.(*mockOverlay)
+
+	for i := 0; i < 3; i++ {
+		d.timeline.Add(fmt.Sprintf("Q%d?", i))
+	}
+	// Уходим с хвоста — новая метка (потом) станет fresh, хвост помечен свежим.
+	if !d.timeline.Prev() {
+		t.Fatal("Prev(): false, ожидалось true")
+	}
+	d.timeline.Add("Q4?") // окно не двигается на tail-follow при уходе — freshAt = Q4
+
+	d.pushActiveHeader()
+	if a := answers0(t, overlay); !a.HasFresh {
+		t.Errorf("после Add вне хвоста: HasFresh = false, ожидалось true")
+	}
+
+	// Next: active = Q3? (не свежая) → индикатор ещё горит.
+	if !d.timeline.Next() {
+		t.Fatal("Next() на Q3?: false, ожидалось true")
+	}
+	d.pushActiveHeader()
+	if a := answers0(t, overlay); !a.HasFresh {
+		t.Errorf("на промежуточной метке Q3?: HasFresh = false, ожидалось true")
+	}
+
+	// Next: active достиг свежей метки Q4? → clearFreshOn гасит индикатор.
+	if !d.timeline.Next() {
+		t.Fatal("Next() на Q4?: false, ожидалось true")
+	}
+	d.pushActiveHeader()
+	a := answers0(t, overlay)
+	if a.HasFresh {
+		t.Errorf("после возврата на свежую метку: HasFresh = true, ожидалось false (индикатор гаснет)")
+	}
+	if _, fresh := d.timeline.HasFresh(); fresh {
+		t.Errorf("таймлайн: HasFresh() = true после перехода на freshAt, ожидалось false")
+	}
+}
+
+// answers0 возвращает первый Answer последней шапки overlay.
+func answers0(t *testing.T, overlay *mockOverlay) ui.Answer {
+	t.Helper()
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка не найдена: %+v", msg)
+	}
+	return msg.Answers[0]
+}
+
 // ── Совместимость: GenerateAnswers (shutdown/тесты) ──────────────────────
 
 func TestGenerateAnswersAddsLabelAndAnswers(t *testing.T) {
