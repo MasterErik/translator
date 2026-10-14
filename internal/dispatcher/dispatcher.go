@@ -105,6 +105,16 @@ type Dispatcher struct {
 	// timeline — таймлайн обнаруженных вопросов (метки + ответы + навигация).
 	timeline *QuestionTimeline
 
+	// lastFinal — текст последней финальной (EndOfTurn) реплики интервьюера —
+	// кандидат уточнения для Shift+F2 (план: «каждая EndOfTurn-фраза
+	// записывается как кандидат уточнения», вопрос ИЛИ не-вопрос). Поле —
+	// потребляемый ресурс: HandleClarify читает его и сбрасывает, поэтому
+	// повторный Shift+F2 без новой фразы — no-op. Пишется из route (горутина
+	// Run → route) и читается/сбрасывается в worker'е (handleHotkeyAction) —
+	// доступ под lastFinalMu.
+	lastFinal   string
+	lastFinalMu sync.Mutex
+
 	// autoAnswer — авто-генерация ответа при обнаружении вопроса (default true).
 	autoAnswer bool
 
@@ -296,6 +306,11 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			Timestamp: event.Timestamp,
 		})
 
+		// Каждая финальная фраза интервьюера — кандидат уточнения для Shift+F2
+		// (вопрос ИЛИ не-вопрос: план «каждая EndOfTurn-фраза записывается как
+		// кандидат уточнения»). Хранится до потребления в HandleClarify.
+		d.setLastFinal(event.Text)
+
 		if translator.IsQuestion(event.Text) {
 			if d.sessLog != nil {
 				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: обнаружен вопрос, запуск генерации: text=%v", event.Text))
@@ -303,6 +318,32 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			d.enqueueQuestion(event.Text)
 		}
 	}
+}
+
+// setLastFinal запоминает текст последней финальной реплики интервьюера как
+// кандидат уточнения (Shift+F2). Пустой текст игнорируется — уточнение из пустой
+// строки бессмысленно (timeline.AddClarification её всё равно отбросит).
+func (d *Dispatcher) setLastFinal(text string) {
+	if text == "" {
+		return
+	}
+	d.lastFinalMu.Lock()
+	d.lastFinal = text
+	d.lastFinalMu.Unlock()
+}
+
+// takeLastFinal читает и СБРАСЫВАЕТ кандидат уточнения (потребление): повторный
+// Shift+F2 без новой фразы ничего не добавит. Возвращает false для пустого.
+func (d *Dispatcher) takeLastFinal() (string, bool) {
+	d.lastFinalMu.Lock()
+	defer d.lastFinalMu.Unlock()
+
+	if d.lastFinal == "" {
+		return "", false
+	}
+	text := d.lastFinal
+	d.lastFinal = ""
+	return text, true
 }
 
 // enqueueQuestion регистрирует вопрос в таймлайне и, при включённом
@@ -421,7 +462,8 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 // handleHotkeyAction обрабатывает hotkey-действие в контексте таймлайна.
 // Prev/Next только двигают активную позицию и обновляют шапку; Demand (F1)
 // ставит задание на генерацию для активной метки (коалесинг: во время генерации
-// повторный F1 игнорируется).
+// повторный F1 игнорируется). Clarify/Unclarify (Shift+F2/F3) правят стек
+// уточнений активной метки и перерисовывают её шапку.
 func (d *Dispatcher) handleHotkeyAction(act HotkeyAction) {
 	switch act {
 	case ActionPrev:
@@ -436,7 +478,97 @@ func (d *Dispatcher) handleHotkeyAction(act HotkeyAction) {
 		d.pushActiveHeader()
 	case ActionDemand:
 		d.handleDemand()
+	case ActionClarify:
+		d.handleClarify()
+	case ActionUnclarify:
+		d.handleUnclarify()
 	}
+}
+
+// handleClarify реализует Shift+F2: последняя финальная реплика интервьюера
+// (lastFinal) становится уточнением активной метки.
+//
+// Порядок важен: сначала пробуем AbsorbLast — если последняя метка окна
+// оказалась репликой-дублем того же вопроса, она удаляется, а её текст уходит
+// уточнением предыдущей метки (активность пересчитывается таймлайном). Иначе
+// текст добавляется к активной метке (AddClarification). После операции
+// lastFinal ПОТРЕБЛЁН (takeLastFinal) — повторный Shift+F2 без новой фразы
+// ничего не делает.
+//
+// No-op (без ошибки) при пустом таймлайне/отсутствии lastFinal; конкурирующее
+// действие не выполняется, пока идёт генерация (busy-guard, как у F1–F3).
+func (d *Dispatcher) handleClarify() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F2 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
+
+	idx, _, ok := d.timeline.Active()
+	if !ok {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F2 без активной метки пропущен")
+		}
+		return
+	}
+
+	text, ok := d.takeLastFinal()
+	if !ok {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F2 без новой финальной фразы пропущен")
+		}
+		return
+	}
+
+	// Слияние хвостового дубля-вопроса: если удалось — активная метка переехала
+	// на слитую (её индекс вернул таймлайн), иначе текст идёт активной метке.
+	if newIdx, absorbed := d.timeline.AbsorbLast(text); absorbed {
+		idx = newIdx
+	} else if !d.timeline.AddClarification(idx, text) {
+		// Метка вытеснена между Active() и правкой — правка невозможна.
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: Shift+F2 уточнение потеряно (метка %d вне окна)", idx))
+		}
+		return
+	}
+
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: уточнение добавлено: idx=%v, text=%v", idx, text))
+	}
+	d.pushHeaderForState(idx)
+}
+
+// handleUnclarify реализует Shift+F3: снимает последнее уточнение активной
+// метки. No-op (без ошибки), если уточнять нечего или таймлайн пуст.
+// busy-guard — как у прочих действий.
+func (d *Dispatcher) handleUnclarify() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F3 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
+
+	idx, _, ok := d.timeline.Active()
+	if !ok {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F3 без активной метки пропущен")
+		}
+		return
+	}
+
+	if !d.timeline.RemoveLastClarification(idx) {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: Shift+F3 без уточнений пропущен: idx=%v", idx))
+		}
+		return
+	}
+
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: уточнение снято: idx=%v", idx))
+	}
+	d.pushHeaderForState(idx)
 }
 
 // handleDemand реализует F1: генерация ответа для активной метки.
@@ -601,6 +733,32 @@ func (d *Dispatcher) HandleNext() {
 	d.sendHotkey(ActionNext)
 }
 
+// HandleClarify — Shift+F2: сделать последнюю финальную фразу интервьюера
+// уточнением активной метки (или слить хвостовой дубль-вопрос).
+// Коалесинг: во время генерации действие дропается — шапку диктует генерация,
+// а так же как F1–F3 (см. handleClarify).
+func (d *Dispatcher) HandleClarify() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F2 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
+	d.sendHotkey(ActionClarify)
+}
+
+// HandleUnclarify — Shift+F3: снять последнее уточнение активной метки.
+// Коалесинг: см. HandleClarify.
+func (d *Dispatcher) HandleUnclarify() {
+	if d.busy.Load() {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug("dispatcher: Shift+F3 во время генерации пропущен (коалесинг)")
+		}
+		return
+	}
+	d.sendHotkey(ActionUnclarify)
+}
+
 // sendHotkey отправляет hotkey-действие в worker (неблокирующе).
 func (d *Dispatcher) sendHotkey(act HotkeyAction) {
 	select {
@@ -653,6 +811,7 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 
 	req := translator.AnswerRequest{
 		Question:            question,
+		Clarifications:      d.timeline.Clarifications(idx),
 		CandidateContext:    cc,
 		ConversationContext: d.history.BuildContext(),
 		Command:             cmd,
@@ -818,6 +977,9 @@ func (d *Dispatcher) pushHeader(idx int, answers []ui.Answer) {
 		header[i].State = entry.State.String()
 		header[i].Mode = entry.Mode
 		header[i].HasFresh = hasFresh
+		// Clarifications — КОПИЯ стека активной метки (как QuestionText):
+		// кладём полный срез, UI сам показывает последние 3 (как и промпт).
+		header[i].Clarifications = entry.Clarifications
 	}
 
 	d.overlay.AddMessage(ui.UIMessage{

@@ -1015,3 +1015,316 @@ func TestGenerateAnswersAddsLabelAndAnswers(t *testing.T) {
 		t.Error("GenerateAnswers не отправил AnswerCandidates в UI")
 	}
 }
+
+// lastFinalOf читает кандидат уточнения под мьютексом (тестовый доступ).
+func lastFinalOf(d *Dispatcher) string {
+	d.lastFinalMu.Lock()
+	defer d.lastFinalMu.Unlock()
+	return d.lastFinal
+}
+
+// waitLastFinal ожидает, пока lastFinal станет равным want (иначе — таймаут).
+func waitLastFinal(t *testing.T, d *Dispatcher, want string) {
+	t.Helper()
+	waitFor(t, func() bool { return lastFinalOf(d) == want }, 2*time.Second)
+}
+
+// ── Б-T2: ручные уточнения (Shift+F2 / Shift+F3) ─────────────────────────
+
+// TestLastFinalRecordsInterviewerEndOfTurn — каждая финальная (EndOfTurn) фраза
+// интервьюера запоминается как кандидат уточнения (lastFinal), включая
+// не-вопрос: план требует «каждая EndOfTurn-фраза — кандидат уточнения».
+func TestLastFinalRecordsInterviewerEndOfTurn(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Tell me about Project X.") // вопрос
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	waitLastFinal(t, d, "Tell me about Project X.")
+
+	textStream <- question("At scale, with 10k rps.") // не-вопрос
+	waitLastFinal(t, d, "At scale, with 10k rps.")
+	if got := len(snapshotOf(d)); got != 1 {
+		t.Errorf("не-вопрос создал метку: меток %d, ожидалось 1", got)
+	}
+}
+
+// TestClarifyEmptyTimelineNoOp — Shift+F2 на пустом таймлайне (или без
+// зафиксированной финальной фразы) — no-op без паники.
+func TestClarifyEmptyTimelineNoOp(t *testing.T) {
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, overlay, _, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig())
+	defer cancel()
+
+	d.HandleClarify()
+	d.HandleUnclarify()
+	time.Sleep(100 * time.Millisecond)
+
+	if snap := snapshotOf(d); len(snap) != 0 {
+		t.Errorf("пустой таймлайн изменён: %+v", snap)
+	}
+	if _, ok := lastCandidates(overlay); ok {
+		t.Error("на пустом таймлайне ушла шапка в UI")
+	}
+	if calls := engine.Calls(); len(calls) != 0 {
+		t.Errorf("на пустом таймлайне вызовов LLM %d, ожидалось 0", len(calls))
+	}
+}
+
+// TestClarifyMergesDuplicateQuestion — два одинаковых вопроса подряд (уточнение,
+// которое тоже является вопросом) → Shift+F2: вторая метка удалена, её текст ушёл
+// уточнением первой, UI получил обновлённую шапку активной метки.
+func TestClarifyMergesDuplicateQuestion(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("How do you scale?")
+	textStream <- question("How do you scale?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
+
+	d.HandleClarify()
+
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	snap := snapshotOf(d)
+	if snap[0].Question != "How do you scale?" {
+		t.Fatalf("оставшаяся метка = %q, ожидался вопрос", snap[0].Question)
+	}
+	got := snap[0].Clarifications
+	if len(got) != 1 || got[0] != "How do you scale?" {
+		t.Fatalf("Clarifications слитой метки = %v, ожидалось [How do you scale?]", got)
+	}
+	// Активность смещена на слитую метку, шапка обновлена.
+	if idx, _, _ := d.timeline.Active(); idx != 0 {
+		t.Errorf("активная метка после слияния = %d, ожидалось 0", idx)
+	}
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка не найдена: %+v", msg)
+	}
+	if got := msg.Answers[0].Clarifications; len(got) != 1 || got[0] != "How do you scale?" {
+		t.Errorf("ui.Answer.Clarifications = %v, ожидалось [How do you scale?]", got)
+	}
+	if msg.Answers[0].QuestionIdx != 0 {
+		t.Errorf("QuestionIdx шапки = %d, ожидался 0", msg.Answers[0].QuestionIdx)
+	}
+}
+
+// TestClarifyAddsToActiveLabel — обычная (не-дубль) фраза → уточнение активной
+// метки, UI обновлён, генерация не запускается.
+func TestClarifyAddsToActiveLabel(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("How do you scale?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	textStream <- question("I mean horizontally.")
+	// Даём route записать вторую (не-вопрос) реплику в lastFinal.
+	waitLastFinal(t, d, "I mean horizontally.")
+
+	d.HandleClarify()
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 1 }, 2*time.Second)
+
+	snap := snapshotOf(d)
+	if len(snap) != 1 {
+		t.Fatalf("меток после уточнения %d, ожидалось 1", len(snap))
+	}
+	if got := snap[0].Clarifications; got[0] != "I mean horizontally." {
+		t.Errorf("Clarifications = %v, ожидалось [I mean horizontally.]", got)
+	}
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка не найдена: %+v", msg)
+	}
+	if got := msg.Answers[0].Clarifications; len(got) != 1 || got[0] != "I mean horizontally." {
+		t.Errorf("ui.Answer.Clarifications = %v, ожидалось [I mean horizontally.]", got)
+	}
+	if calls := engine.Calls(); len(calls) != 0 {
+		t.Errorf("уточнение запустило генерацию: вызовов %d", len(calls))
+	}
+}
+
+// TestClarifyWithoutNewFinalIsNoOp — lastFinal потребляется: повторный Shift+F2
+// без новой финальной фразы ничего не добавляет.
+func TestClarifyWithoutNewFinalIsNoOp(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("How do you scale?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	textStream <- question("I mean horizontally.")
+	waitLastFinal(t, d, "I mean horizontally.")
+
+	d.HandleClarify()
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 1 }, 2*time.Second)
+
+	// Повторный Shift+F2 — lastFinal уже потреблён → no-op.
+	d.HandleClarify()
+	d.HandleClarify()
+	time.Sleep(100 * time.Millisecond)
+
+	if got := snapshotOf(d)[0].Clarifications; len(got) != 1 {
+		t.Errorf("повторный Shift+F2 добавил уточнения: %v", got)
+	}
+}
+
+// TestUnclarifyRemovesLast — Shift+F3 убирает последнее уточнение активной
+// метки; на пустом списке — no-op.
+func TestUnclarifyRemovesLast(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("How do you scale?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+
+	for i, tx := range []string{"первое", "второе"} {
+		textStream <- question(tx)
+		waitLastFinal(t, d, tx)
+		d.HandleClarify()
+		// Потребление lastFinal происходит в worker'е асинхронно: ждём, пока
+		// уточнение реально осядет, иначе следующая фраза перезапишет кандидат.
+		want := i + 1
+		waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == want }, 2*time.Second)
+	}
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 2 }, 2*time.Second)
+
+	d.HandleUnclarify()
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 1 }, 2*time.Second)
+	if got := snapshotOf(d)[0].Clarifications; got[0] != "первое" {
+		t.Errorf("после Shift+F3 Clarifications = %v, ожидалось [первое]", got)
+	}
+	msg, ok := lastCandidates(overlay)
+	if !ok || len(msg.Answers) == 0 {
+		t.Fatalf("шапка не найдена: %+v", msg)
+	}
+	if got := msg.Answers[0].Clarifications; len(got) != 1 || got[0] != "первое" {
+		t.Errorf("ui.Answer.Clarifications = %v, ожидалось [первое]", got)
+	}
+
+	// Опустошение и повторный Shift+F3 — no-op без паники.
+	d.HandleUnclarify()
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 0 }, 2*time.Second)
+	d.HandleUnclarify()
+	time.Sleep(100 * time.Millisecond)
+	if got := snapshotOf(d)[0].Clarifications; len(got) != 0 {
+		t.Errorf("Shift+F3 на пустом списке изменил состояние: %v", got)
+	}
+}
+
+// TestF1RegenerationCarriesClarifications — F1-перегенерация старой метки несёт
+// её уточнения в AnswerRequest.Clarifications (включая уточнения, полученные
+// слиянием дубля-вопроса).
+func TestF1RegenerationCarriesClarifications(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	// Q1, затем реплика-дубль Q1 → слияние даёт уточнение у Q1.
+	textStream <- question("Q1?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	textStream <- question("Q1?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
+	d.HandleClarify()
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+
+	// Q2 приходит при просмотре (не создаём) — так проще: добавим вторую метку.
+	textStream <- question("Q2?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
+
+	// Уходим на Q1 (старая метка) и генерируем по F1.
+	d.HandlePrev()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) >= 1 }, 2*time.Second)
+
+	reqs := engine.Reqs()
+	last := reqs[len(reqs)-1]
+	if last.Question != "Q1?" {
+		t.Fatalf("последний запрос про %q, ожидался Q1?", last.Question)
+	}
+	if len(last.Clarifications) != 1 || last.Clarifications[0] != "Q1?" {
+		t.Errorf("AnswerRequest.Clarifications = %v, ожидалось [Q1?]", last.Clarifications)
+	}
+}
+
+// TestPushHeaderFillsClarifications — pushHeader заполняет ui.Answer.Clarifications
+// активной метки (копией стека таймлайна), как QuestionText.
+func TestPushHeaderFillsClarifications(t *testing.T) {
+	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
+	overlay := d.overlay.(*mockOverlay)
+
+	d.timeline.Add("Q1?")
+	d.timeline.AddClarification(0, "первое")
+	d.timeline.AddClarification(0, "второе")
+
+	d.pushActiveHeader()
+
+	a := answers0(t, overlay)
+	if len(a.Clarifications) != 2 || a.Clarifications[0] != "первое" || a.Clarifications[1] != "второе" {
+		t.Fatalf("ui.Answer.Clarifications = %v, ожидалось [первое второе]", a.Clarifications)
+	}
+	// Копия: мутация не просачивается в таймлайн.
+	a.Clarifications[0] = "MUTATED"
+	if got := d.timeline.Clarifications(0); got[0] != "первое" {
+		t.Errorf("мутация Answer.Clarifications просочилась в таймлайн: %q", got[0])
+	}
+}
+
+// TestAutoAnswerRequestCarriesClarifications — авто-генерация несёт уточнения
+// метки (метка активна на момент старта): проверяем через pushHeader-путь и
+// AnswerRequest авто-задания после добавления уточнения к хвосту.
+func TestAutoAnswerRequestCarriesClarifications(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Q1?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	textStream <- question("Имею в виду масштаб.")
+	waitLastFinal(t, d, "Имею в виду масштаб.")
+
+	d.HandleClarify()
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 1 }, 2*time.Second)
+
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) >= 1 }, 2*time.Second)
+
+	reqs := engine.Reqs()
+	last := reqs[len(reqs)-1]
+	if len(last.Clarifications) != 1 || last.Clarifications[0] != "Имею в виду масштаб." {
+		t.Errorf("AnswerRequest.Clarifications = %v, ожидалось [Имею в виду масштаб.]", last.Clarifications)
+	}
+}
