@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -44,6 +45,11 @@ type Overlay interface {
 // Структуры
 // --------------------------------------------------------------------------
 
+// shutdownHotkeyTimeout — верхняя граница ожидания выхода hotkey.Run в shutdown.
+// При штатной отмене цикл завершается мгновенно; таймаут страхует от
+// потерянных Post-сообщений (WM_QUIT/wake), чтобы shutdown не завис.
+const shutdownHotkeyTimeout = 2 * time.Second
+
 // Pipeline инкапсулирует зависимости и жизненный цикл приложения:
 // захват аудио, STT, перевод, UI-оверлей, логгер.
 type Pipeline struct {
@@ -58,6 +64,8 @@ type Pipeline struct {
 	textStream   chan common.STTEvent
 	dispatchDone chan struct{} // Сигнал завершения dispatcher (буфер 1)
 	dispatch     *dispatcher.Dispatcher
+
+	hotkeyDone chan struct{} // Сигнал завершения runHotkeys (буфер 1)
 }
 
 // Config — все настройки пайплайна (без магических чисел).
@@ -223,6 +231,7 @@ func New(cfg Config) (*Pipeline, error) {
 		sessLog:      sessLog,
 		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
 		dispatchDone: make(chan struct{}, 1),
+		hotkeyDone:   make(chan struct{}, 1),
 		dispatch: dispatcher.New(
 			overlay,
 			engine,
@@ -424,6 +433,17 @@ func (p *Pipeline) shutdown() {
 		<-p.dispatchDone
 	}
 
+	// 2b. Дождаться выхода hotkey.Run (runHotkeys сигнализирует hotkeyDone при
+	//     выходе из Run). Ограничиваем ожидание таймаутом: если Post-сообщения
+	//     потеряны и GetMessageW не разбудился, shutdown не должен висеть вечно.
+	if p.hotkeyDone != nil {
+		select {
+		case <-p.hotkeyDone:
+		case <-time.After(shutdownHotkeyTimeout):
+			p.sessLog.LogDebug("shutdown: hotkeys не завершились за отведённый таймаут")
+		}
+	}
+
 	// 3. UI-оверлей.
 	p.overlay.WaitShutdown()
 
@@ -604,10 +624,22 @@ func (p *Pipeline) runDispatch(ctx context.Context) {
 
 // runHotkeys запускает глобальные hotkeys (F1–F4, Esc) и маршрутизирует их
 // в dispatcher: F1–F3 → HandleDemand/Prev/Next, Esc → Cancel.
+//
+// По завершении (в т.ч. при штатной отмене ctx) сигнализирует hotkeyDone,
+// чтобы shutdown мог дождаться выхода Run и не оставить висящую goroutine (B-2).
+// Ошибки отмены ctx (Canceled/DeadlineExceeded) — штатное завершение, не ошибка (B-9).
 func (p *Pipeline) runHotkeys(ctx context.Context) {
-	if err := hotkey.Run(ctx, p.handleHotkey); err != nil && err != context.Canceled {
-		p.sessLog.LogDebug(fmt.Sprintf("hotkey: %v", err))
+	defer func() {
+		if p.hotkeyDone != nil {
+			p.hotkeyDone <- struct{}{}
+		}
+	}()
+
+	err := hotkey.Run(ctx, p.handleHotkey)
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
 	}
+	p.sessLog.LogDebug(fmt.Sprintf("hotkey: %v", err))
 }
 
 // handleHotkey маппит функциональную клавишу на действие диспетчера.

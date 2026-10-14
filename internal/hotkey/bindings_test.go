@@ -9,13 +9,36 @@ import "testing"
 //   - vk уникальны;
 //   - пары (mods, vk) уникальны (Windows отвергает повторную регистрацию той же комбинации);
 //   - множество keys = {KeyF1, KeyF2, KeyF3, KeyF4, KeyEsc};
-//   - каждый id == int32(соответствующего клавишного кода);
-//   - MOD_NOREPEAT выставлен у всех биндингов F1–F3 (и вообще у всех).
+//   - КАЖДЫЙ биндинг содержит РОВНО ожидаемый vk (wantVK-таблица: явные
+//     константы VK_F1..VK_F4, VK_ESCAPE и числовые эквиваленты 0x70..0x73, 0x1B);
+//   - КАЖДЫЙ биндинг содержит РОВНО mods == modNorepeat (строгое равенство, а не
+//     только проверка бита — MOD_NOREPEAT и ничего сверх него).
 func TestBindingsValid(t *testing.T) {
-	wantKeys := []Key{KeyF1, KeyF2, KeyF3, KeyF4, KeyEsc}
+	// wantVK — ожидаемый vk для каждого id (id — это Key, но vk — отдельная
+	// сущность: ошибочный vk ловится только явной таблицей). Проверяем и сами
+	// "виртуальные коды" против их числовых значений, чтобы константы не поехали.
+	tests := []struct {
+		key     Key
+		name    string
+		wantVK  uintptr
+		numeric uintptr // независимая сверка числового значения VK из WinAPI
+	}{
+		{KeyF1, "F1", vkF1, 0x70},
+		{KeyF2, "F2", vkF2, 0x71},
+		{KeyF3, "F3", vkF3, 0x72},
+		{KeyF4, "F4", vkF4, 0x73},
+		{KeyEsc, "Esc", vkEsc, 0x1B},
+	}
 
-	if len(bindings) != len(wantKeys) {
-		t.Fatalf("bindings count = %d, want %d", len(bindings), len(wantKeys))
+	// Константы пакета обязаны совпадать с числовыми кодами WinAPI.
+	for _, tt := range tests {
+		if tt.wantVK != tt.numeric {
+			t.Errorf("package constant for %s = %#x, want numeric VK %#x", tt.name, tt.wantVK, tt.numeric)
+		}
+	}
+
+	if len(bindings) != len(tests) {
+		t.Fatalf("bindings count = %d, want %d", len(bindings), len(tests))
 	}
 
 	seenIDs := make(map[int32]struct{}, len(bindings))
@@ -39,31 +62,27 @@ func TestBindingsValid(t *testing.T) {
 		}
 		seenCombos[combo] = struct{}{}
 
-		if i >= len(wantKeys) {
-			continue
-		}
-		want := wantKeys[i]
+		// id обязан совпадать с Key (Run мапит WM_HOTKEY.wParam → Key).
+		want := tests[i].key
 		if b.id != int32(want) {
 			t.Errorf("bindings[%d]: id = %d, want %d (Key %d)", i, b.id, int32(want), want)
 		}
-		if want == KeyF1 || want == KeyF2 || want == KeyF3 {
-			if b.mods&modNorepeat == 0 {
-				t.Errorf("bindings[%d] (Key %d): mods = %#x, want MOD_NOREPEAT set", i, want, b.mods)
-			}
-		}
-	}
 
-	// Все биндинги должны нести MOD_NOREPEAT (в т.ч. F4-тумблер и Esc).
-	for i, b := range bindings {
-		if b.mods&modNorepeat == 0 {
-			t.Errorf("bindings[%d]: mods = %#x, MOD_NOREPEAT not set", i, b.mods)
+		// Явная сверка vk для КАЖДОЙ записи.
+		if b.vk != tests[i].wantVK {
+			t.Errorf("bindings[%d] (%s): vk = %#x, want %#x", i, tests[i].name, b.vk, tests[i].wantVK)
+		}
+
+		// Строгое равенство mods: только MOD_NOREPEAT, без лишних модификаторов.
+		if b.mods != modNorepeat {
+			t.Errorf("bindings[%d] (%s): mods = %#x, want %#x (MOD_NOREPEAT only)", i, tests[i].name, b.mods, uintptr(modNorepeat))
 		}
 	}
 
 	// Множество id обязано покрывать ровно ожидаемые клавиши.
-	for _, k := range wantKeys {
-		if _, ok := seenIDs[int32(k)]; !ok {
-			t.Errorf("missing binding id for key %d", k)
+	for _, tt := range tests {
+		if _, ok := seenIDs[int32(tt.key)]; !ok {
+			t.Errorf("missing binding id for key %d (%s)", tt.key, tt.name)
 		}
 	}
 }

@@ -5,6 +5,7 @@ package hotkey
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -20,6 +21,12 @@ const (
 
 	wmHotkey = 0x0312
 	wmQuit   = 0x0012
+
+	// wmWake — приватное сообщение потока (WM_APP+1), используемое как второй
+	// (резервный) путь выхода из цикла GetMessageW при отмене ctx. Если WM_QUIT
+	// потерян (чужая очередь переполнена, поток выгружается), wake-сообщение всё
+	// равно будит цикл. Само сообщение — no-op: важен лишь факт доставки.
+	wmWake = 0x8000 + 1 // WM_APP + 1
 
 	// modNorepeat — MOD_NOREPEAT (Windows Vista+): подавляет автоповтор
 	// WM_HOTKEY при удержании клавиши.
@@ -65,27 +72,78 @@ var bindings = []hotkeyBinding{
 	{int32(KeyEsc), modNorepeat, vkEsc},
 }
 
+// postThreadMessage отправляет сообщение в очередь текущего потока и проверяет
+// результат. ret == 0 означает, что сообщение не поставлено (очередь потока
+// переполнена, поток уже завершается и т.п.) — об этом пишем WARN, чтобы
+// висящий GetMessageW не остался без диагностики. Возвращает ошибку пост-фактум
+// для тестов/наблюдения, но вызывающий её не обязан прерывать работу.
+func postThreadMessage(threadID uintptr, m uint32) error {
+	ret, _, err := procPostThreadMessageW.Call(threadID, uintptr(m), 0, 0)
+	if ret == 0 {
+		if err == syscall.Errno(0) {
+			err = syscall.GetLastError()
+		}
+		slog.Warn("hotkey: PostThreadMessageW failed",
+			"threadID", threadID, "message", fmt.Sprintf("%#x", m), "err", err)
+		return fmt.Errorf("hotkey: PostThreadMessageW(threadID=%d, message=%#x): %w", threadID, m, err)
+	}
+	return nil
+}
+
 // Run регистрирует глобальные hotkeys (F1–F4, Esc) и запускает цикл обработки
 // сообщений. onKey вызывается из цикла при нажатии. Возвращается при отмене ctx.
+//
+// При отмене ctx фоновый watcher посылает ОБА сообщения — WM_QUIT и wake
+// (WM_APP+1) — в очередь этого потока. Цикл выходит по первому полученному;
+// потеря любого из двух сообщений не подвешивает GetMessageW. Watcher имеет
+// собственный путь выхода (done), который закрывается при возврате из Run, —
+// горутина не утекает, даже если PostThreadMessageW не сработал.
+//
+// Контракт возврата: nil при штатной отмене ctx (по аналогии со stub-версией).
 func Run(ctx context.Context, onKey func(Key)) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	threadID, _, _ := procGetCurrentThreadID.Call()
 
-	for _, b := range bindings {
-		ret, _, _ := procRegisterHotKey.Call(0, uintptr(b.id), b.mods, b.vk)
-		if ret == 0 {
-			unregisterAll(b.id)
-			return fmt.Errorf("hotkey: RegisterHotKey(id=%d) failed", b.id)
+	// registered — фактические успешно зарегистрированные биндинги. Снимаем
+	// ровно их, а не «все по совпадению id» (B-5).
+	registered := make([]hotkeyBinding, 0, len(bindings))
+	unregisterRegistered := func() {
+		for i := len(registered) - 1; i >= 0; i-- {
+			procUnregisterHotKey.Call(0, uintptr(registered[i].id))
 		}
+		registered = registered[:0]
 	}
-	defer unregisterAll(-1)
+	defer unregisterRegistered()
 
-	// При отмене ctx посылаем WM_QUIT, чтобы GetMessageW вернул 0 и цикл вышел.
+	for _, b := range bindings {
+		ret, _, err := procRegisterHotKey.Call(0, uintptr(b.id), b.mods, b.vk)
+		if ret == 0 {
+			if err == syscall.Errno(0) {
+				err = syscall.GetLastError()
+			}
+			// Снимаем уже зарегистрированные (их знаем точно).
+			unregisterRegistered()
+			return fmt.Errorf("hotkey: RegisterHotKey(id=%d): %w", b.id, err)
+		}
+		registered = append(registered, b)
+	}
+
+	// done закрывается при выходе из Run — путь выхода для watcher-goroutine
+	// (B-2/B-10): даже если оба Post* потеряны, горутина завершится и не утечёт.
+	done := make(chan struct{})
+	defer close(done)
+
+	// При отмене ctx шлём оба сообщения; цикл выходит по первому полученному.
 	go func() {
-		<-ctx.Done()
-		procPostThreadMessageW.Call(threadID, wmQuit, 0, 0)
+		select {
+		case <-ctx.Done():
+			_ = postThreadMessage(threadID, wmQuit)
+			_ = postThreadMessage(threadID, wmWake)
+		case <-done:
+			return
+		}
 	}()
 
 	for {
@@ -97,21 +155,15 @@ func Run(ctx context.Context, onKey func(Key)) error {
 		if int32(ret) == -1 {
 			return fmt.Errorf("hotkey: GetMessageW failed")
 		}
+		if m.message == wmWake {
+			// Штатная отмена (или просто no-op wake) — выходим из цикла.
+			return nil
+		}
 		if m.message == wmHotkey {
 			switch Key(m.wParam) {
 			case KeyF1, KeyF2, KeyF3, KeyF4, KeyEsc:
 				onKey(Key(m.wParam))
 			}
 		}
-	}
-}
-
-// unregisterAll снимает регистрацию hotkeys с id < stopID (или все, если stopID < 0).
-func unregisterAll(stopID int32) {
-	for _, b := range bindings {
-		if stopID >= 0 && b.id == stopID {
-			return
-		}
-		procUnregisterHotKey.Call(0, uintptr(b.id))
 	}
 }
