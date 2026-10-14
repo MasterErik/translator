@@ -47,7 +47,7 @@ func TestGroqHints_RealAnswers(t *testing.T) {
 	prov := NewChatProvider(baseURL, apiKey, model)
 	prov.SetMaxTokens(maxTokens)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	t.Logf("provider: model=%s baseURL=%s maxTokens=%d", model, baseURL, maxTokens)
@@ -62,11 +62,7 @@ func TestGroqHints_RealAnswers(t *testing.T) {
 				hints := parseAnswerHints(raw, "", "")
 				t.Logf("parseAnswerHints: %d подсказок: %v", len(hints), hints)
 
-				answers, err := prov.GenerateAnswers(ctx, AnswerRequest{Question: q})
-				if err != nil {
-					t.Fatalf("GenerateAnswers() error = %v", err)
-				}
-				t.Logf("GenerateAnswers: %d подсказок: %v", len(answers), answers)
+				answers := answersWithRetry(t, ctx, prov, AnswerRequest{Question: q})
 
 				if len(answers) == 0 {
 					t.Errorf("пустой ответ для вопроса %q — сырой content выше", q)
@@ -86,16 +82,46 @@ func TestGroqHints_RealAnswers(t *testing.T) {
 		hints := parseAnswerHints(raw, "", "")
 		t.Logf("parseAnswerHints: %d подсказок: %v", len(hints), hints)
 
-		answers, err := prov.GenerateAnswers(ctx, AnswerRequest{Question: q, CandidateContext: cv})
-		if err != nil {
-			t.Fatalf("GenerateAnswers() error = %v", err)
-		}
-		t.Logf("GenerateAnswers: %d подсказок: %v", len(answers), answers)
+		answers := answersWithRetry(t, ctx, prov, AnswerRequest{Question: q, CandidateContext: cv})
 
 		if len(answers) == 0 {
 			t.Errorf("пустой ответ с cvContext=%q — сырой content выше", cv)
 		}
 	})
+}
+
+// groqRetryAttempts — сколько раз повторять GenerateAnswers, если живой API
+// вернул пустой набор подсказок (free-tier троттлинг иногда деградирует
+// формат ответа, а не отдаёт 429).
+const groqRetryAttempts = 3
+
+// answersWithRetry вызывает GenerateAnswers до groqRetryAttempts раз с паузой
+// между попытками: провайдер сам ретраит 429 с backoff, но пустой результат
+// парсинга — отдельный режим деградации, требующий новой попытки.
+func answersWithRetry(t *testing.T, ctx context.Context, prov *ChatProvider, req AnswerRequest) []string {
+	t.Helper()
+	var answers []string
+	for attempt := 1; attempt <= groqRetryAttempts; attempt++ {
+		var err error
+		answers, err = prov.GenerateAnswers(ctx, req)
+		if err != nil {
+			t.Fatalf("GenerateAnswers() error = %v", err)
+		}
+		t.Logf("GenerateAnswers (попытка %d/%d): %d подсказок: %v", attempt, groqRetryAttempts, len(answers), answers)
+		if len(answers) > 0 {
+			return answers
+		}
+		if attempt < groqRetryAttempts {
+			pause := time.Duration(attempt) * 3 * time.Second
+			t.Logf("пустой результат — пауза %s перед повтором (возможен rate-limit Groq)", pause)
+			select {
+			case <-ctx.Done():
+				t.Fatalf("контекст истёк при ожидании повтора: %v", ctx.Err())
+			case <-time.After(pause):
+			}
+		}
+	}
+	return answers
 }
 
 // rawContent делает прямой вызов CreateChatCompletion с тем же промптом, что
@@ -114,7 +140,7 @@ func rawContent(t *testing.T, ctx context.Context, prov *ChatProvider, model, qu
 		N:           1,
 	}
 
-	resp, err := prov.client.CreateChatCompletion(ctx, req)
+	resp, err := prov.createChatCompletionWithRetry(ctx, req)
 	if err != nil {
 		t.Fatalf("CreateChatCompletion() error = %v", err)
 	}
