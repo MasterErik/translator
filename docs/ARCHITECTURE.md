@@ -340,6 +340,37 @@ sigCtx (signal.NotifyContext: SIGINT/SIGTERM)
 
 ---
 
+## Debug-режим ручного ввода (`DEBUG_INPUT=1`)
+
+Флаг `.env` `DEBUG_INPUT` (bool, yaml-тег `DEBUG_INPUT`; `.env` в приоритете над
+config.yaml) включает режим отладки без транскрибатора: overlay-окно остаётся
+кликабельным и принимает фокус (стили `WS_EX_NOACTIVATE`/`WS_EX_TRANSPARENT`
+не применяются — `applyWindowStylesWith` в `Overlay.Run`), а ниже зоны 4
+рендерится поле ручного ввода.
+
+Путь данных:
+
+```
+.env DEBUG_INPUT → common.Config.DebugInput → pipeline.Config.DebugInput
+                                                        │
+pipeline.New: manualCh = make(chan string, 8) → overlay.SetManualInput(manualCh)
+                                                        │
+pipeline.runSTT: select { src | manualCh | ctx.Done }
+  manual-ветка → common.STTEvent{Event: EventEndOfTurn, ChannelID: "speaker",
+                                  Text: TrimSpace(текст)}
+  → p.routeSTTEvent(ctx, event) — тот же путь, что у Gladia
+```
+
+- Живой транскрибатор (Gladia + capture) продолжает работать параллельно;
+  введённая строка идёт полным путём STT-события (pipeline → dispatcher → QA → UI).
+- `manualCh` создаёт pipeline (буфер 8); `close` не нужен — владелец живёт до
+  конца, выход по `ctx.Done()`. Ветка select по nil-каналу блокируется вечно
+  (эквивалент отсутствия ветки при `DEBUG_INPUT=0`).
+- Инвариант: контракты `STTProvider`, `dispatcher.Run`, `OverlayUI` не меняются —
+  только опциональный сеттер `Overlay.SetManualInput` и новая ветка select.
+
+---
+
 ## Стек технологий
 
 | Слой | Библиотека | Назначение |

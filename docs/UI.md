@@ -183,3 +183,28 @@
 конфигурации (`SOURCE_LANG`/`TARGET_LANG`, ISO 639-1) через `strings.ToUpper`; пустые
 значения трактуются как дефолт **en→ru**. Разбор строки — `translator.ParseAnswer`,
 промпт — `translator.BuildSystemPrompt(sourceLang, targetLang)`.
+
+## Debug-режим ручного ввода (`DEBUG_INPUT=1`)
+
+В debug-режиме (env `DEBUG_INPUT=1`, см. `docs/ARCHITECTURE.md`) поведение окна
+меняется осознанно — это режим отладки без транскрибатора:
+
+- **Стили окна не применяются:** `WS_EX_NOACTIVATE`/`WS_EX_TRANSPARENT` не
+  ставятся (`applyWindowStylesWith` в `Overlay.Run` пропускает вызов) — окно
+  кликабельно и получает фокус клавиатуры, «нажимается» напрямую, а не сквозь.
+- **Зона debug-ввода** рендерится ниже зоны 4 (или ниже зоны 3, если зона 4
+  скрыта): separator + подпись `debug ▸` шрифтом `smallFontSize(fs)` цветом
+  `debugInputColor` (приглушённый blue-grey) + однострочный `widget.Editor`
+  (`SingleLine`, `Submit`), высота строки — глиф-бокс `fs` (`lineHeightPx`).
+  Зона появляется только при установленном канале (`Overlay.SetManualInput`,
+  вызывается pipeline при `DebugInput=true`).
+- **Enter** (`widget.SubmitEvent`): TrimSpace-текст отправляется в канал
+  ручного ввода **неблокирующе** (select/default; при полном канале строка
+  теряется и логируется `LogDebug` — UI-кадр не ждёт pipeline), поле очищается.
+  Пустой ввод не отправляется. Ошибки STT не эмулируются — только EndOfTurn.
+- При `DEBUG_INPUT` не задан/`0` — поведение байт-в-байт как в production:
+  NOACTIVATE+TRANSPARENT, зоны ввода нет.
+
+Тесты: `debug_input_test.go` (зона в layout, Submit→канал, пустой ввод,
+переполненный канал), `window_test.go` (`TestApplyWindowStylesSkipsInDebugInput`,
+`TestOverlayRunStyleGate`).

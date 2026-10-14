@@ -1534,3 +1534,133 @@ func waitForCond(t *testing.T, cond func() bool, timeout time.Duration) {
 	}
 	t.Fatal("условие не выполнено до таймаута")
 }
+
+// =========================================================================
+// TestPipeline_ManualInputRouting — ручной ввод (debug) маршрутизируется в
+// textStream как финальное STT-событие собеседника (EndOfTurn/"speaker").
+// =========================================================================
+
+func TestPipeline_ManualInputRouting(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+
+	// Канал ручного ввода инициализируется здесь так же, как в New при
+	// DebugInput=true (буфер 8).
+	manualCh := make(chan string, 8)
+	p.manualInput = manualCh
+
+	if err := stt.Start(context.Background()); err != nil {
+		t.Fatalf("mock STT Start: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.runSTT(ctx)
+	}()
+
+	// Вводим текст вручную.
+	manualCh <- "manual question from debug"
+
+	// Ожидаем, что событие появится в textStream с нужными полями.
+	select {
+	case ev := <-p.textStream:
+		if ev.Event != common.EventEndOfTurn {
+			t.Errorf("Event = %q, want %q", ev.Event, common.EventEndOfTurn)
+		}
+		if ev.ChannelID != "speaker" {
+			t.Errorf("ChannelID = %q, want %q", ev.ChannelID, "speaker")
+		}
+		if ev.Text != "manual question from debug" {
+			t.Errorf("Text = %q, want %q", ev.Text, "manual question from debug")
+		}
+		if ev.Error != nil {
+			t.Errorf("Error = %v, want nil", ev.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ручное событие не появилось в textStream за 2s")
+	}
+
+	// Отмена контекста завершает цикл runSTT (textStream закрывается).
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSTT не завершился по ctx.Done за 2s")
+	}
+
+	// textStream закрыт defer'ом runSTT.
+	if _, ok := <-p.textStream; ok {
+		t.Error("textStream не закрыт после выхода runSTT по ctx.Done")
+	}
+}
+
+// =========================================================================
+// TestPipeline_ManualInputNilChannel — при выключенном DebugInput канал nil,
+// ветка select по нему блокируется вечно: STT-поток не затрагивается.
+// =========================================================================
+
+func TestPipeline_ManualInputNilChannel(t *testing.T) {
+	stt := newMockSTT()
+	capt := newMockCapturer()
+	ovl := newMockOverlay()
+	llm := &mockLLM{}
+
+	p := newTestPipeline(stt, capt, ovl, llm, logger.NewNopSessionLogger())
+
+	// manualInput не устанавливаем — nil (DebugInput=false).
+	if p.manualInput != nil {
+		t.Fatalf("manualInput = %v, want nil при выключенном DebugInput", p.manualInput)
+	}
+
+	if err := stt.Start(context.Background()); err != nil {
+		t.Fatalf("mock STT Start: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.runSTT(ctx)
+	}()
+
+	// Штатное STT-событие по-прежнему проходит.
+	stt.textCh <- common.STTEvent{Text: "hello", Event: common.EventEndOfTurn, ChannelID: "speaker"}
+
+	select {
+	case ev := <-p.textStream:
+		if ev.Text != "hello" {
+			t.Errorf("Text = %q, want %q", ev.Text, "hello")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("STT-событие не появилось в textStream за 2s (nil-ветка заблокировала select?)")
+	}
+
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSTT не завершился по ctx.Done за 2s")
+	}
+}

@@ -65,6 +65,10 @@ type Pipeline struct {
 	dispatchDone chan struct{} // Сигнал завершения dispatcher (буфер 1)
 	dispatch     *dispatcher.Dispatcher
 
+	// manualInput — канал ручного ввода текста (debug-режим). nil, если
+	// DebugInput выключен: ветка select по nil-каналу блокируется вечно.
+	manualInput <-chan string
+
 	hotkeyDone chan struct{} // Закрывается при выходе runHotkeys (r3-2)
 	hotkeyOnce sync.Once     // Защита от двойного close(hotkeyDone) (r3-2)
 }
@@ -112,6 +116,10 @@ type Config struct {
 
 	// Debug
 	SilentFrame []byte // для StubCapture
+
+	// DebugInput — debug-режим ручного ввода текста: overlay получает канал,
+	// введённые строки идут тем же путём, что и STT-события (speaker/EndOfTurn).
+	DebugInput bool
 }
 
 // --------------------------------------------------------------------------
@@ -210,6 +218,16 @@ func New(cfg Config) (*Pipeline, error) {
 	// Overlay.
 	overlay := ui.NewOverlay(cfg.OverlayCfg, sessLog)
 
+	// Debug-режим ручного ввода: создаём канал (владелец — pipeline, живёт до
+	// конца) и отдаём его overlay. Выключен — канал остаётся nil, ветка select
+	// в runSTT блокируется вечно (эквивалент отсутствия ветки).
+	var manualInput <-chan string
+	if cfg.DebugInput {
+		manualCh := make(chan string, 8)
+		overlay.SetManualInput(manualCh)
+		manualInput = manualCh
+	}
+
 	// Валидация аудиоустройств (опционально).
 	if cfg.ValidateAudio && cfg.Capturer != nil {
 		// Проверяем, что capturer может стартовать — закрываем контекст сразу.
@@ -231,6 +249,7 @@ func New(cfg Config) (*Pipeline, error) {
 		overlay:      overlay,
 		sessLog:      sessLog,
 		textStream:   make(chan common.STTEvent, cfg.TextStreamBuffer),
+		manualInput:  manualInput,
 		dispatchDone: make(chan struct{}, 1),
 		hotkeyDone:   make(chan struct{}), // закрывается при выходе runHotkeys (r3-2)
 		dispatch: dispatcher.New(
@@ -559,6 +578,20 @@ func (p *Pipeline) runSTT(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case text := <-p.manualInput:
+			// Debug-режим ручного ввода: введённый текст проходит тем же путём,
+			// что и финальное STT-событие собеседника.
+			event := common.STTEvent{
+				Event:     common.EventEndOfTurn,
+				ChannelID: "speaker",
+				Text:      text,
+			}
+			if p.sessLog != nil {
+				if err := p.sessLog.LogText(event); err != nil {
+					p.sessLog.LogDebug(fmt.Sprintf("ошибка логирования STT: err=%v", err))
+				}
+			}
+			p.routeSTTEvent(ctx, event)
 		case event, ok := <-src:
 			if !ok {
 				return

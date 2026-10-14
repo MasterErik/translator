@@ -9,6 +9,13 @@ type OverlayConfig struct {
 	Width    int // Default: 1200
 	Height   int // Default: 650
 	FontSize int // Default: 18
+
+	// DebugInput включает debug-режим ручного ввода (env DEBUG_INPUT=1):
+	// окно остаётся кликабельным и получает фокус (стили
+	// NOACTIVATE/TRANSPARENT не применяются), а внизу под зоной 4 появляется
+	// однострочное поле ввода — Enter отправляет строку в pipeline как реплику
+	// собеседника. По умолчанию (false) поведение окна прежнее, поля нет.
+	DebugInput bool
 }
 
 // UIMessageType classifies the kind of message sent to the overlay.

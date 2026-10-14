@@ -83,8 +83,9 @@ func main() {
 			Height:   cfg.OverlayHeight,
 			FontSize: 18,
 		},
-		LogDir:    cfg.LogDir,
-		SaveAudio: cfg.SaveAudio,
+		LogDir:     cfg.LogDir,
+		SaveAudio:  cfg.SaveAudio,
+		DebugInput: cfg.DebugInput,
 	})
 	if err != nil {
 		fatalError("не удалось создать pipeline", err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/text"
 	"gioui.org/unit"
+	"gioui.org/widget"
 	"gioui.org/widget/material"
 
 	"github.com/mastererik/translator/internal/logger"
@@ -53,6 +55,19 @@ type Overlay struct {
 	transcriptionList layout.List
 	answersList       layout.List
 
+	// debugEditor — поле ручного ввода (debug-режим, DEBUG_INPUT): рендерится
+	// ниже зоны 4 только при cfg.DebugInput и передаётся как отдельный Rigid-
+	// элемент Flex. Состояние текста/фокуса принадлежит виджету; layout.Editor
+	// не входит в layout.List, поэтому общий mu для него не нужен (кадры
+	// последовательны, а тесты не рендерят вне Run).
+	debugEditor widget.Editor
+
+	// manualInputCh — канал отправки введённых вручную строк (nil при
+	// DebugInput=false). Устанавливается сеттером SetManualInput; отправителем
+	// не владеет (канал создаёт pipeline), поэтому close отсюда не делается.
+	// Доступ под mu.
+	manualInputCh chan<- string
+
 	// historyVisible — видимость зоны TranscriptionHistory (F4).
 	// Начальное состояние — скрыта (зона 4 и её separator отсутствуют до F4). Доступ под mu.
 	historyVisible bool
@@ -88,7 +103,7 @@ func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 	if cfg.FontSize <= 0 {
 		cfg.FontSize = 18
 	}
-	return &Overlay{
+	o := &Overlay{
 		cfg:               cfg,
 		interimMsg:        UIMessage{},
 		translations:      make([]UIMessage, 0),
@@ -102,6 +117,12 @@ func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 		historyVisible:    false,
 		sessLog:           sessLog,
 	}
+	// Debug-поле ручного ввода: однострочное, Enter конвертируется в
+	// widget.SubmitEvent (без Submit Editor вставлял бы \n в текст). Настраиваем
+	// всегда — при ManualInputCh==nil зона не рендерится вообще.
+	o.debugEditor.SingleLine = true
+	o.debugEditor.Submit = true
+	return o
 }
 
 // AddMessage маршрутизирует сообщение сразу в поле своей зоны (Task 2.2, P4):
@@ -178,10 +199,14 @@ func (o *Overlay) Run(ctx context.Context) error {
 	th := material.NewTheme()
 	var ops op.Ops
 
-	go o.applyWindowStyles()
+	// Debug-режим ручного ввода (DEBUG_INPUT): окно остаётся кликабельным и
+	// получает фокус клавиатуры, поэтому NOACTIVATE+TRANSPARENT не ставятся —
+	// редактор поля ввода может принять текст. В обычном режиме стили
+	// применяются как раньше (поведение байт-в-байт).
+	go o.applyWindowStylesWith(o.applyWindowStyles)
 	defer close(o.shutdown)
 
-	o.sessLog.LogDebug(fmt.Sprintf("UI-оверлей запущен: width=%d, height=%d", o.cfg.Width, o.cfg.Height))
+	o.sessLog.LogDebug(fmt.Sprintf("UI-оверлей запущен: width=%d, height=%d, debugInput=%v", o.cfg.Width, o.cfg.Height, o.cfg.DebugInput))
 
 	for {
 		select {
@@ -278,6 +303,33 @@ func (o *Overlay) HistoryVisible() bool {
 	return o.historyVisible
 }
 
+// SetManualInput устанавливает канал ручного ввода (debug-режим, DEBUG_INPUT).
+// Канал создаёт pipeline — отправитель не владеет им и не закрывает его;
+// pipeline также владеет временем жизни: после Shutdown отправка уже не идёт,
+// потому что окно и его цикл кадров завершены.
+//
+// nil (значение по умолчанию при DebugInput=false) — зона ввода не рендерится
+// и отправки нет: канал — единственный признак включённого ручного ввода.
+// Потокобезопасно: поле под mu.
+func (o *Overlay) SetManualInput(ch chan<- string) {
+	o.mu.Lock()
+	o.manualInputCh = ch
+	o.mu.Unlock()
+	o.invalidateIf()
+}
+
+// applyWindowStylesWith — гейт debug-режима и вызов стилей через переданную
+// функцию (в бою — o.applyWindowStyles). Вынесен отдельным методом, чтобы тест
+// мог проверить само решение «при DEBUG_INPUT стили не применяются» без
+// реального app.Window и Win32-вызовов: счётчик вызовов apply.
+func (o *Overlay) applyWindowStylesWith(apply func()) {
+	if o.cfg.DebugInput {
+		// Окно должно получать фокус и клики — стили не применяются.
+		return
+	}
+	apply()
+}
+
 func (o *Overlay) applyWindowStyles() {
 	// Gio создаёт нативное окно асинхронно — ждём до 3 секунд с экспоненциальной задержкой.
 	if !tryApplyStyles(findWindowByPID, 3*time.Second, 50*time.Millisecond) {
@@ -328,6 +380,9 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 	history := o.historyMessages()
 	errorMsg := o.errorMsg
 	historyVisible := o.historyVisible
+	// Канал ручного ввода снимается копией под тем же RLock — сама debug-зона
+	// достраивается после Unlock (layoutDebugInput).
+	debugManual := o.manualInputCh
 	o.mu.RUnlock()
 
 	// Автоскролл «всегда в конец» (Task 3.1): зоны 2/3/4 скроллятся к концу в
@@ -395,6 +450,21 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 					gtx.Constraints = layout.Constraints{Max: image.Pt(maxX, historyHeight)}
 				}
 				return layoutTranscriptionHistory(gtx, th, history, fs, &o.transcriptionList, needScrollHist)
+			}),
+		)
+	}
+
+	// Debug-зона ручного ввода (DEBUG_INPUT) — ПОД зоной 4, собирается ВНЕ
+	// синхронизированного блока выше: тикер мигания каретки уходит в op-поток
+	// ПОСЛЕ общего Unlock (сам канал debugManualCh читается под mu внутри
+	// layoutDebugInput). В обычном режиме (канал nil, cfg.DebugInput=false)
+	// ни separator, ни строка ввода в Flex не добавляются — прежний рендер.
+	if debugManual != nil || o.cfg.DebugInput {
+		children = append(children,
+			layout.Rigid(layoutZoneSeparator),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				dims, _ := o.layoutDebugInput(gtx, th)
+				return dims
 			}),
 		)
 	}
@@ -1080,6 +1150,98 @@ func layoutError(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) 
 	label.Color = layoutErrorColor
 	label.Alignment = text.Start
 	return label.Layout(gtx)
+}
+
+// ── Debug-режим ручного ввода (DEBUG_INPUT) ──
+
+// debugInputPrompt — подпись поля ручного ввода.
+const debugInputPrompt = "debug ▸"
+
+// debugInputColor — цвет подписи и текста debug-поля: отличим от белых строк
+// зон 2/4 и зелёных переводов, но в той же гамме, что подсказки/уточнения.
+var debugInputColor = color.NRGBA{R: 150, G: 170, B: 200, A: 255}
+
+// layoutDebugInput — зона ручного ввода (debug-режим): подпись «debug ▸»
+// шрифтом smallFontSize(fs) и однострочный widget.Editor под ней. Высота строки —
+// глиф-бокс fs, как у остальных зон (lineHeightPx); зона занимает ровно две
+// строки и стоит ниже зоны 4. Enter (widget.SubmitEvent) отправляет
+// непустой (после TrimSpace) текст в manualInputCh, затем очищает поле.
+//
+// Неблокирующая отправка (select/default): при полном канале строка теряется —
+// это осознанно (UI-кадр не должен ждать pipeline); потеря логируется LogDebug.
+//
+// Возвращает размеры зоны и отправленную строку ("" — ничего не отправлено).
+// render() берёт только размеры; строка нужна тестам идемпотентности отправки.
+func (o *Overlay) layoutDebugInput(gtx layout.Context, th *material.Theme) (layout.Dimensions, string) {
+	o.mu.RLock()
+	ch := o.manualInputCh
+	o.mu.RUnlock()
+	if ch == nil {
+		// Ручной ввод не включён (DebugInput=false / канал не установлен) —
+		// зона не рендерится и не занимает место.
+		return layout.Dimensions{}, ""
+	}
+
+	// Enter: Submit включён (editor.Submit). Разбор событий и отправку делаем ДО
+	// layout.Editor, чтобы не отправлять одно и то же событие повторно при
+	// обходе кадра несколько раз (тесты вызывают метод напрямую).
+	sent := ""
+	for {
+		ev, ok := o.debugEditor.Update(gtx)
+		if !ok {
+			break
+		}
+		se, ok := ev.(widget.SubmitEvent)
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(se.Text)
+		if text == "" {
+			// Пустой ввод не отправляется — но поле всё равно очищается.
+			o.debugEditor.SetText("")
+			continue
+		}
+		select {
+		case ch <- text:
+			sent = text
+		default:
+			// Канал полон: строку теряем (не блокируем кадр), факт — в лог.
+			_ = o.sessLog.LogDebug(fmt.Sprintf("debug-ввод: канал ручного ввода полон, строка потеряна: %q", text))
+		}
+		o.debugEditor.SetText("")
+	}
+
+	fs := o.cfg.FontSize
+	editorHeight := lineHeightPx(fs)
+
+	// Материалы текста/каретки редактора создаёт material.EditorStyle: в Gio
+	// v0.10.1 color → op.CallOp отдельно не собирается (CallOp — макро, а
+	// paint.ColorOp живёт только внутри записанного op-потока), поэтому
+	// используем штатный стиль темы и подменяем размер/цвет.
+	edStyle := material.Editor(th, &o.debugEditor, "")
+	edStyle.TextSize = unit.Sp(fs)
+	edStyle.Color = debugInputColor
+
+	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			l := overlayLabel(th, unit.Sp(smallFontSize(fs)), debugInputPrompt)
+			l.Color = debugInputColor
+			l.Alignment = text.Start
+			return l.Layout(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			// Высота строки — глиф-бокс fs (паттерн overlayLabel): зона кратна
+			// измеренной строке, единый каркас для всех зон (Task 7).
+			if editorHeight > 0 && gtx.Constraints.Max.Y > editorHeight {
+				gtx.Constraints = layout.Constraints{
+					Min: image.Pt(gtx.Constraints.Min.X, editorHeight),
+					Max: image.Pt(gtx.Constraints.Max.X, editorHeight),
+				}
+			}
+			return edStyle.Layout(gtx)
+		}),
+	)
+	return dims, sent
 }
 
 func paintBackground(gtx layout.Context, c color.NRGBA) {

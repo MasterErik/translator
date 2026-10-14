@@ -26,6 +26,17 @@ var (
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 )
 
+// applyWindowStylesWith — гейт debug-режима для СТИЛЕЙ ОКНА: при debugInput
+// стили NOACTIVATE+TRANSPARENT не применяются, иначе вызывается apply() (в бою —
+// Overlay.applyWindowStyles). Отдельная функция (а не только метод), чтобы
+// windows-only тесты проверяли решение без реального app.Window и Win32-вызовов.
+func applyWindowStylesWith(apply func(), debugInput bool) {
+	if debugInput {
+		return
+	}
+	apply()
+}
+
 // setNoActivate applies WS_EX_NOACTIVATE and WS_EX_TRANSPARENT to hwnd.
 // This prevents the overlay from stealing focus or capturing mouse input.
 func setNoActivate(hwnd uintptr) error {
