@@ -272,6 +272,40 @@ CANDIDATE_CONTEXT_FILE=candidate_context.md
 	})
 }
 
+// TestDebugInput — режим ручного ввода: env DEBUG_INPUT (bool через yaml-тег).
+func TestDebugInput(t *testing.T) {
+	t.Run("default false", func(t *testing.T) {
+		cfg := minimalYAML(t, "")
+		if cfg.DebugInput {
+			t.Errorf("DEBUG_INPUT не задан: got true, want false")
+		}
+	})
+
+	t.Run("truthy", func(t *testing.T) {
+		for _, v := range []string{"true", "TRUE", "1", "t"} {
+			t.Run(v, func(t *testing.T) {
+				t.Setenv("DEBUG_INPUT", v)
+				cfg := minimalYAML(t, "")
+				if !cfg.DebugInput {
+					t.Errorf("DEBUG_INPUT=%q: got false, want true", v)
+				}
+			})
+		}
+	})
+
+	t.Run("falsy", func(t *testing.T) {
+		for _, v := range []string{"false", "FALSE", "0", "f", "no"} {
+			t.Run(v, func(t *testing.T) {
+				t.Setenv("DEBUG_INPUT", v)
+				cfg := minimalYAML(t, "")
+				if cfg.DebugInput {
+					t.Errorf("DEBUG_INPUT=%q: got true, want false", v)
+				}
+			})
+		}
+	})
+}
+
 // TestSaveAudio — table-driven тест для SAVE_AUDIO env-переменной.
 func TestSaveAudio(t *testing.T) {
 	t.Run("truthy", func(t *testing.T) {

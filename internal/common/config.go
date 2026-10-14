@@ -39,6 +39,10 @@ type Config struct {
 	LoopbackDeviceName string `yaml:"LOOPBACK_DEVICE"`
 	MicDeviceName      string `yaml:"MIC_DEVICE"`
 
+	// Debug — режим ручного ввода текста в overlay (без транскрибатора):
+	// окно кликабельно, внизу поле ввода; DEBUG_INPUT=1 включает.
+	DebugInput bool `yaml:"DEBUG_INPUT"`
+
 	// Overlay.
 	OverlayWidth  int `yaml:"OVERLAY_WIDTH"`
 	OverlayHeight int `yaml:"OVERLAY_HEIGHT"`
