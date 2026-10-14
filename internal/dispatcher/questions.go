@@ -7,6 +7,11 @@ import (
 	"github.com/mastererik/translator/internal/ui"
 )
 
+// questionTimelineCapacity — предел числа хранимых меток (вопросов) таймлайна.
+// ≈2 часа интервью при ~1 вопросе/мин: более старые метки бесполезны, а их
+// вытеснение не ломает нумерацию — внешние индексы абсолютные (см. base).
+const questionTimelineCapacity = 150
+
 // QState — состояние генерации подсказки для одной метки таймлайна вопросов.
 type QState int
 
@@ -47,6 +52,10 @@ func (s QState) String() string {
 // 2=CommandSimplerEnglish, далее по модулю 3). Хранится в самой метке, а не
 // глобально: каждая метка помнит, на какой команде цикла она остановилась.
 type QEntry struct {
+	// Idx — абсолютный номер метки (нумерация с 0, не сбрасывается при
+	// вытеснении старых меток из кольца). Совпадает с тем, что возвращает Add
+	// и принимают SetState/SetAnswer/NextStep/SetMode.
+	Idx      int
 	Question string
 	Answer   []ui.Answer
 	State    QState
@@ -66,54 +75,119 @@ type QEntry struct {
 // иначе позиция не двигается, но запоминается freshAt для индикатора «новая
 // метка».
 //
+// Внешние индексы АБСОЛЮТНЫЕ и стабильны: base — номер метки entries[0];
+// хранимые позиции внутренние (active/freshAt — индекс в entries, а не номер
+// метки). При переполнении (questionTimelineCapacity) вытесняется голова
+// entries[0], base инкрементируется — номера оставшихся меток не меняются,
+// поэтому задания/шапки, поставленные по старому абсолютному idx, продолжают
+// указывать на ту же метку (или корректно игнорируются, если метка вытеснена).
+//
 // Все методы потокобезопасны. Наружу возвращаются только значения/копии —
 // внутренние слайсы не алиасятся, поэтому вызывающий не может случайно
 // повредить состояние таймлайна.
 type QuestionTimeline struct {
 	mu      sync.Mutex
 	entries []QEntry
-	active  int
-	// freshAt — индекс последней добавленной метки, если она ещё не была
-	// просмотрена (-1 если индикатора нет). Сбрасывается при переходе на эту
-	// метку в Prev/Next или явно методом ClearFresh.
+	// base — абсолютный номер entries[0] (число вытесненных меток). Внутренняя
+	// позиция метки с абсолютным номером idx: idx - base.
+	base   int
+	active int
+	// freshAt — внутренняя позиция последней добавленной метки, если она ещё не
+	// была просмотрена (-1 если индикатора нет). Сбрасывается при переходе на
+	// эту метку в Prev/Next или явно методом ClearFresh.
 	freshAt int
+	// capacity — предел числа хранимых меток; 0 (нулевое значение структуры)
+	// означает questionTimelineCapacity.
+	capacity int
 }
 
-// NewQuestionTimeline создаёт пустой таймлайн.
+// NewQuestionTimeline создаёт пустой таймлайн вместимости questionTimelineCapacity.
 func NewQuestionTimeline() *QuestionTimeline {
 	return &QuestionTimeline{
-		active:  0,
-		freshAt: -1,
+		base:     0,
+		active:   0,
+		freshAt:  -1,
+		capacity: questionTimelineCapacity,
 	}
 }
 
-// Add добавляет вопрос в конец таймлайна в состоянии QIdle и возвращает его индекс.
+// capLimit возвращает эффективную вместимость таймлайна (под удерживаемым
+// мьютексом): нулевое поле capacity трактуется как questionTimelineCapacity.
+func (t *QuestionTimeline) capLimit() int {
+	if t.capacity <= 0 {
+		return questionTimelineCapacity
+	}
+	return t.capacity
+}
+
+// rel переводит абсолютный номер метки во внутреннюю позицию.
+// ok=false — метка вытеснена из кольца (idx < base) или ещё не существует
+// (idx > последний абсолютный номер).
+// Вызывается под удерживаемым мьютексом.
+func (t *QuestionTimeline) rel(idx int) (int, bool) {
+	r := idx - t.base
+	if r < 0 || r >= len(t.entries) {
+		return 0, false
+	}
+	return r, true
+}
+
+// Add добавляет вопрос в конец таймлайна в состоянии QIdle и возвращает его
+// АБСОЛЮТНЫЙ индекс (нумерация не сбрасывается при вытеснении головы).
 //
 // Активной новая метка становится ТОЛЬКО если до добавления пользователь был на
 // последней метке (tail-follow) или таймлайн был пуст. Иначе активная позиция не
 // двигается, но запоминается freshAt — для индикатора «появилась новая метка».
+//
+// При переполнении вытесняется самая старая метка (голова): base++, внутренние
+// позиции active/freshAt сдвигаются на -1; если вытеснена активная метка, active
+// указывает на новую голову (ближайшую оставшуюся).
 func (t *QuestionTimeline) Add(question string) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	idx := t.base + len(t.entries)
 	t.entries = append(t.entries, QEntry{
+		Idx:      idx,
 		Question: question,
 		State:    QIdle,
 	})
-	idx := len(t.entries) - 1
 
-	if idx == 0 || t.active == len(t.entries)-2 {
+	if len(t.entries) == 1 || t.active == len(t.entries)-2 {
 		// Таймлайн был пуст либо пользователь был на прежней последней метке.
-		t.active = idx
+		t.active = len(t.entries) - 1
 		t.freshAt = -1
 	} else {
-		t.freshAt = idx
+		t.freshAt = len(t.entries) - 1
 	}
 
+	t.evictLocked()
 	return idx
 }
 
-// Active возвращает индекс, копию метки и ok=false для пустого таймлайна.
+// evictLocked вытесняет метки-головы, пока число хранимых меток не уложится в
+// вместимость, сдвигая base и внутренние позиции. Вызывается под мьютексом.
+func (t *QuestionTimeline) evictLocked() {
+	limit := t.capLimit()
+	for len(t.entries) > limit {
+		t.entries = t.entries[1:]
+		t.base++
+		if t.active > 0 {
+			t.active--
+		} else {
+			// Вытеснена активная метка: активной становится новая голова —
+			// ближайшая оставшаяся (наиболее вероятно связанная с текущим
+			// контекстом интервью). Просмотр истории — неявно в начало.
+			t.active = 0
+		}
+		if t.freshAt >= 0 {
+			t.freshAt--
+		}
+	}
+}
+
+// Active возвращает АБСОЛЮТНЫЙ индекс активной метки, её копию и ok=false для
+// пустого таймлайна.
 func (t *QuestionTimeline) Active() (int, QEntry, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -121,7 +195,7 @@ func (t *QuestionTimeline) Active() (int, QEntry, bool) {
 	if len(t.entries) == 0 {
 		return 0, QEntry{}, false
 	}
-	return t.active, cloneEntry(t.entries[t.active]), true
+	return t.base + t.active, cloneEntry(t.entries[t.active]), true
 }
 
 // Prev переходит на предыдущую метку с clamp по границе.
@@ -161,17 +235,17 @@ func (t *QuestionTimeline) OnTail() bool {
 	return t.active >= len(t.entries)-1
 }
 
-// HasFresh сообщает, есть ли индикатор новой метки, и её индекс.
+// HasFresh сообщает, есть ли индикатор новой метки, и её АБСОЛЮТНЫЙ индекс.
 // Индикатор сбрасывается при переходе пользователя на метку freshAt (в Prev/Next)
 // или методом ClearFresh.
 func (t *QuestionTimeline) HasFresh() (int, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.freshAt < 0 {
+	if t.freshAt < 0 || t.freshAt >= len(t.entries) {
 		return 0, false
 	}
-	return t.freshAt, true
+	return t.base + t.freshAt, true
 }
 
 // ClearFresh сбрасывает индикатор новой метки. Активную позицию не меняет.
@@ -182,55 +256,61 @@ func (t *QuestionTimeline) ClearFresh() {
 	t.freshAt = -1
 }
 
-// SetState устанавливает состояние метки. No-op при неверном idx.
+// SetState устанавливает состояние метки по АБСОЛЮТНОМУ idx.
+// No-op при неверном/вытесненном idx.
 func (t *QuestionTimeline) SetState(idx int, s QState) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if idx < 0 || idx >= len(t.entries) {
+	r, ok := t.rel(idx)
+	if !ok {
 		return
 	}
-	t.entries[idx].State = s
+	t.entries[r].State = s
 }
 
-// SetAnswer сохраняет подсказки для метки. Слайс копируется внутрь —
-// последующая мутация исходного слайса не влияет на таймлайн.
-// No-op при неверном idx.
+// SetAnswer сохраняет подсказки для метки по АБСОЛЮТНОМУ idx. Слайс копируется
+// внутрь — последующая мутация исходного слайса не влияет на таймлайн.
+// No-op при неверном/вытесненном idx.
 func (t *QuestionTimeline) SetAnswer(idx int, answers []ui.Answer) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if idx < 0 || idx >= len(t.entries) {
+	r, ok := t.rel(idx)
+	if !ok {
 		return
 	}
-	t.entries[idx].Answer = cloneAnswers(answers)
+	t.entries[r].Answer = cloneAnswers(answers)
 }
 
-// NextStep возвращает команду цикла по текущему Step метки и инкрементирует Step
-// по модулю 3 (0=CommandAnswer, 1=CommandMoreContext, 2=CommandSimplerEnglish).
-// ok=false при неверном idx.
+// NextStep возвращает команду цикла по текущему Step метки (абсолютный idx) и
+// инкрементирует Step по модулю 3 (0=CommandAnswer, 1=CommandMoreContext,
+// 2=CommandSimplerEnglish). ok=false при неверном/вытесненном idx.
 func (t *QuestionTimeline) NextStep(idx int) (translator.GenerationCommand, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if idx < 0 || idx >= len(t.entries) {
+	r, ok := t.rel(idx)
+	if !ok {
 		return translator.CommandAnswer, false
 	}
 
-	cmd := stepCommand(t.entries[idx].Step)
-	t.entries[idx].Step = (t.entries[idx].Step + 1) % 3
+	cmd := stepCommand(t.entries[r].Step)
+	t.entries[r].Step = (t.entries[r].Step + 1) % 3
 	return cmd, true
 }
 
-// SetMode записывает режим последней генерации для метки. No-op при неверном idx.
+// SetMode записывает режим последней генерации для метки по АБСОЛЮТНОМУ idx.
+// No-op при неверном/вытесненном idx.
 func (t *QuestionTimeline) SetMode(idx int, mode string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if idx < 0 || idx >= len(t.entries) {
+	r, ok := t.rel(idx)
+	if !ok {
 		return
 	}
-	t.entries[idx].Mode = mode
+	t.entries[r].Mode = mode
 }
 
 // ResetPending переводит все метки в состоянии QQueued/QGenerating обратно в
@@ -247,8 +327,9 @@ func (t *QuestionTimeline) ResetPending() {
 	}
 }
 
-// Snapshot возвращает глубокую копию всех меток, включая копии слайсов Answer.
-// Активная позиция не меняется.
+// Snapshot возвращает глубокую копию всех хранимых меток (окно кольца), включая
+// копии слайсов Answer. Idx каждой метки — её абсолютный номер, поэтому сдвиг
+// окна (base) не сбивает нумерацию. Активная позиция не меняется.
 func (t *QuestionTimeline) Snapshot() []QEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()

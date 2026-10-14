@@ -611,6 +611,11 @@ func answersMeta(answers []Answer) (Answer, bool) {
 // выделена цветом, у каждой — маркер состояния, справа — индикатор более
 // свежих меток. Ширина ленты ограничена questionStripMaxVisible; окно вокруг
 // активной считает visibleWindow. Высота — одна строка smallFontSize(fs).
+//
+// QuestionIdx/Total — АБСОЛЮТНЫЕ номера меток (не сбрасываются при вытеснении
+// старых из кольца): видимое окно считается от относительной позиции активной
+// в диапазоне [QuestionIdx-Total+1, QuestionIdx], а лейбл метки показывает её
+// абсолютный номер.
 func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, fs int) layout.Dimensions {
 	total := meta.Total
 	active := meta.QuestionIdx
@@ -621,12 +626,15 @@ func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answe
 	if active < 0 {
 		active = 0
 	}
-	if active > total-1 {
-		active = total - 1
+	// relActive — позиция активной метки внутри окна: при монотонной нумерации
+	// с 0 это active, при абсолютных номерах — offset от первой метки окна.
+	relActive := active
+	if last := meta.QuestionIdx; last >= total-1 && total > 0 {
+		relActive = total - 1
 	}
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutMarksRow(gtx, th, answers, meta, active, total, fs)
+			return layoutMarksRow(gtx, th, answers, meta, relActive, total, fs)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			// Распорка: прижимает индикатор свежих меток к правому краю, а при
@@ -645,13 +653,18 @@ func layoutQuestionStrip(gtx layout.Context, th *material.Theme, answers []Answe
 }
 
 // layoutMarksRow рисует видимые метки ленты: видимое окно вокруг активной.
-func layoutMarksRow(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, active, total, fs int) layout.Dimensions {
-	win := visibleWindow(active, total, questionStripMaxVisible)
+// win хранит АБСОЛЮТНЫЕ номера меток (нумерация не сбрасывается при вытеснении
+// старых из кольца), поэтому они сразу годятся как idx метки для лейбла и
+// поиска её Answer.
+func layoutMarksRow(gtx layout.Context, th *material.Theme, answers []Answer, meta Answer, relActive, total, fs int) layout.Dimensions {
+	base := meta.QuestionIdx - relActive
+	win := visibleWindow(relActive, total, questionStripMaxVisible)
 	children := make([]layout.FlexChild, 0, len(win))
-	for _, idx := range win {
-		idx := idx
+	for _, rel := range win {
+		idx := base + rel
+		active := rel == relActive
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutMark(gtx, th, answers, meta, idx, idx == active, fs)
+			return layoutMark(gtx, th, answers, meta, idx, active, fs)
 		}))
 	}
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
@@ -668,7 +681,8 @@ func layoutMark(gtx layout.Context, th *material.Theme, answers []Answer, meta A
 
 // markLabelStyle собирает стилизованный лейбл метки «[N]маркер»: маркер и цвет —
 // из состояния Answer этой метки (единая точка выбора цвета рендера метки;
-// выделено для юнит-тестов цвета без обхода op-потока Gio).
+// выделено для юнит-тестов цвета без обхода op-потока Gio). idx — АБСОЛЮТНЫЙ
+// номер метки: лейбл показывает именно его.
 func markLabelStyle(th *material.Theme, answers []Answer, meta Answer, idx int, active bool, fs int) material.LabelStyle {
 	state := ""
 	if a, ok := answerByQuestionIdx(answers, idx); ok {

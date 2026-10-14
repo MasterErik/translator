@@ -395,6 +395,69 @@ func TestQuestionStripRendersStateColors(t *testing.T) {
 	}
 }
 
+// ── Абсолютная нумерация метки (кольцевой таймлайн) ──
+
+// TestQuestionMarkLabelAbsoluteNumber — лейбл метки показывает АБСОЛЮТНЫЙ номер
+// (idx+1): при окне кольца активная метка №12 даёт «[12]», а не «[1]».
+func TestQuestionMarkLabelAbsoluteNumber(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	// Внешний индекс 11 (нумерация с 0) — «12-й вопрос», total хранимого окна 150.
+	answers := []Answer{{QuestionIdx: 11, Total: 150, State: "ready"}}
+	meta := Answer{QuestionIdx: 11, Total: 150, State: "ready"}
+	l := markLabelStyle(th, answers, meta, 11, true, fs)
+	if !strings.Contains(l.Text, "[12]") {
+		t.Errorf("лейбл активной метки %q не содержит абсолютный номер [12]", l.Text)
+	}
+
+	// Соседняя (неактивная) метка того же окна — свой абсолютный номер.
+	l2 := markLabelStyle(th, answers, meta, 8, false, fs)
+	if !strings.Contains(l2.Text, "[9]") {
+		t.Errorf("лейбл метки %q не содержит абсолютный номер [9]", l2.Text)
+	}
+}
+
+// TestQuestionStripAbsoluteWindowLabels — лента рендерится для окна кольца:
+// активная метка — не первая видимая, окно прижато к её абсолютному номеру,
+// рендер не паникует и занимает строку.
+func TestQuestionStripAbsoluteWindowLabels(t *testing.T) {
+	const fs = 18
+	th := material.NewTheme()
+
+	// Окно кольца из cap меток, активная — 12-й вопрос (idx 11), total=150.
+	const active, total = 11, 150
+	ans := []Answer{
+		{Source: "EN", Target: "RU", QuestionIdx: active, Total: total, State: "generating", Mode: "answer"},
+	}
+	meta := Answer{QuestionIdx: active, Total: total, State: "generating"}
+
+	gtx, _ := newLabelContext(800)
+	dims := layoutQuestionStrip(gtx, th, ans, meta, fs)
+	if dims.Size.Y <= 0 {
+		t.Fatalf("layoutQuestionStrip (абсолютный idx) высота = %d, want > 0", dims.Size.Y)
+	}
+
+	// Активная метка — не первая в окне: метка с абсолютным номером active-1
+	// тоже принадлежит видимому окну.
+	if !answersMetaContracts(meta, active-1) {
+		t.Fatalf("окно вокруг активной %d не содержит метку %d", active, active-1)
+	}
+}
+
+// answersMetaContracts проверяет, что метка absIdx попадает в видимое окно
+// вокруг активной meta.QuestionIdx при вместимости questionStripMaxVisible.
+func answersMetaContracts(meta Answer, absIdx int) bool {
+	relActive := meta.Total - 1 // активная прижата к концу абсолютного диапазона
+	base := meta.QuestionIdx - relActive
+	for _, rel := range visibleWindow(relActive, meta.Total, questionStripMaxVisible) {
+		if base+rel == absIdx {
+			return true
+		}
+	}
+	return false
+}
+
 // ── Обратная совместимость ──
 
 // TestOldFormatAnswersUnchanged — AnswerCandidates со СТАРЫМ форматом (все поля

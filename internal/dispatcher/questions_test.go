@@ -410,3 +410,123 @@ func TestQState_String(t *testing.T) {
 		}
 	}
 }
+
+// --- кольцевой буфер: абсолютная нумерация при вытеснении головы ---
+
+// TestQuestionTimeline_CapacityEvictsHead — после cap+5 добавлений таймлайн
+// хранит ровно cap меток; первая метка окна имеет абсолютный номер 5 (голова
+// вытеснена), а последняя — cap+4.
+func TestQuestionTimeline_CapacityEvictsHead(t *testing.T) {
+	tl := NewQuestionTimeline()
+	extra := 5
+	for i := 0; i < questionTimelineCapacity+extra; i++ {
+		if got, want := tl.Add("q"), i; got != want {
+			t.Fatalf("Add #%d вернул idx=%d, ожидалось %d (абсолютная нумерация)", i, got, want)
+		}
+	}
+
+	snap := tl.Snapshot()
+	if len(snap) != questionTimelineCapacity {
+		t.Fatalf("len(Snapshot()) = %d, ожидалось %d (вместимость)", len(snap), questionTimelineCapacity)
+	}
+	if snap[0].Idx != extra {
+		t.Fatalf("Snapshot()[0].Idx = %d, ожидалось %d (голова вытеснена)", snap[0].Idx, extra)
+	}
+	if snap[len(snap)-1].Idx != questionTimelineCapacity+extra-1 {
+		t.Fatalf("последняя метка Idx = %d, ожидалось %d",
+			snap[len(snap)-1].Idx, questionTimelineCapacity+extra-1)
+	}
+	// Абсолютный номер равен позиции в кольце + base: проверяем, что нумерация
+	// монотонна и без дыр по всему окну.
+	for i := 1; i < len(snap); i++ {
+		if snap[i].Idx != snap[i-1].Idx+1 {
+			t.Fatalf("нумерация с дырой: snap[%d].Idx=%d, snap[%d].Idx=%d",
+				i-1, snap[i-1].Idx, i, snap[i].Idx)
+		}
+	}
+}
+
+// TestQuestionTimeline_EvictActiveMovesToHead — активная метка вытеснена →
+// active указывает на новую голову; Prev/Next не паникуют.
+func TestQuestionTimeline_EvictActiveMovesToHead(t *testing.T) {
+	tl := NewQuestionTimeline()
+	// Активной делаем метку на нулевом offset (уходим на начало).
+	tl.Add("Q1")
+	for i := 1; i < questionTimelineCapacity; i++ {
+		tl.Add("q")
+	}
+	// Уходим на первую метку — она же будет вытеснена следующим Add.
+	for tl.Prev() {
+	}
+	firstAbs := mustActiveIdx(t, tl)
+
+	// Добавление вытесняет голову — именно она активна.
+	tl.Add("overflow")
+
+	idx, _, ok := tl.Active()
+	if !ok {
+		t.Fatal("Active() после вытеснения активной метки: ok=false")
+	}
+	if idx != firstAbs+1 {
+		t.Fatalf("после вытеснения активной: idx=%d, ожидалось %d (новая голова)", idx, firstAbs+1)
+	}
+	// Навигация не паникует и остаётся в границах окна.
+	if tl.Prev() {
+		t.Fatalf("Prev() на новой голове: true, ожидалось false (граница окна)")
+	}
+	if !tl.Next() {
+		t.Fatal("Next() с новой головы: false, ожидалось true")
+	}
+	if idx2, _, _ := tl.Active(); idx2 != firstAbs+2 {
+		t.Fatalf("Next() дал idx=%d, ожидалось %d", idx2, firstAbs+2)
+	}
+}
+
+// TestQuestionTimeline_AbsoluteIdxAfterEviction — SetState/SetAnswer/SetMode по
+// абсолютному idx валидны после сдвига base; idx вытесненной метки (idx<base) —
+// no-op.
+func TestQuestionTimeline_AbsoluteIdxAfterEviction(t *testing.T) {
+	tl := NewQuestionTimeline()
+	last := -1
+	for i := 0; i < questionTimelineCapacity+5; i++ {
+		last = tl.Add("q")
+	}
+
+	// Валидная (хранимая) метка правится по абсолютному номеру.
+	tl.SetAnswer(last, []ui.Answer{{Source: "abs", Target: "ру"}})
+	tl.SetState(last, QReady)
+	tl.SetMode(last, "answer")
+
+	snap := tl.Snapshot()
+	got := snap[len(snap)-1]
+	if got.State != QReady || got.Mode != "answer" || len(got.Answer) != 1 || got.Answer[0].Source != "abs" {
+		t.Fatalf("мутация по абсолютному idx не применилась: %+v", got)
+	}
+
+	// Вытесненные индексы (0..base-1) — no-op, без паники.
+	tl.SetState(0, QFailed)
+	tl.SetAnswer(0, []ui.Answer{{Source: "stale"}})
+	tl.SetMode(0, "stale")
+	if _, ok := tl.NextStep(0); ok {
+		t.Fatal("NextStep(0) для вытесненной метки: ok=true, ожидалось false")
+	}
+	if snap2 := tl.Snapshot(); len(snap2) != questionTimelineCapacity {
+		t.Fatalf("no-op сломал окно: len=%d", len(snap2))
+	}
+	// Свежая голова не получила чужую мутацию.
+	if head := tl.Snapshot()[0]; head.State == QFailed {
+		t.Fatalf("SetState вытесненного idx попал в голову окна: %+v", head)
+	}
+}
+
+// --- вспомогательные проверки для тестов кольца ---
+
+// mustActiveIdx возвращает абсолютный номер активной метки или падает.
+func mustActiveIdx(t *testing.T, tl *QuestionTimeline) int {
+	t.Helper()
+	idx, _, ok := tl.Active()
+	if !ok {
+		t.Fatal("Active(): ok=false")
+	}
+	return idx
+}

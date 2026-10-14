@@ -751,12 +751,22 @@ func (d *Dispatcher) pushHeader(idx int, answers []ui.Answer) {
 	if d.overlay == nil {
 		return
 	}
-	// Метка может быть неактивной (устаревший ответ) — берём её из снапшота по idx.
+	// Метка может быть неактивной (устаревший ответ) — берём её из снапшота.
+	// Снапшот — окно кольца: Idx каждой метки абсолютный, поэтому ищем по
+	// абсолютному idx (вытесненная метка не найдётся — шапка не отправляется).
 	snap := d.timeline.Snapshot()
-	if idx < 0 || idx >= len(snap) {
+	var entry QEntry
+	found := false
+	for i := range snap {
+		if snap[i].Idx == idx {
+			entry = snap[i]
+			found = true
+			break
+		}
+	}
+	if !found {
 		return
 	}
-	entry := snap[idx]
 
 	header := make([]ui.Answer, len(answers))
 	copy(header, answers)
