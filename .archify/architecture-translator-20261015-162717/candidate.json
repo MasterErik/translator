@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Архитектура Translator",
+    "locale": "ru",
+    "output": ".archify/architecture-translator-20261015-162717/translator-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:MasterErik/translator.git",
+      "revision": "86834de7dca453f8840590e2fbe14ab70167893c",
+      "link_mode": "local-only"
+    },
+    "views": [
+      {
+        "id": "audioFlow",
+        "label": "Аудио-поток",
+        "focus": ["loopback", "capture", "stt", "gladia", "pipeline"],
+        "note": "Звук собеседника до событий STT в Pipeline"
+      },
+      {
+        "id": "answers",
+        "label": "Подсказки",
+        "focus": ["dispatcher", "engine", "context", "llm", "ui"],
+        "note": "Вопросоподобная реплика → ответ LLM в оверлей"
+      }
+    ]
+  },
+  "components": [
+    { "id": "loopback", "type": "external", "label": "Собеседник", "sublabel": "WASAPI loopback · 48 kHz", "pos": [30, 296], "size": [140, 64], "icon": "person", "sources": [{ "path": "internal/capture/capture.go", "line": 36, "label": "Capture.Start → аудио-каналы" }] },
+    { "id": "mic", "type": "external", "label": "Микрофон", "sublabel": "запись сессии (SAVE_AUDIO)", "pos": [30, 456], "size": [120, 64], "icon": "person", "sources": [{ "path": "internal/logger/audio.go", "line": 77, "label": "mp3Encoder" }] },
+    { "id": "gladia", "type": "cloud", "label": "Gladia Cloud", "sublabel": "Solaria-1 · STT + translation", "pos": [430, 30], "size": [180, 64], "sources": [{ "path": "internal/stt/gladia.go", "line": 21, "label": "api.gladia.io/v2/live" }] },
+    { "id": "llm", "type": "cloud", "label": "LLM API", "sublabel": "GLM-4.7-Flash · sync-ответы", "pos": [880, 30], "size": [170, 64], "sources": [{ "path": "internal/translator/engine.go", "line": 68, "label": "GenerateAnswers" }] },
+    { "id": "config", "type": "backend", "label": "Config", "sublabel": ".env → config.yaml", "pos": [400, 456], "size": [150, 60], "sources": [{ "path": "internal/common/config.go", "line": 250, "label": "LoadConfigFromYAML" }] },
+    { "id": "hotkey", "type": "backend", "label": "Hotkeys", "sublabel": "F1–F4, Esc · Win32", "pos": [600, 456], "size": [140, 56], "sources": [{ "path": "internal/hotkey/hotkey_windows.go", "line": 202, "label": "RegisterHotKey" }] },
+    { "id": "capture", "type": "backend", "label": "Audio Capture", "sublabel": "malgo WASAPI · 48k→16k · 80ms", "pos": [230, 300], "size": [150, 60], "sources": [{ "path": "internal/capture/capture.go", "line": 36, "label": "Start(ctx)" }] },
+    { "id": "stt", "type": "backend", "label": "GladiaProvider", "sublabel": "writePump · readPump · reconnect", "pos": [450, 300], "size": [160, 64], "sources": [{ "path": "internal/stt/gladia.go", "line": 225, "end_line": 353, "label": "Start / AudioStream / TextStream" }, { "path": "internal/stt/gladia.go", "line": 603, "label": "supervise + backoff" }] },
+    { "id": "pipeline", "type": "backend", "label": "Pipeline", "sublabel": "runCapture/runSTT/runUI · ctx + drain", "pos": [670, 300], "size": [150, 60], "sources": [{ "path": "internal/pipeline/pipeline.go", "line": 398, "end_line": 732, "label": "Run, runCapture, runSTT, runUI" }] },
+    { "id": "dispatcher", "type": "backend", "label": "Dispatcher", "sublabel": "textStream buf 64 · IsQuestion · answerCh 16", "pos": [900, 300], "size": [170, 64], "sources": [{ "path": "internal/dispatcher/dispatcher.go", "line": 197, "label": "Dispatcher.Run" }, { "path": "internal/dispatcher/dispatcher.go", "line": 365, "label": "enqueueQuestion" }] },
+    { "id": "logger", "type": "database", "label": "Session Logger", "sublabel": "CSV-текст + MP3-аудио", "pos": [195, 456], "size": [155, 64], "sources": [{ "path": "internal/logger/session.go", "line": 76, "label": "LogText / Close" }] },
+    { "id": "context", "type": "database", "label": "Candidate Context", "sublabel": "fact-level lexical retrieval", "pos": [640, 140], "size": [160, 56], "sources": [{ "path": "internal/context/retrieval.go", "line": 39, "label": "NewRetriever" }, { "path": "internal/context/builder.go", "line": 34, "label": "BuildIndex" }] },
+    { "id": "engine", "type": "backend", "label": "TranslationEngine", "sublabel": "prompts · GenerateAnswers · ParseAnswer", "pos": [860, 140], "size": [160, 56], "sources": [{ "path": "internal/translator/engine.go", "line": 68, "label": "GenerateAnswers" }, { "path": "internal/translator/prompts.go", "line": 22, "label": "BuildSystemPrompt" }] },
+    { "id": "ui", "type": "frontend", "label": "Gio Overlay", "sublabel": "4 зоны · WS_EX_NOACTIVATE", "pos": [860, 456], "size": [160, 64], "sources": [{ "path": "internal/ui/overlay.go", "line": 190, "label": "Overlay.Run" }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Процесс translator.exe (Windows)", "wraps": ["config", "hotkey", "capture", "stt", "pipeline", "dispatcher", "logger", "context", "engine", "ui"], "pad": 22 }
+  ],
+  "connections": [
+    { "id": "c-loop-capture", "from": "loopback", "to": "capture", "label": "PCM", "fromSide": "right", "toSide": "left" },
+    { "id": "c-mic-logger", "from": "mic", "to": "logger", "label": "MP3", "variant": "dashed", "fromSide": "right", "toSide": "left" },
+    { "id": "c-capture-stt", "from": "capture", "to": "stt", "label": "audioCh", "fromSide": "right", "toSide": "left" },
+    { "id": "c-stt-gladia", "from": "stt", "to": "gladia", "label": "PCM 80ms", "fromSide": "top", "toSide": "bottom" },
+    { "id": "c-gladia-stt", "from": "gladia", "to": "stt", "label": "transcript + translation", "fromSide": "bottom", "toSide": "top" },
+    { "id": "c-stt-pipeline", "from": "stt", "to": "pipeline", "label": "textCh", "fromSide": "right", "toSide": "left" },
+    { "id": "c-pipeline-dispatcher", "from": "pipeline", "to": "dispatcher", "label": "STTEvent", "fromSide": "right", "toSide": "left", "variant": "emphasis" },
+    { "id": "c-dispatcher-ui", "from": "dispatcher", "to": "ui", "label": "UIMessage", "fromSide": "bottom", "toSide": "top" },
+    { "id": "c-dispatcher-engine", "from": "dispatcher", "to": "engine", "label": "вопрос FIFO", "fromSide": "top", "toSide": "bottom" },
+    { "id": "c-engine-llm", "from": "engine", "to": "llm", "label": "GenerateAnswers", "fromSide": "top", "toSide": "bottom" },
+    { "id": "c-context-engine", "from": "context", "to": "engine", "label": "факты", "fromSide": "right", "toSide": "left" },
+    { "id": "c-hotkey-dispatcher", "from": "hotkey", "to": "dispatcher", "label": "F1–F4, Esc", "fromSide": "top", "toSide": "bottom" },
+    { "id": "c-config-pipeline", "from": "config", "to": "pipeline", "label": "Config", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Аудио-поток", "items": ["malgo WASAPI: loopback-звук собеседника, ресемплинг 48k→16k, фреймы 80ms", "GladiaProvider: двухфазный коннект POST /v2/live → wss, supervise с exponential backoff", "Pipeline.runSTT маршрутизирует textCh → textStream (buf 64) в Dispatcher"] },
+    { "dot": "emerald", "title": "Подсказки собеседнику", "items": ["IsQuestion фильтрует вопросоподобные реплики перед постановкой в очередь", "answerCh (FIFO 16) → TranslationEngine → LLM, ответ парсится ParseAnswer", "Candidate Context: факт-уровневый lexical retrieval (index/score/budget) в системный промпт"] },
+    { "dot": "rose", "title": "Надёжность и shutdown", "items": ["signal.NotifyContext (SIGINT/SIGTERM) → отмена контекстов всех горутин", "Graceful shutdown: drain каналов, закрытие WS, flush CSV/MP3 логов", "Хоткеи Win32 RegisterHotKey: режимы ответов, пауза, отмена"] }
+  ]
+}
