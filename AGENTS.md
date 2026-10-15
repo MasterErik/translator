@@ -1,4 +1,5 @@
 # AGENTS.md — Translator Project Code Requirements
+Для поиска по коду и понимания структуры сначала вызывай codegraph_*. grep только если CodeGraph вернул пусто
 
 ## Документация (on-demand, не в постоянный context)
 
