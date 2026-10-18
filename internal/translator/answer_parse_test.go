@@ -87,6 +87,14 @@ func TestParseAnswer(t *testing.T) {
 			wantFound: false,
 		},
 		{
+			name:      "target tag on separate line (regeneration degradation)",
+			input:     "EN: Redis is a cache\nRU: Redis — это кэш",
+			srcTag:    "EN",
+			tgtTag:    "RU",
+			want:      struct{ source, target string }{"EN: Redis is a cache", "Redis — это кэш"},
+			wantFound: true,
+		},
+		{
 			name:      "only target separator with empty both sides",
 			input:     "| RU:",
 			srcTag:    "EN",

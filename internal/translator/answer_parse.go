@@ -23,5 +23,17 @@ func ParseAnswer(s, srcTag, tgtTag string) (ui.Answer, bool) {
 	if len(parts) == 2 {
 		return ui.Answer{Source: source, Target: strings.TrimSpace(parts[1])}, true
 	}
+	// Fallback: LLM при регенерации/деградации формата может написать тег цели
+	// на отдельной строке («EN: …\nRU: …») или отделить его пробелом без «|».
+	// Делим по тегу цели, чтобы русская часть не сливалась с английской в Source
+	// (иначе весь ответ красится одним цветом).
+	for _, delim := range []string{"\n" + tgtTag + ":", " " + tgtTag + ":"} {
+		if idx := strings.Index(s, delim); idx >= 0 {
+			return ui.Answer{
+				Source: strings.TrimSpace(s[:idx]),
+				Target: strings.TrimSpace(s[idx+len(delim):]),
+			}, true
+		}
+	}
 	return ui.Answer{Source: source}, false
 }
