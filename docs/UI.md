@@ -151,8 +151,8 @@
 | F2 | `dispatcher.HandlePrev()` (`ActionPrev`) | Предыдущий вопрос таймлайна (clamp по границе). Генерацию **не** запускает. |
 | F3 | `dispatcher.HandleNext()` (`ActionNext`) | Следующий вопрос таймлайна (clamp по границе). Генерацию **не** запускает. |
 | F4 | `overlay.ToggleTranscriptionHistory()` | Тумблер зоны 4 TranscriptionHistory (показ/скрытие). |
-| Shift+F2 | `dispatcher.HandleClarify()` (`ActionClarify`) | Добавить уточнение: последняя финальная реплика интервьюера прикрепляется к активной метке. Дубль-вопрос сливается (`AbsorbLast`). Генерацию **не** запускает. |
-| Shift+F3 | `dispatcher.HandleUnclarify()` (`ActionUnclarify`) | Убрать последнее уточнение активной метки. |
+| Shift+F2 | `dispatcher.HandlePrev()` | То же, что F2: перейти к предыдущей метке таймлайна (навигация). |
+| Shift+F3 | `dispatcher.HandleNext()` | То же, что F3: перейти к следующей метке таймлайна (навигация). |
 | Esc | `dispatcher.Cancel()` | Отмена генерации и очереди; метки таймлайна и готовые ответы **остаются**. |
 
 - **F1** ведёт себя по `State` активной метки: `idle` → обычный ответ; `ready`/`failed` →

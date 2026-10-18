@@ -1378,14 +1378,10 @@ func TestPipeline_ShutdownGoroutineLeak(t *testing.T) {
 }
 
 // =========================================================================
-// TestPipelineHotkeyRoutesShiftToClarify — Б-T3: Shift+F2/F3 в handleHotkey
-// маршрутизируются в Dispatcher.HandleClarify/HandleUnclarify.
-//
-// Проверка black-box: событие EndOfTurn интервьюера копится как lastFinal,
-// затем вызов p.handleHotkey(hotkey.KeyShiftF2) должен породить шапку метки
-// с уточнением (ui.AnswerCandidates → ui.Answer.Clarifications). Сценарий
-// F2 (навигация) для того же события уточнения не создаёт — что доказывает
-// различие маршрутов Shift+F2 и F2.
+// TestPipelineHotkeyShiftF2Prev / ShiftF3Next — Shift+F2/F3 в handleHotkey
+// маршрутизируются в HandlePrev/HandleNext (навигация по меткам), а не в
+// уточнения. Проверка black-box: активная метка (QuestionIdx последней шапки
+// AnswerCandidates) сдвигается на предыдущую/следующую.
 // =========================================================================
 
 // startPipelineWithDispatch запускает dispatcher пайплайна в фоне и возвращает
@@ -1425,7 +1421,19 @@ func lastAnswerClarifications(ovl *mockOverlay) []string {
 	return clar
 }
 
-func TestPipelineHotkeyRoutesShiftF2ToClarify(t *testing.T) {
+// lastAnswerQuestionIdx — индекс (QuestionIdx) активной метки из ПОСЛЕДНЕЙ
+// шапки AnswerCandidates (pushActiveHeader/pushHeader шлют шапку активной метки).
+func lastAnswerQuestionIdx(ovl *mockOverlay) (int, bool) {
+	msgs := ovl.GetMessages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Type == ui.AnswerCandidates && len(msgs[i].Answers) > 0 {
+			return msgs[i].Answers[0].QuestionIdx, true
+		}
+	}
+	return 0, false
+}
+
+func TestPipelineHotkeyShiftF2Prev(t *testing.T) {
 	stt := newMockSTT()
 	capt := newMockCapturer()
 	ovl := newMockOverlay()
@@ -1434,29 +1442,20 @@ func TestPipelineHotkeyRoutesShiftF2ToClarify(t *testing.T) {
 	cancel := startPipelineWithDispatch(t, p)
 	defer cancel()
 
-	// Вопрос создаёт метку таймлайна, вторая фраза — кандидат уточнения.
-	p.textStream <- endOfTurn("Какой у вас опыт с Go?")
-	p.textStream <- endOfTurn("Имею в виду распределённые системы.")
-
-	// Ждём появления метки (шапка AnswerCandidates).
+	// Два вопроса → две метки (idx 0, 1); активная — последняя (idx 1).
+	p.textStream <- endOfTurn("Вопрос один?")
+	p.textStream <- endOfTurn("Вопрос два?")
 	waitForCond(t, func() bool {
-		for _, m := range ovl.GetMessages() {
-			if m.Type == ui.AnswerCandidates && len(m.Answers) > 0 {
-				return true
-			}
-		}
-		return false
+		idx, ok := lastAnswerQuestionIdx(ovl)
+		return ok && idx == 1
 	}, 2*time.Second)
 
-	// Shift+F2 → HandleClarify: lastFinal прикрепляется уточнением.
+	// Shift+F2 → HandlePrev: активная метка становится предыдущей (idx 0).
 	p.handleHotkey(hotkey.KeyShiftF2)
 	waitForCond(t, func() bool {
-		return len(lastAnswerClarifications(ovl)) == 1
+		idx, ok := lastAnswerQuestionIdx(ovl)
+		return ok && idx == 0
 	}, 2*time.Second)
-
-	if got := lastAnswerClarifications(ovl); len(got) != 1 || got[0] != "Имею в виду распределённые системы." {
-		t.Fatalf("уточнение Shift+F2 = %v, ожидалось [Имею в виду распределённые системы.]", got)
-	}
 }
 
 // TestPipelineHotkeyF2DoesNotClarify — чистая F2 (HandlePrev) НЕ добавляет
@@ -1490,8 +1489,9 @@ func TestPipelineHotkeyF2DoesNotClarify(t *testing.T) {
 	}
 }
 
-// TestPipelineHotkeyShiftF3Unclarify — Shift+F3 после Shift+F2 снимает уточнение.
-func TestPipelineHotkeyShiftF3Unclarify(t *testing.T) {
+// TestPipelineHotkeyShiftF3Next — Shift+F3 маршрутизируется в HandleNext:
+// возвращает активную метку к следующей.
+func TestPipelineHotkeyShiftF3Next(t *testing.T) {
 	stt := newMockSTT()
 	capt := newMockCapturer()
 	ovl := newMockOverlay()
@@ -1500,25 +1500,26 @@ func TestPipelineHotkeyShiftF3Unclarify(t *testing.T) {
 	cancel := startPipelineWithDispatch(t, p)
 	defer cancel()
 
-	p.textStream <- endOfTurn("Какой у вас опыт с Go?")
-	p.textStream <- endOfTurn("Имею в виду распределённые системы.")
-
+	// Два вопроса → активная idx 1.
+	p.textStream <- endOfTurn("Вопрос один?")
+	p.textStream <- endOfTurn("Вопрос два?")
 	waitForCond(t, func() bool {
-		for _, m := range ovl.GetMessages() {
-			if m.Type == ui.AnswerCandidates && len(m.Answers) > 0 {
-				return true
-			}
-		}
-		return false
+		idx, ok := lastAnswerQuestionIdx(ovl)
+		return ok && idx == 1
 	}, 2*time.Second)
 
-	// Shift+F2 → уточнение добавлено.
-	p.handleHotkey(hotkey.KeyShiftF2)
-	waitForCond(t, func() bool { return len(lastAnswerClarifications(ovl)) == 1 }, 2*time.Second)
+	// Сначала Prev (F2) → idx 0, затем Shift+F3 → Next → idx 1.
+	p.handleHotkey(hotkey.KeyF2)
+	waitForCond(t, func() bool {
+		idx, ok := lastAnswerQuestionIdx(ovl)
+		return ok && idx == 0
+	}, 2*time.Second)
 
-	// Shift+F3 → HandleUnclarify: уточнение снято.
 	p.handleHotkey(hotkey.KeyShiftF3)
-	waitForCond(t, func() bool { return len(lastAnswerClarifications(ovl)) == 0 }, 2*time.Second)
+	waitForCond(t, func() bool {
+		idx, ok := lastAnswerQuestionIdx(ovl)
+		return ok && idx == 1
+	}, 2*time.Second)
 }
 
 // waitForCond — терминальное ожидание условия (локальный хелпер тестов

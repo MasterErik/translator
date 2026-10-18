@@ -357,12 +357,19 @@ func (p *Pipeline) Run() error {
 	runCtx, runCancel := context.WithCancel(sigCtx)
 	defer runCancel()
 
-	if err := p.sttProv.Start(runCtx); err != nil {
-		return fmt.Errorf("pipeline: запуск STT: %w", err)
+	// В debug-режиме (DEBUG_INPUT=1) транскрибатор не нужен: ввод текста ручной,
+	// а Gladia STT + захват loopback-аудио транскрибировали бы системные звуки
+	// (мусорные «you»/«Спасибо» в зонах 1/2). Поэтому STT и захват не запускаем.
+	if !p.cfg.DebugInput {
+		if err := p.sttProv.Start(runCtx); err != nil {
+			return fmt.Errorf("pipeline: запуск STT: %w", err)
+		}
+		p.sessLog.LogDebug("STT запущен")
+		go p.runCapture(runCtx)
+	} else {
+		p.sessLog.LogDebug("debug-режим: STT и захват аудио отключены")
 	}
-	p.sessLog.LogDebug("STT запущен")
 
-	go p.runCapture(runCtx)
 	go p.runSTT(runCtx)
 	go p.dispatch.Run(runCtx, p.textStream, p.dispatchDone)
 	go p.runUI(runCtx)
@@ -645,9 +652,8 @@ func (p *Pipeline) runHotkeys(ctx context.Context) {
 
 // handleHotkey маппит функциональную клавишу на действие диспетчера.
 // Раскладка: F1 — ответить (HandleDemand), F2 — предыдущий вопрос (HandlePrev),
-// F3 — следующий вопрос (HandleNext),
-// Shift+F2 — добавить уточнение (HandleClarify), Shift+F3 — убрать последнее
-// уточнение (HandleUnclarify), F4 — тумблер окна истории оригиналов.
+// F3 — следующий вопрос (HandleNext), Shift+F2/F3 — то же, что F2/F3 (навигация
+// по меткам; дублируем для удобства), F4 — тумблер окна истории оригиналов.
 // F4 работает без dispatcher и маршрутизируется прямо в overlay.
 func (p *Pipeline) handleHotkey(k hotkey.Key) {
 	switch k {
@@ -668,9 +674,9 @@ func (p *Pipeline) handleHotkey(k hotkey.Key) {
 		case hotkey.KeyF3:
 			p.dispatch.HandleNext()
 		case hotkey.KeyShiftF2:
-			p.dispatch.HandleClarify()
+			p.dispatch.HandlePrev()
 		case hotkey.KeyShiftF3:
-			p.dispatch.HandleUnclarify()
+			p.dispatch.HandleNext()
 		case hotkey.KeyEsc:
 			p.dispatch.Cancel()
 		}
