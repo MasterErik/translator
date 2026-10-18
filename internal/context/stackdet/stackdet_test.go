@@ -198,11 +198,11 @@ func TestMultiplierTable(t *testing.T) {
 			wantIn:    "penalty: stack [php] ∉ {java}",
 		},
 		{
-			name:      "1b. java session, java fact → session bonus",
+			name:      "1b. java session, java fact → session neutral (Session=1.0)",
 			session:   []string{"java"},
 			factStack: []string{"java"},
-			wantMult:  1.25,
-			wantIn:    "session",
+			wantMult:  1.0,
+			wantIn:    "",
 		},
 		{
 			name:      "2. php named in java session, php fact → named bonus",
@@ -346,8 +346,8 @@ func TestMultiplierZeroParams(t *testing.T) {
 		t.Errorf("bonus with zero params: got %v, want 1.5", mult)
 	}
 	s = Detect(nil, []string{"java"}, testFamilies())
-	if mult, _ := Multiplier([]string{"java"}, s, Params{}); mult != 1.25 {
-		t.Errorf("session bonus with zero params: got %v, want 1.25", mult)
+	if mult, _ := Multiplier([]string{"java"}, s, Params{}); mult != 1.0 {
+		t.Errorf("session multiplier with zero params: got %v, want 1.0 (Session=1.0 neutral)", mult)
 	}
 }
 
@@ -383,14 +383,17 @@ func TestMultiplierNamedBeatsSession(t *testing.T) {
 // TestMultiplierSubsetSemantics — session-бонус только при полном вхождении
 // стека факта в сессию.
 func TestMultiplierSubsetSemantics(t *testing.T) {
+	// Явный session-бонус: дефолт Session=1.0 (нейтрален, M7b.5), поэтому
+	// семантику subset проверяем на ненулевом Session.
+	p := Params{Session: 1.25}
 	s := Detect(nil, []string{"java", "php"}, testFamilies())
-	if mult, _ := Multiplier([]string{"java"}, s, DefaultParams()); mult != 1.25 {
+	if mult, _ := Multiplier([]string{"java"}, s, p); mult != 1.25 {
 		t.Errorf("single stack ⊆ session: got %v, want 1.25", mult)
 	}
-	if mult, _ := Multiplier([]string{"java", "php"}, s, DefaultParams()); mult != 1.25 {
+	if mult, _ := Multiplier([]string{"java", "php"}, s, p); mult != 1.25 {
 		t.Errorf("both ⊆ session: got %v, want 1.25", mult)
 	}
-	if mult, _ := Multiplier([]string{"java", "php", "golang"}, s, DefaultParams()); mult != 1.0 {
+	if mult, _ := Multiplier([]string{"java", "php", "golang"}, s, p); mult != 1.0 {
 		t.Errorf("partial intersection: got %v, want 1.0", mult)
 	}
 }
@@ -409,7 +412,7 @@ func TestMultiplierDoesNotMutateFactStack(t *testing.T) {
 // TestDefaultParams — дефолтные коэффициенты из плана.
 func TestDefaultParams(t *testing.T) {
 	p := DefaultParams()
-	if p.Penalty != 0.3 || p.Bonus != 1.5 || p.Session != 1.25 {
+	if p.Penalty != 0.3 || p.Bonus != 1.5 || p.Session != 1.0 {
 		t.Errorf("DefaultParams: got %+v", p)
 	}
 }

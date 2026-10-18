@@ -42,8 +42,12 @@ func Multiplier(factStack []string, s Sets, p Params) (mult float64, reason stri
 	}
 
 	// Сессионный бонус: вопрос стек не называет (Named пусто), а весь стек
-	// факта целиком входит в сессию.
+	// факта целиком входит в сессию. При Session=1.0 (нейтрален, M7b.5) бонуса
+	// нет — возвращаем 1.0 без reason (инвариант: mult=1.0 → reason пуст).
 	if len(s.Named) == 0 && allIn(stack, s.Penalty) {
+		if p.Session == 1.0 {
+			return 1.0, ""
+		}
 		return p.Session, fmt.Sprintf("bonus: session stack %s", formatStack(stack))
 	}
 
