@@ -170,7 +170,7 @@ func TestIdleHintTextContainsF1(t *testing.T) {
 	// Рендер подсказки напрямую не паникует и занимает ненулевую высоту.
 	th := material.NewTheme()
 	gtx, _ := newLabelContext(200)
-	dims := layoutAnswerHint(gtx, th, "idle", 18)
+	dims := layoutAnswerHint(gtx, th, Answer{State: "idle"}, 18)
 	if dims.Size.Y <= 0 {
 		t.Errorf("layoutAnswerHint высота = %d, want > 0", dims.Size.Y)
 	}

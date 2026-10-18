@@ -960,22 +960,9 @@ func answerByQuestionIdx(answers []Answer, idx int) (Answer, bool) {
 
 // layoutQuestionHeader рисует шапку активной метки: «Q3 из 5: <вопрос>». Вопрос
 // обрезается до maxQuestionHeaderLines строк (ellipsis), шрифт smallFontSize(fs),
-// высота — измеренным продвижением строки (не «на глаз»). Рядом — подпись режима
-// генерации Mode («answer»/«more context»/«simpler»).
+// высота — измеренным продвижением строки (не «на глаз»).
 func layoutQuestionHeader(gtx layout.Context, th *material.Theme, meta Answer, fs int) layout.Dimensions {
-	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutQuestionTitle(gtx, th, meta, fs)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if meta.Mode == "" {
-				return layout.Dimensions{}
-			}
-			l := overlayLabel(th, unit.Sp(smallFontSize(fs)), "· "+meta.Mode)
-			l.Color = color.NRGBA{R: 150, G: 170, B: 200, A: 255}
-			return l.Layout(gtx)
-		}),
-	)
+	return layoutQuestionTitle(gtx, th, meta, fs)
 }
 
 // layoutQuestionTitle — «Q3 из 5: вопрос»; часть «вопрос» обрезается по числу
@@ -1016,12 +1003,18 @@ func answerStateHint(state string) string {
 	}
 }
 
-// layoutAnswerHint — подсказка состояния метки вместо пустоты: та же логика
-// цветов, что у подписей, шрифт smallFontSize(fs), отступ одной строкой сверху
-// (чтобы не липнуть к шапке).
-func layoutAnswerHint(gtx layout.Context, th *material.Theme, state string, fs int) layout.Dimensions {
+// layoutAnswerHint — подсказка на месте ответа, пока ответа нет. Пока идёт
+// генерация (queued/generating) показывает режим («answer»/«more context»/
+// «simpler»), который исчезает, когда ответ готов; idle → «F1 — ответить»,
+// failed → «ошибка генерации».
+func layoutAnswerHint(gtx layout.Context, th *material.Theme, meta Answer, fs int) layout.Dimensions {
 	sp := unit.Sp(smallFontSize(fs))
-	l := overlayLabel(th, sp, answerStateHint(state))
+	state := meta.State
+	hint := answerStateHint(state)
+	if meta.Mode != "" && (state == "queued" || state == "generating") {
+		hint = meta.Mode
+	}
+	l := overlayLabel(th, sp, hint)
 	c := color.NRGBA{R: 180, G: 180, B: 200, A: 255}
 	switch state {
 	case "failed":
@@ -1080,7 +1073,7 @@ func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int
 			if len(items) > 0 {
 				return layout.Dimensions{}
 			}
-			return layoutAnswerHint(gtx, th, meta.State, fs)
+			return layoutAnswerHint(gtx, th, meta, fs)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if len(items) == 0 {
