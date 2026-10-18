@@ -1,7 +1,6 @@
 # Secrets
 .env
 candidate_context.md
-candidate_context.md.bak
 candidate_context/
 
 # Hermes agent artifacts
