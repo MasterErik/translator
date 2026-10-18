@@ -28,9 +28,14 @@ MIC_DEVICE: ""
 # Default false — set true to enable for debugging or post-session review.
 SAVE_AUDIO: false
 
-# Candidate context (база CV) — путь к текстовому файлу с фактами кандидата.
-# Сюда добавляйте дополнительную информацию о кандидате (факты, проекты, технологии).
-CANDIDATE_CONTEXT_FILE: "candidate_context.md"
+# Candidate context (база CV) — путь к текстовому файлу с фактами кандидата (legacy-режим).
+# ЗАКОММЕНТИРОВАНО на время работ по плану candidate-context-precision-v3.1 (волна 0):
+# любой top-level ключ Config переопределяется переменной окружения с тем же именем
+# (generic reflection-override, config.go), поэтому оставленный ключ незаметно включает
+# legacy-fallback — в prompt уходит весь файл вместо fact-level retrieval.
+# Постоянное решение — M0.4/D14 (`allow_legacy_fallback`, default false); сам файл
+# переименован в candidate_context.md.bak до конца работ.
+# CANDIDATE_CONTEXT_FILE: "candidate_context.md"
 
 # Candidate context — fact-level retrieval (ВКЛЮЧЁН).
 # dir: "candidate_context" — локальный lexical retrieval: в prompt попадает

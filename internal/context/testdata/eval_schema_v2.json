@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Candidate context retrieval eval dataset v2",
+  "description": "Схема eval-датасета: кейсы вопросов интервью против базы фактов. Разметка relevant/must_not — по базе фактов ДО просмотра выдачи retriever'а. additionalProperties: false — неизвестные поля должны падать на валидации (в Go-загрузчике зеркалится через json.Decoder.DisallowUnknownFields).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataset_version", "notes", "queries"],
+  "properties": {
+    "dataset_version": {
+      "type": "integer",
+      "description": "Версия набора; инкремент при каждом добавлении/изменении кейсов."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Происхождение формулировок, дата запечатывания holdout, ограничения набора."
+    },
+    "holdout_log": {
+      "type": "array",
+      "description": "Журнал расходования holdout: одно использование = одна запись; использование сжигает holdout.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "decision"],
+        "properties": {
+          "date": { "type": "string" },
+          "decision": { "type": "string", "description": "Какое решение приняли по результату прогона (например, 'подбор множителя ×1.2')." }
+        }
+      }
+    },
+    "queries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "question", "relevant_fact_ids", "must_not_fact_ids", "category", "lang", "source"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Уникальный ID кейса, например 'q001'. Уникальность проверяется Go-валидатором (в JSON Schema над массивом — только через custom keyword, оставлено коду)."
+          },
+          "question": {
+            "type": "string",
+            "description": "ДОСЛОВНАЯ формулировка вопроса, включая ASR-шум, без чистки и правки грамматики. Для transcript-источников — склейка ASR-фрагментов в порядке произнесения."
+          },
+          "session_target_stack": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Стеки уровня языка/платформы из конфига сессии (interview.target_stack), например [\"java\"]. Пустой массив или отсутствие = сессия без таргета."
+          },
+          "relevant_fact_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "FactID фактов, которые ДОЛЖНЫ быть найдены. Явные ID, без wildcard'ов; существование проверяет Go-валидатор против index."
+          },
+          "must_not_fact_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "FactID фактов, попадание которых в топ-k = утечка (LeakRate). Явные ID; существование проверяет Go-валидатор."
+          },
+          "expect_effective_target": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Прямое ожидание результата детекции стека (union session.target_stack ∪ упомянутые). Например, 'how did you go about…' → [\"java\"] (go НЕ добавился); 'Laravel → Spring' → [\"java\",\"php\"]. Превращает кейсы на детекцию в прямое утверждение, а не косвенный эффект через метрики."
+          },
+          "category": {
+            "type": "string",
+            "enum": ["negative", "neutral", "explicit", "mixed"],
+            "description": "Соотношение вопроса и стека: negative — риск чужого стека рядом; neutral — без упоминания стека (soft skills, архитектура); explicit — явное упоминание одного или нескольких стеков; mixed — переход/сравнение двух стеков в одном вопросе. НЕ смешивать с целью теста — для неё tags."
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Цель теста: union-logic, go-ambiguity, gate, ru-gap, empty-result, follow-up и т.п. Категория — про данные, tags — про намерение."
+          },
+          "lang": {
+            "type": "string",
+            "enum": ["en", "ru"],
+            "description": "Язык вопроса."
+          },
+          "known_gap": {
+            "type": "boolean",
+            "default": false,
+            "description": "true = кейс с известным разрывом (например, RU против EN-фактов до aliases/Фазы 3): считается отдельным срезом, НЕ участвует в regression gate 'Recall не просел'."
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^(transcript:session_[0-9]{4}-[0-9]{2}-[0-9]{2}(_[0-9]{2}-[0-9]{2}-[0-9]{2})?|public_list:.+|synthetic:.+)$",
+            "description": "Происхождение формулировки, строго: transcript:session_YYYY-MM-DD (дословно из лога), public_list:<название>, synthetic:<причина> (сконструирован для проверки конкретной логики). transcript допустим ТОЛЬКО при дословном совпадении с логом."
+          },
+          "split": {
+            "type": "string",
+            "enum": ["train", "holdout"],
+            "description": "Выборка; holdout хранится в отдельном файле и сжигается при первом использовании. Go-валидатор сверяет split кейса с назначением файла."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Свободные пометки: почему такие relevant/must_not."
+          }
+        }
+      }
+    }
+  }
+}

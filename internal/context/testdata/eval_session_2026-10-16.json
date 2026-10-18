@@ -1,0 +1,185 @@
+{
+  "dataset_version": 1,
+  "notes": "Реальные формулировки из последней сессии-репетиции (logs/session_2026-10-16_18-13-34.csv), канал спикера, дословно, включая ASR-шум и фрагментацию реплик на несколько EndOfTurn (фрагменты склеены в один кейс в порядке произнесения, текст не правился). База фактов: hints/ (50 фактов alarm-qa, Java/Spring, PHP-фактов нет — негативные кейсы java/php из шаблона останутся до Task 5 разметки). must_not здесь — межтемный шум: факты, которые лексика может подтянуть ложно. Разметка сделана по базе фактов, без просмотра выдачи retriever'а. Теги проставлены по ревью: цель теста отделена от категории.",
+  "holdout_log": [],
+  "queries": [
+    {
+      "id": "s16-q01",
+      "question": "Okay, can you please tell me about your achievements in architecture in IT?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-02",
+        "alarm-qa-03"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-41",
+        "alarm-qa-32"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Широкий архитектурный вопрос без стека: relevant — архитектурная проблема и выбор микросервисов; must_not — глубокие детали (таймаут ожидания, TTL ключей), которые могут ложно подтянуться по общим токенам.",
+      "tags": [
+        "wide-architecture"
+      ]
+    },
+    {
+      "id": "s16-q02",
+      "question": "So that is it. Can you please tell me about some specific case of your work. Like I've seen in your resume. a little case about pharmacies. Can you please tell me about it?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-01",
+        "alarm-qa-02",
+        "alarm-qa-03"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-44"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Склейка трёх ASR-фрагментов (18:16:44, 18:16:50, 18:16:54), дословно, включая строчную букву начала второго фрагмента. Вопрос про кейс из резюме (pharmacies). must_not — мониторинг ложных алермов: 'case' может сматчиться по общим токенам.",
+      "tags": [
+        "pharma-case"
+      ]
+    },
+    {
+      "id": "s16-q03",
+      "question": "Can you please tell me again what technologies did you use in that project?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-04",
+        "alarm-qa-05",
+        "alarm-qa-25"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-41",
+        "alarm-qa-42"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Вопрос про список технологий: relevant — источник настроек (PostgreSQL), протоколы (FTP/SFTP/email), Kafka-гарантии. must_not — 10-секундное окно ожидания и краш воркера: ложно тянутся по токенам kafka/redis из keywords.",
+      "tags": [
+        "tech-list"
+      ]
+    },
+    {
+      "id": "s16-q04",
+      "question": "Did you have another solutions like other ways to implement with architecture?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-03",
+        "alarm-qa-35",
+        "alarm-qa-39",
+        "alarm-qa-40"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-28",
+        "alarm-qa-29"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "ASR-шум сохранён дословно ('another solutions', 'implement with architecture'). Вопрос про альтернативы: relevant — все 'why X instead of Y' факты (монолит vs микросервисы, Redis vs PostgreSQL, HashMap vs Kafka Streams, TTL vs Outbox Consumer). must_not — стадии дедупликации MDTM: ложно тянутся по 'another/stage'.",
+      "tags": [
+        "alternatives"
+      ]
+    },
+    {
+      "id": "s16-q05",
+      "question": "And if not, tell me, why did you choose this solution?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-03",
+        "alarm-qa-39",
+        "alarm-qa-40"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-13"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Follow-up без контекста (контекст — предыдущий вопрос, Conversation Context, не лексика): вопрос почти без терминологии — важный кейс на пустую/слабую выдачу. relevant — обоснования выбора; must_not — частота поллинга, ложно матчится по 'solution/configuration'.",
+      "tags": [
+        "follow-up",
+        "weak-question"
+      ]
+    },
+    {
+      "id": "s16-q06",
+      "question": "You modernized this program and made it work, right?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [],
+      "must_not_fact_ids": [
+        "alarm-qa-20",
+        "alarm-qa-42"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Короткое подтверждение (ASR-склейка 032+033). Идеал — пустая выдача (только профиль): в вопросе нет терминологии. must_not — факты, чьи content-токены ('program', 'work', 'restart') могут дать content-only матч: тест гейта по IDF-массе.",
+      "tags": [
+        "empty-result",
+        "gate"
+      ]
+    },
+    {
+      "id": "s16-q07",
+      "question": "So you have nothing more to say about this case, right, Eric?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [],
+      "must_not_fact_ids": [
+        "alarm-qa-44",
+        "alarm-qa-49"
+      ],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Второй empty-кейс: чистый шум-вопрос. Тест, что ничего содержательного не подтягивается.",
+      "tags": [
+        "empty-result"
+      ]
+    },
+    {
+      "id": "s16-q08",
+      "question": "Can you do that right now?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [],
+      "must_not_fact_ids": [],
+      "category": "neutral",
+      "lang": "en",
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "Мета-вопрос начала сессии, не про факты: пустая выдача обязательна. Также тест на то, что IsQuestion/ретривер не тратят бюджет на мусор.",
+      "tags": [
+        "empty-result",
+        "meta-question"
+      ]
+    }
+  ]
+}

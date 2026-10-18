@@ -155,6 +155,9 @@ func defaultStopWords() map[string]struct{} {
 		// English — частотные частицы/наречия.
 		"not", "only", "also", "just", "very", "too", "then", "there", "here",
 		"once", "again", "further", "furthermore", "yes",
+		// English — двусмысленные языковые имена (матчатся бытовыми словами;
+		// канонизация «in go» → golang — на этапе Substitute, см. Task 2b плана).
+		"go",
 		// Русский — предлоги.
 		"в", "во", "на", "с", "со", "по", "о", "об", "от", "до", "из", "за",
 		"над", "под", "при", "про", "без", "для", "к", "ко", "у", "через",

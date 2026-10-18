@@ -1,0 +1,239 @@
+{
+  "dataset_version": 0,
+  "notes": "ШАБЛОН (version 0): FactID в q001/q003/q009 — РЕАЛЬНЫЕ ID из candidate_context/index.json (exp-*) и hints/index.json (alarm-qa-*); остальные — заглушки, заменить при заполнении; Go-валидатор (Task 1) обязан отклонить файл, пока заглушки не заменены (валидатор сверяет с объединением индексов обоих инстансов). Все кейсы помечены честно по source: synthetic / public_list. Квоты: negative 40%, neutral 30%, explicit 20%, mixed 10%; RU/EN в lang; holdout — отдельный файл с журналом.",
+  "queries": [
+    {
+      "id": "q001",
+      "question": "How did you handle transactions and guarantee data consistency across services?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-36",
+        "alarm-qa-37"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:diagnosis-case1",
+      "split": "train",
+      "notes": "relevant — dual-write/outbox готовые ответы (hints); must_not — реальные PHP-факты candidate_context (после разбиения: exp-fintech-php-go-modernization, exp-software-engineer-web; exp-freelance исключён — его keywords больше не тянут Java-вопрос)."
+    },
+    {
+      "id": "q002",
+      "question": "Tell me about a time you had a conflict in the team. How did you resolve it?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "PLACEHOLDER-conflict-resolution-story"
+      ],
+      "must_not_fact_ids": [],
+      "category": "neutral",
+      "tags": [
+        "soft-skills"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:behavioral-interview",
+      "split": "train",
+      "notes": "Soft skills: нейтральный факт. В базе конфликстори-факта НЕТ — кейс активируется после добавления (Task 5.1 расширение) либо снимается."
+    },
+    {
+      "id": "q003",
+      "question": "Как вы обеспечивали идемпотентность при повторной доставке сообщений из Kafka?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-25"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "negative",
+      "tags": [
+        "ru-gap"
+      ],
+      "lang": "ru",
+      "known_gap": true,
+      "source": "synthetic:ru-gap",
+      "split": "train",
+      "notes": "RU-вопрос против EN-фактов: known_gap, отдельный срез. relevant — delivery guarantees/offset commit (hints)."
+    },
+    {
+      "id": "q004",
+      "question": "And how did you do it in PHP, with the billing service?",
+      "session_target_stack": [
+        "java"
+      ],
+      "expect_effective_target": [
+        "java",
+        "php"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [],
+      "category": "explicit",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-explicit-case",
+      "split": "train",
+      "notes": "Явный PHP-вопрос: relevant — технический PHP/Go факт (ID после разбиения). expect_effective_target=[java,php]."
+    },
+    {
+      "id": "q005",
+      "question": "Why did you migrate from Laravel to Spring?",
+      "session_target_stack": [
+        "java"
+      ],
+      "expect_effective_target": [
+        "java",
+        "php"
+      ],
+      "relevant_fact_ids": [
+        "exp-freelance",
+        "exp-java-head"
+      ],
+      "must_not_fact_ids": [],
+      "category": "mixed",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-case",
+      "split": "train",
+      "notes": "Laravel→Spring: relevant — реальная история перехода (exp-freelance, после правки пустой stack) И Java-only факт (exp-java-head) для различения union/override."
+    },
+    {
+      "id": "q006",
+      "question": "Compare how you handled queues in PHP and in Java.",
+      "session_target_stack": [
+        "java"
+      ],
+      "expect_effective_target": [
+        "java",
+        "php"
+      ],
+      "relevant_fact_ids": [
+        "PLACEHOLDER-php-queues-legacy",
+        "PLACEHOLDER-java-kafka-queues"
+      ],
+      "must_not_fact_ids": [],
+      "category": "mixed",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:senior-backend-interview",
+      "split": "train",
+      "notes": "Сравнение очередей: PHP-queues-факта в базе НЕТ — кейс pending: активируется после разбиения exp-dev-ai-transformation (PHP-часть) либо снимается. Заглушки остаются, валидатор их отклоняет (версия 0)."
+    },
+    {
+      "id": "q007",
+      "question": "How did you go about designing the ingestion pipeline for the pharma orders?",
+      "session_target_stack": [
+        "java"
+      ],
+      "expect_effective_target": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-platform-overview"
+      ],
+      "must_not_fact_ids": [
+        "skills-languages",
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "neutral",
+      "tags": [
+        "go-ambiguity"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:go-ambiguity",
+      "split": "train",
+      "notes": "Механизм утечки 'go': skills-languages (keyword go, probe 24.08 на #2) и exp-fintech-php-go-modernization (content go×3, probe 17.98 на #5) — подтверждено пробником 2026-10-17 ДО правки go→golang (красное состояние). expect_effective_target=[java]."
+    },
+    {
+      "id": "q008",
+      "question": "Walk me through your approach to API versioning and backward compatibility.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "PLACEHOLDER-api-versioning-strategy"
+      ],
+      "must_not_fact_ids": [],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:senior-backend-interview",
+      "split": "train",
+      "notes": "Нейтральный кейс: проверка, что стек-множители не задавливают факт без stack."
+    },
+    {
+      "id": "q009",
+      "question": "What was your experience with S3 uploads and large file handling?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-reliability"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "negative",
+      "tags": [
+        "gate",
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:senior-backend-interview",
+      "split": "train",
+      "notes": "Гейт (Java-факт с s3 не отрезан) + стек-штраф (PHP-факт не приезжает). relevant — alarm-reliability (s3 в keywords)."
+    },
+    {
+      "id": "q010",
+      "question": "How did you go about setting up monitoring and alerting for the platform?",
+      "session_target_stack": [
+        "java"
+      ],
+      "expect_effective_target": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-44",
+        "alarm-qa-45"
+      ],
+      "must_not_fact_ids": [],
+      "category": "neutral",
+      "tags": [
+        "go-ambiguity"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:go-ambiguity",
+      "split": "train",
+      "notes": "Второй 'go about'-кейс: relevant — monitoring-факты (hints). expect_effective_target=[java]."
+    }
+  ]
+}
