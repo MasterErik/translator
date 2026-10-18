@@ -1327,49 +1327,6 @@ func TestClarifyEmptyTimelineNoOp(t *testing.T) {
 	}
 }
 
-// TestClarifyMergesDuplicateQuestion — два одинаковых вопроса подряд (уточнение,
-// которое тоже является вопросом) → Shift+F2: вторая метка удалена, её текст ушёл
-// уточнением первой, UI получил обновлённую шапку активной метки.
-func TestClarifyMergesDuplicateQuestion(t *testing.T) {
-	auto := false
-	cfg := DefaultConfig()
-	cfg.AutoAnswer = &auto
-
-	engine := &mockEngine{answers: []string{"EN: A | RU: A"}}
-	d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
-	defer cancel()
-
-	textStream <- question("How do you scale?")
-	textStream <- question("How do you scale?")
-	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
-
-	d.HandleClarify()
-
-	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
-	snap := snapshotOf(d)
-	if snap[0].Question != "How do you scale?" {
-		t.Fatalf("оставшаяся метка = %q, ожидался вопрос", snap[0].Question)
-	}
-	got := snap[0].Clarifications
-	if len(got) != 1 || got[0] != "How do you scale?" {
-		t.Fatalf("Clarifications слитой метки = %v, ожидалось [How do you scale?]", got)
-	}
-	// Активность смещена на слитую метку, шапка обновлена.
-	if idx, _, _ := d.timeline.Active(); idx != 0 {
-		t.Errorf("активная метка после слияния = %d, ожидалось 0", idx)
-	}
-	msg, ok := lastCandidates(overlay)
-	if !ok || len(msg.Answers) == 0 {
-		t.Fatalf("шапка не найдена: %+v", msg)
-	}
-	if got := msg.Answers[0].Clarifications; len(got) != 1 || got[0] != "How do you scale?" {
-		t.Errorf("ui.Answer.Clarifications = %v, ожидалось [How do you scale?]", got)
-	}
-	if msg.Answers[0].QuestionIdx != 0 {
-		t.Errorf("QuestionIdx шапки = %d, ожидался 0", msg.Answers[0].QuestionIdx)
-	}
-}
-
 // TestClarifyAddsToActiveLabel — обычная (не-дубль) фраза → уточнение активной
 // метки, UI обновлён, генерация не запускается.
 func TestClarifyAddsToActiveLabel(t *testing.T) {
@@ -1487,8 +1444,7 @@ func TestUnclarifyRemovesLast(t *testing.T) {
 }
 
 // TestF1RegenerationCarriesClarifications — F1-перегенерация старой метки несёт
-// её уточнения в AnswerRequest.Clarifications (включая уточнения, полученные
-// слиянием дубля-вопроса).
+// её уточнения в AnswerRequest.Clarifications.
 func TestF1RegenerationCarriesClarifications(t *testing.T) {
 	auto := false
 	cfg := DefaultConfig()
@@ -1498,15 +1454,15 @@ func TestF1RegenerationCarriesClarifications(t *testing.T) {
 	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
 	defer cancel()
 
-	// Q1, затем реплика-дубль Q1 → слияние даёт уточнение у Q1.
+	// Q1, затем не-вопрос реплика → уточнение активной метки Q1.
 	textStream <- question("Q1?")
 	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
-	textStream <- question("Q1?")
-	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
+	textStream <- question("I mean at scale.")
+	waitLastFinal(t, d, "I mean at scale.")
 	d.HandleClarify()
-	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+	waitFor(t, func() bool { return len(snapshotOf(d)[0].Clarifications) == 1 }, 2*time.Second)
 
-	// Q2 приходит при просмотре (не создаём) — так проще: добавим вторую метку.
+	// Q2 приходит — вторая метка.
 	textStream <- question("Q2?")
 	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
 
@@ -1522,8 +1478,8 @@ func TestF1RegenerationCarriesClarifications(t *testing.T) {
 	if last.Question != "Q1?" {
 		t.Fatalf("последний запрос про %q, ожидался Q1?", last.Question)
 	}
-	if len(last.Clarifications) != 1 || last.Clarifications[0] != "Q1?" {
-		t.Errorf("AnswerRequest.Clarifications = %v, ожидалось [Q1?]", last.Clarifications)
+	if len(last.Clarifications) != 1 || last.Clarifications[0] != "I mean at scale." {
+		t.Errorf("AnswerRequest.Clarifications = %v, ожидалось [I mean at scale.]", last.Clarifications)
 	}
 }
 

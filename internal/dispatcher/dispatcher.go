@@ -115,6 +115,12 @@ type Dispatcher struct {
 	lastFinal   string
 	lastFinalMu sync.Mutex
 
+	// lastQuestion — текст последнего зарегистрированного вопроса (нормализован
+	// TrimSpace). Повторный ввод того же вопроса не создаёт новую метку таймлайна
+	// (дубликат отбрасывается в route до enqueueQuestion). Пишется только из
+	// route (горутина Run → route, единственный consumer textStream).
+	lastQuestion string
+
 	// autoAnswer — авто-генерация ответа при обнаружении вопроса (default true).
 	autoAnswer bool
 
@@ -312,6 +318,15 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 		d.setLastFinal(event.Text)
 
 		if translator.IsQuestion(event.Text) {
+			q := strings.TrimSpace(event.Text)
+			// Повторный вопрос (точный повтор последнего) не создаёт новую метку.
+			if q != "" && q == d.lastQuestion {
+				if d.sessLog != nil {
+					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: повторный вопрос проигнорирован (метка не создаётся): text=%v", q))
+				}
+				return
+			}
+			d.lastQuestion = q
 			if d.sessLog != nil {
 				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: обнаружен вопрос, запуск генерации: text=%v", event.Text))
 			}
@@ -429,7 +444,6 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 	defer close(d.answerDone)
 
 	var lastQuestion string
-	var lastAnswer []ui.Answer
 
 	for {
 		select {
@@ -451,25 +465,8 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 				d.timeline.ResetStep(task.idx)
 				continue
 			}
-			// Дедупликация точного повтора (текст нормализован TrimSpace) для
-			// авто-заданий: копируем последний готовый ответ в новую метку БЕЗ
-			// вызова LLM. Если готового ответа ещё нет (lastAnswer==nil) —
-			// генерируем заново (fallback).
-			if task.fresh && strings.TrimSpace(task.question) == strings.TrimSpace(lastQuestion) && lastAnswer != nil {
-				d.timeline.SetAnswer(task.idx, lastAnswer)
-				d.timeline.SetState(task.idx, QReady)
-				d.timeline.SetMode(task.idx, modeAnswer)
-				if d.isActive(task.idx) {
-					d.pushHeader(task.idx, lastAnswer)
-				}
-				if d.sessLog != nil {
-					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: дубликат вопроса — ответ скопирован: text=%v", task.question))
-				}
-				continue
-			}
 			lastQuestion = task.question
 			d.runAnswer(task)
-			lastAnswer = d.answerFor(task.idx)
 
 		case act := <-d.hotkeyCh:
 			d.handleHotkeyAction(act)
@@ -679,18 +676,6 @@ func (d *Dispatcher) runAnswer(task answerTask) {
 	defer d.busy.Store(false)
 	d.timeline.SetState(task.idx, QGenerating)
 	d.generateAnswers(task.question, task.cmd, task.idx)
-}
-
-// answerFor возвращает ответ метки idx из таймлайна (nil, если метки нет или
-// ответ пуст). Используется для копирования последнего готового ответа при
-// дедупликации повтора вопроса.
-func (d *Dispatcher) answerFor(idx int) []ui.Answer {
-	for _, e := range d.timeline.Snapshot() {
-		if e.Idx == idx {
-			return e.Answer
-		}
-	}
-	return nil
 }
 
 // drainQueue вычитывает все оставшиеся задания из очереди при shutdown.
