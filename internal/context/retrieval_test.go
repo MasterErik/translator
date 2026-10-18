@@ -25,7 +25,24 @@ func factJSON(f testFact) string {
 
 // newRetriever строит временное дерево (manifest.json + sections/*.md), строит
 // index через BuildIndex и создаёт Retriever.
+//
+// Пороги M7a (content-only gate и relative threshold) здесь ОТКЛЮЧЕНЫ: тесты
+// этого файла проверяют веса/idf/порядок, и отсечение «слабых» кандидатов
+// делало бы их зелёными (или падающими) по чужой причине. Пороговые правила —
+// в retrieval_gate_test.go.
 func newRetriever(t *testing.T, manifest string, files map[string]string, topK int, minScore float64) *Retriever {
+	t.Helper()
+	return newGatedRetriever(t, manifest, files, RetrieverOptions{
+		TopK:              topK,
+		MinScore:          minScore,
+		ContentGateTau:    -1,
+		RelativeThreshold: -1,
+	})
+}
+
+// newGatedRetriever — newRetriever с явными опциями (пороги M7a включены так,
+// как их задал тест).
+func newGatedRetriever(t *testing.T, manifest string, files map[string]string, opts RetrieverOptions) *Retriever {
 	t.Helper()
 	dir := buildTree(t, manifest, files)
 	m := mustLoadManifest(t, dir)
@@ -33,9 +50,9 @@ func newRetriever(t *testing.T, manifest string, files map[string]string, topK i
 	if err != nil {
 		t.Fatalf("BuildIndex: %v", err)
 	}
-	r, err := NewRetriever(m, idx, dir, topK, minScore)
+	r, err := NewRetrieverWithOptions(m, idx, dir, opts)
 	if err != nil {
-		t.Fatalf("NewRetriever: %v", err)
+		t.Fatalf("NewRetrieverWithOptions: %v", err)
 	}
 	return r
 }

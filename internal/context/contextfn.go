@@ -61,6 +61,11 @@ type ContextFnConfig struct {
 	MaxProfileTokens int
 	MaxMatrixTokens  int
 
+	// Пороги M7a. Ноль означает default (DefaultContentGateTau /
+	// DefaultRelativeThreshold), отрицательное значение отключает фильтр.
+	ContentGateTau    float64
+	RelativeThreshold float64
+
 	// Legacy-режим (D14).
 	LegacyFile          string // путь к файлу базы CV (передаётся целиком)
 	AllowLegacyFallback bool   // разрешать fallback на LegacyFile при сбое Dir
@@ -228,9 +233,9 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 
 	return func(question string, s SessionContext) ContextResult {
 		// s (SessionContext) участвует в ранжировании начиная с M7b
-		// (стек-множители); на этапе M0 контракт уже зафиксирован.
-		_ = s
-		budgeted := budgeter.BudgetWithMatrix(manifest.Profile, manifest.TechnicalMatrix, retriever.Retrieve(question))
+		// (стек-множители) — здесь он уже проброшен в retrieval.
+		budgeted := budgeter.BudgetWithMatrix(manifest.Profile, manifest.TechnicalMatrix,
+			retriever.RetrieveWith(question, RetrieveOptions{Session: s}))
 		out := ContextResult{
 			Text:          budgeted.Render(),
 			FactIDs:       factIDsOf(budgeted),
@@ -269,12 +274,22 @@ type hintSource struct {
 
 // newHintSource загружает каталог hints и строит retriever. Любая ошибка
 // возвращается вызывающему — решение о нефатальности принимает BuildContextFn.
+//
+// Подсказки отбираются абсолютным сырым порогом (D7): content-only гейт и
+// relative threshold выключены (отрицательные значения). У hints короткие
+// вопросы-ответы: доля покрытия IDF у них не показательна, а relative threshold
+// срезал бы валидную подсказку, если рядом оказалась более полная.
 func newHintSource(dir string, topK int, minScore float64) (*hintSource, error) {
 	manifest, index, err := LoadCandidateContext(dir)
 	if err != nil {
 		return nil, fmt.Errorf("загрузка hints %s: %w", dir, err)
 	}
-	retriever, err := NewRetriever(manifest, index, dir, topK, minScore)
+	retriever, err := NewRetrieverWithOptions(manifest, index, dir, RetrieverOptions{
+		TopK:              topK,
+		MinScore:          minScore,
+		ContentGateTau:    -1,
+		RelativeThreshold: -1,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("инициализация retriever hints %s: %w", dir, err)
 	}
@@ -318,7 +333,12 @@ func newContextRetriever(cfg ContextFnConfig) (*Retriever, *Budgeter, *Manifest,
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("загрузка candidate context: %w", err)
 	}
-	retriever, err := NewRetriever(manifest, index, cfg.Dir, cfg.TopK, cfg.MinScore)
+	retriever, err := NewRetrieverWithOptions(manifest, index, cfg.Dir, RetrieverOptions{
+		TopK:              cfg.TopK,
+		MinScore:          cfg.MinScore,
+		ContentGateTau:    cfg.ContentGateTau,
+		RelativeThreshold: cfg.RelativeThreshold,
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("инициализация retriever candidate context: %w", err)
 	}

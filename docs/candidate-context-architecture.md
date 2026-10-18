@@ -73,14 +73,36 @@ Source-файлы не меняются в runtime — file watcher/locking не
   → section score (tags 3 × IDF + summary 2 × IDF) × sectionWeight(0.3)
   → fact score = keywords(5) + title(4) + aliases(3) + content(2)   [× IDF]
   → fact score == 0 → отброс                         # section metadata не создаёт результат
+  → content-only gate                                # M7a: нет попаданий в keywords/title/aliases
+                                                     #  → matched_content_IDF / question_IDF < τ (0.15) → отброс
   → + section bonus + phrase bonus                   # только при fact score > 0; phrase: title +3 / content +1, cap +6
-  → score < minScore → отброс
-  → сортировка score DESC, tie-break по FactID ASC
+  → стек-множитель (M7b)                             # Core = (field + phrase) × mult
+  → relative threshold (M7a)                         # Core < top1.Core × 0.6 → отброс
+                                                     # top1 — среди неоштрафованных, БЕЗ section-бонуса
+  → score < minScore → отброс                        # сравнение по Raw (без множителя, D7)
+  → сортировка Rank DESC, tie-break по FactID ASC
   → topK → точечное чтение тел через io.NewSectionReader
   → Budgeter: profile ≤ MaxProfileTokens, technical_matrix ≤ MaxMatrixTokens,
     факты целиком ≤ MaxTokens
   → CandidateContext.Render() → AnswerRequest.CandidateContext (prompt-ready)
 ```
+
+Пустая выдача — штатный режим: нет кандидатов или все отсечены порогами → пустой
+набор фактов, без ошибки.
+
+Три величины score (шов под стек-множители, M7a):
+
+| Величина | Формула | Назначение |
+|---|---|---|
+| `Raw` | `field + section + phrase` | прежняя семантика score: `min_score` и абсолютный порог hints сравниваются с ней |
+| `Core` | `(field + phrase) × mult` | сопоставимая часть для relative threshold (без section-бонуса) |
+| `Rank` | `Core + section` | сортировка выдачи и `RetrievalResult.Score` |
+
+Диагностика: `RetrieveOptions{Explain: true}` заполняет `ScoreBreakdown`
+(вклады полей, section/phrase, raw/core/rank, `content_ratio`, множитель,
+вердикты gate/threshold), а `ExplainQuestion` показывает и отклонённых
+кандидатов с причиной. Прод-путь платит за объяснение только при флаге.
+Инструменты: `test/context_explain` (разложение по вопросу/тегу).
 
 `IDF(term) = log((N+1)/(df+1)) + 1`; `df` считается по фактам (каждый факт
 максимум один раз на термин), TF не учитывается. Raw source файлы НЕ читаются

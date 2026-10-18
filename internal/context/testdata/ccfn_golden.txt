@@ -7,9 +7,6 @@ consumes market events and reprices orders within 50 ms.
 
 Kafka: partitioning, consumer groups, exactly-once semantics, schema registry.
 RabbitMQ: exchanges and dead-letter queues.
-
-Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
-state, Kafka for ingestion, Kubernetes for deployment.
 --
 ## Q02: Tell me about your pricing engine work.
 Candidate profile:
@@ -31,9 +28,6 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 
 PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
 Strong preference for plain SQL over ORM abstractions.
-
-Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
-state, Kafka for ingestion, Kubernetes for deployment.
 --
 ## Q05: Tell me about your experience with Java and the JVM.
 Candidate profile:
@@ -41,9 +35,6 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 
 Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
 state, Kafka for ingestion, Kubernetes for deployment.
-
-Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
-Boot without downtime; the PHP version handled 200 rps at peak.
 --
 ## Q06: What is your experience with microservices architecture?
 Candidate profile:
@@ -76,9 +67,6 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 
 PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
 Strong preference for plain SQL over ORM abstractions.
-
-Built a real-time pricing engine with Kafka and Go microservices; the pipeline
-consumes market events and reprices orders within 50 ms.
 --
 ## Q11: What is your experience with Go?
 Candidate profile:
@@ -136,9 +124,6 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 
 Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
 state, Kafka for ingestion, Kubernetes for deployment.
-
-Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
-Boot without downtime; the PHP version handled 200 rps at peak.
 --
 ## Q20: Do you have experience with RabbitMQ?
 Candidate profile:
@@ -178,7 +163,4 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 
 Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
 Boot without downtime; the PHP version handled 200 rps at peak.
-
-Built a real-time pricing engine with Kafka and Go microservices; the pipeline
-consumes market events and reprices orders within 50 ms.
 --

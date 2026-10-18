@@ -44,6 +44,8 @@ func main() {
 	maxMatrixTokens := flag.Int("max-matrix-tokens", candidatecontext.DefaultMaxMatrixTokens, "бюджет technical_matrix в токенах (0 = дефолт пакета)")
 	hintsTopK := flag.Int("hints-top", 1, "top-K подсказок")
 	hintsMinScore := flag.Float64("hints-min-score", 50, "min score подсказок (как в config.yaml)")
+	gateTau := flag.Float64("gate-tau", candidatecontext.DefaultContentGateTau, "content-only gate: минимальная доля IDF вопроса, покрытая телом факта (отрицательное = выключить)")
+	relThreshold := flag.Float64("rel-threshold", candidatecontext.DefaultRelativeThreshold, "relative threshold: доля лучшего core, ниже которой факт не показывается (отрицательное = выключить)")
 	onLoadError := flag.String("on-load-error", candidatecontext.OnLoadErrorFail, "поведение при сбое загрузки каталога: fail|degraded")
 	flag.Parse()
 
@@ -102,16 +104,18 @@ func main() {
 	}
 
 	cfg := candidatecontext.ContextFnConfig{
-		Dir:              *dir,
-		TopK:             *topK,
-		MinScore:         *minScore,
-		MaxTokens:        *maxTokens,
-		MaxProfileTokens: *maxProfileTokens,
-		MaxMatrixTokens:  *maxMatrixTokens,
-		HintsTopK:        *hintsTopK,
-		HintsMinScore:    *hintsMinScore,
-		OnLoadError:      *onLoadError,
-		Logf:             func(msg string) { fmt.Fprintf(os.Stderr, "%s\n", msg) },
+		Dir:               *dir,
+		TopK:              *topK,
+		MinScore:          *minScore,
+		MaxTokens:         *maxTokens,
+		MaxProfileTokens:  *maxProfileTokens,
+		MaxMatrixTokens:   *maxMatrixTokens,
+		ContentGateTau:    *gateTau,
+		RelativeThreshold: *relThreshold,
+		HintsTopK:         *hintsTopK,
+		HintsMinScore:     *hintsMinScore,
+		OnLoadError:       *onLoadError,
+		Logf:              func(msg string) { fmt.Fprintf(os.Stderr, "%s\n", msg) },
 	}
 	if *hintsDir != "" {
 		cfg.HintsDir = *hintsDir

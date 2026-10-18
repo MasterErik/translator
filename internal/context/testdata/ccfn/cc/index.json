@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "version": 2,
+  "tokenizer_version": "3",
   "manifest_sha256": "1c846d3397bfe0a2a82276e17ffca9855783d73d1602230c218f69947f62d342",
   "files": [
     {
@@ -31,9 +32,12 @@
       "content_tokens": [
         "built",
         "real-time",
+        "real",
+        "time",
         "pricing",
         "engine",
         "kafka",
+        "golang",
         "microservices",
         "pipeline",
         "consumes",
@@ -60,7 +64,8 @@
       "aliases": [],
       "content_tokens": [
         "maintained",
-        "php/laravel",
+        "php",
+        "laravel",
         "billing",
         "service",
         "migrated",
@@ -127,12 +132,15 @@
         "consumer",
         "groups",
         "exactly-once",
+        "exactly",
         "semantics",
         "schema",
         "registry",
         "rabbitmq",
         "exchanges",
         "dead-letter",
+        "dead",
+        "letter",
         "queues"
       ]
     },

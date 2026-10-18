@@ -86,11 +86,52 @@ type Index struct {
 
 // RetrievalResult — результат retrieval одного факта.
 // Content — точечно прочитанное содержимое факта (после ranking).
+// Score равен Rank (score, по которому факт отсортирован). Raw сохраняет
+// прежнюю семантику score без стек-множителя (M7b): с ним сравниваются
+// min_score и абсолютный порог подсказок, чтобы бонус не проводил чужой факт
+// через порог. Breakdown заполняется только при RetrieveOptions.Explain.
 type RetrievalResult struct {
-	FactID    string  `json:"fact_id"`
-	SectionID string  `json:"section_id"`
-	Score     float64 `json:"score"`
-	Content   string  `json:"content"`
+	FactID      string          `json:"fact_id"`
+	SectionID   string          `json:"section_id"`
+	Score       float64         `json:"score"`
+	Content     string          `json:"content"`
+	Raw         float64         `json:"raw"`
+	Rank        float64         `json:"rank"`
+	OutOfTarget bool            `json:"out_of_target,omitempty"`
+	Breakdown   *ScoreBreakdown `json:"breakdown,omitempty"`
+}
+
+// ScoreBreakdown объясняет, из чего сложился результат факта: вклады полей,
+// section/phrase бонусы, вердикты гейта и relative threshold, стек-множитель.
+type ScoreBreakdown struct {
+	Keywords   float64 `json:"keywords"`
+	Title      float64 `json:"title"`
+	Aliases    float64 `json:"aliases"`
+	Content    float64 `json:"content"`
+	Section    float64 `json:"section"`
+	Phrase     float64 `json:"phrase"`
+	FieldScore float64 `json:"field_score"`
+	Core       float64 `json:"core"`
+	Raw        float64 `json:"raw"`
+	Rank       float64 `json:"rank"`
+	// ContentRatio — matched_content_IDF / question_IDF: насколько вопрос
+	// покрыт телом факта (используется content-only гейтом).
+	ContentRatio float64 `json:"content_ratio"`
+	Mult         float64 `json:"mult"`
+	MultReason   string  `json:"mult_reason,omitempty"`
+	Gate         string  `json:"gate,omitempty"`
+	Threshold    string  `json:"threshold,omitempty"`
+}
+
+// ExplainItem — диагностика одного факта-кандидата: вклады полей, вердикты
+// гейта и relative threshold, стек-множитель. Passed == false означает, что
+// факт не попал бы в выдачу; RejectedBy называет причину.
+type ExplainItem struct {
+	FactID     string         `json:"fact_id"`
+	SectionID  string         `json:"section_id"`
+	Passed     bool           `json:"passed"`
+	RejectedBy string         `json:"rejected_by,omitempty"`
+	Breakdown  ScoreBreakdown `json:"breakdown"`
 }
 
 // CandidateContext — prompt-ready candidate context (profile + technical matrix
