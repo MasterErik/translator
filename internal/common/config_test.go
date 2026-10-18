@@ -543,8 +543,8 @@ func TestCandidateContextWave1Config(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		cleanEnv(t, envVars...)
 		cfg := minimalYAML(t, "")
-		if cfg.CandidateContext.RelativeThreshold != 0.45 {
-			t.Errorf("RelativeThreshold default: got %v, want 0.45", cfg.CandidateContext.RelativeThreshold)
+		if cfg.CandidateContext.RelativeThreshold != 0.6 {
+			t.Errorf("RelativeThreshold default: got %v, want 0.6", cfg.CandidateContext.RelativeThreshold)
 		}
 		if cfg.CandidateContext.MaxMatrixTokens != 100 {
 			t.Errorf("MaxMatrixTokens default: got %d, want 100", cfg.CandidateContext.MaxMatrixTokens)
@@ -613,8 +613,8 @@ candidate_context:
 		t.Setenv("CANDIDATE_CONTEXT_RELATIVE_THRESHOLD", "abc")
 		t.Setenv("CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS", "xyz")
 		cfg := minimalYAML(t, "")
-		if cfg.CandidateContext.RelativeThreshold != 0.45 {
-			t.Errorf("RelativeThreshold with invalid env: got %v, want default 0.45", cfg.CandidateContext.RelativeThreshold)
+		if cfg.CandidateContext.RelativeThreshold != 0.6 {
+			t.Errorf("RelativeThreshold with invalid env: got %v, want default 0.6", cfg.CandidateContext.RelativeThreshold)
 		}
 		if cfg.CandidateContext.MaxMatrixTokens != 100 {
 			t.Errorf("MaxMatrixTokens with invalid env: got %d, want default 100", cfg.CandidateContext.MaxMatrixTokens)

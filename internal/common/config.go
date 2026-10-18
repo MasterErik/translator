@@ -172,7 +172,7 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.CandidateContext.MaxProfileTokens, 150)
 	setDefault(&c.CandidateContext.MinScore, 0.0)
 	setDefault(&c.CandidateContext.TopK, 5)
-	setDefault(&c.CandidateContext.RelativeThreshold, 0.45)
+	setDefault(&c.CandidateContext.RelativeThreshold, 0.6)
 	setDefault(&c.CandidateContext.MaxMatrixTokens, 100)
 	setDefault(&c.CandidateContext.OnLoadError, "fail")
 	// AllowLegacyFallback намеренно не имеет default: false — нулевое значение
