@@ -45,11 +45,12 @@ type Overlay struct {
 	// errorMsg — последняя ошибка генерации (зона 3): хранится только последняя.
 	errorMsg UIMessage
 
-	// scrolledAnswersIdx — QuestionIdx метки, до которой список ответов уже
-	// доскроллен в конец. Автоскролл срабатывает только при НОВОЙ метке (idx
-	// изменился), а не при регенерации той же метки по F1 — иначе список
-	// откатывался бы вниз при каждом повторном ответе. Доступ под mu.
-	scrolledAnswersIdx int
+	// answersSeq — монотонный счётчик AnswerCandidates-сообщений (под mu):
+	// признак нового ответа (включая регенерацию той же метки). Используется
+	// для sticky-bottom автоскролла зоны 3.
+	answersSeq uint64
+	// scrolledAnswersSeq — seq, до которого автоскролл зоны 3 уже выполнен.
+	scrolledAnswersSeq uint64
 
 	shutdown chan struct{}
 
@@ -110,19 +111,18 @@ func NewOverlay(cfg OverlayConfig, sessLog logger.SessionLogger) *Overlay {
 		cfg.FontSize = 18
 	}
 	o := &Overlay{
-		cfg:                cfg,
-		interimMsg:         UIMessage{},
-		translations:       make([]UIMessage, 0),
-		history:            make([]UIMessage, 0),
-		answersHistory:     make([]UIMessage, 0),
-		shutdown:           make(chan struct{}),
-		interimList:        layout.List{Axis: layout.Vertical},
-		translationList:    layout.List{Axis: layout.Vertical},
-		transcriptionList:  layout.List{Axis: layout.Vertical},
-		answersList:        layout.List{Axis: layout.Vertical},
-		historyVisible:     false,
-		scrolledAnswersIdx: -1,
-		sessLog:            sessLog,
+		cfg:               cfg,
+		interimMsg:        UIMessage{},
+		translations:      make([]UIMessage, 0),
+		history:           make([]UIMessage, 0),
+		answersHistory:    make([]UIMessage, 0),
+		shutdown:          make(chan struct{}),
+		interimList:       layout.List{Axis: layout.Vertical},
+		translationList:   layout.List{Axis: layout.Vertical},
+		transcriptionList: layout.List{Axis: layout.Vertical},
+		answersList:       layout.List{Axis: layout.Vertical},
+		historyVisible:    false,
+		sessLog:           sessLog,
 	}
 	// Debug-поле ручного ввода: однострочное, Enter конвертируется в
 	// widget.SubmitEvent (без Submit Editor вставлял бы \n в текст). Настраиваем
@@ -159,6 +159,7 @@ func (o *Overlay) AddMessage(msg UIMessage) {
 		// первая же ошибка залипала бы навсегда, пряча ленту меток и ответы.
 		o.answersHistory = append(o.answersHistory, msg)
 		o.errorMsg = UIMessage{}
+		o.answersSeq++
 
 	case Error:
 		// Последняя ошибка генерации (замена).
@@ -394,23 +395,22 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 	// Канал ручного ввода снимается копией под тем же RLock — сама debug-зона
 	// достраивается после Unlock (layoutDebugInput).
 	debugManual := o.manualInputCh
-	// curIdx — индекс активной метки (QuestionIdx) под тем же RLock: автоскролл
-	// зоны 3 срабатывает только при новой метке, а не при регенерации по F1.
-	curIdx := -1
-	if hasAnswers && len(answers.Answers) > 0 {
-		curIdx = answers.Answers[0].QuestionIdx
-	}
+	// answersSeq — снимок счётчика ответов под тем же RLock: признак нового
+	// ответа (включая регенерацию) для sticky-bottom автоскролла зоны 3.
+	answersSeq := o.answersSeq
 	o.mu.RUnlock()
 
 	// Автоскролл «в конец» (Task 3.1): зоны 2/4 скроллятся к концу в каждый
 	// кадр с данными; список зоны 1 (interimList) — при непустом тексте. Зона 3
-	// скроллится ТОЛЬКО при появлении нового ответа (answersSeq изменился), а не
-	// каждый кадр — иначе ручной скролл вверх откатывается вниз и начало ответа
-	// (Source/EN) не видно. Позиции layout.List общие (немедленное обновление).
+	// скроллится по «sticky bottom»: только при новом ответе (answersSeq
+	// изменился) И если список был у конца (BeforeEnd=false) — иначе ручной
+	// скролл вверх сохраняется, а при новом ответе у конца последняя строка
+	// не обрезается. Позиции layout.List общие (немедленное обновление).
 	needScrollInterim := interim.Text != ""
 	needScrollTrans := len(translations) > 0
 	needScrollHist := len(history) > 0
-	needScrollAnswers := curIdx != -1 && curIdx != o.scrolledAnswersIdx
+	wasAtEnd := !o.answersList.Position.BeforeEnd
+	needScrollAnswers := answersSeq != o.scrolledAnswersSeq && wasAtEnd
 
 	// separatorCount собирается layout-функцией separator'а в кадре (см. ниже);
 	// локальный счётчик не течёт между оверлеями/кадрами (Task 3.2).
@@ -503,10 +503,10 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 
-	// Зафиксировать, что новая метка учтена автоскроллом (вне RLock выше).
+	// Зафиксировать, что новый ответ учтён автоскроллом (вне RLock выше).
 	if needScrollAnswers {
 		o.mu.Lock()
-		o.scrolledAnswersIdx = curIdx
+		o.scrolledAnswersSeq = answersSeq
 		o.mu.Unlock()
 		// Одноразовый скролл в конец выполнен — сбрасываем флаг: Gio не сбрасывает
 		// ScrollToEnd сам, иначе список прилипал бы к концу каждый кадр и ручной
