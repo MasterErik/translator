@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -96,6 +95,7 @@ type Config struct {
 	CandidateContextFile string                        // путь к файлу базы CV (legacy)
 	CandidateContext     common.CandidateContextConfig // fact-level retrieval (Dir) — приоритет над File
 	Hints                common.HintsConfig            // подсказки-ответы (каталог в формате candidate_context)
+	Interview            common.InterviewConfig        // целевой стек интервью (D2; используется retrieval с M7b)
 	RecentTurns          int                           // максимум turns в context
 	MaxContextTokens     int                           // лимит размера context
 
@@ -187,32 +187,33 @@ func New(cfg Config) (*Pipeline, error) {
 	// TranslationEngine.
 	engine := translator.NewEngine(llmProv)
 
-	// Candidate context — fact-level retrieval (Dir) или legacy файл (File).
+	// Candidate context и hints — единая сборка (M0): тот же вход, что у
+	// eval/probe. Legacy-файл, fact-level retrieval и подсказки скрыты за
+	// одним контрактом BuildContextFn; D14/D15 (fail vs degraded) решаются там.
 	logf := func(msg string) { sessLog.LogDebug(msg) }
-	candidateContext, candidateContextFn, ccErr := resolveCandidateContext(cfg, logf)
+	contextFn, ccErr := candidatecontext.BuildContextFn(candidatecontext.ContextFnConfig{
+		Dir:                 cfg.CandidateContext.Dir,
+		TopK:                cfg.CandidateContext.TopK,
+		MinScore:            cfg.CandidateContext.MinScore,
+		MaxTokens:           cfg.CandidateContext.MaxTokens,
+		MaxProfileTokens:    cfg.CandidateContext.MaxProfileTokens,
+		LegacyFile:          cfg.CandidateContextFile,
+		AllowLegacyFallback: cfg.CandidateContext.AllowLegacyFallback,
+		HintsDir:            cfg.Hints.Dir,
+		HintsTopK:           cfg.Hints.TopK,
+		HintsMinScore:       cfg.Hints.MinScore,
+		OnLoadError:         cfg.CandidateContext.OnLoadError,
+		Logf:                logf,
+	})
 	if ccErr != nil {
 		newErr = fmt.Errorf("pipeline: candidate context: %w", ccErr)
 		return nil, newErr
 	}
-
-	// Hints — подсказки-ответы на предсказуемые вопросы интервьюера.
-	// Композируются поверх candidateContextFn: готовый ответ добавляется
-	// после фактов. В legacy-режиме (fn == nil) подсказки недоступны —
-	// они требуют retrieval по вопросу.
-	hintsFn, hintsErr := resolveHints(cfg, logf)
-	if hintsErr != nil {
-		newErr = fmt.Errorf("pipeline: hints: %w", hintsErr)
-		return nil, newErr
-	}
-	if hintsFn != nil {
-		if candidateContextFn == nil {
-			logf("WARN: hints задан, но candidate context работает в legacy-режиме — hints отключены")
-		} else {
-			baseFn := candidateContextFn
-			candidateContextFn = func(question string) string {
-				return appendHint(baseFn(question), hintsFn(question))
-			}
-		}
+	// Диспетчер получает только prompt-ready строку: целевой стек сессии
+	// (cfg.Interview.TargetStack) попадает в retrieval начиная с M7b.
+	session := candidatecontext.SessionContext{TargetStack: cfg.Interview.TargetStack}
+	candidateContextFn := func(question string) string {
+		return contextFn(question, session).Text
 	}
 
 	// Overlay.
@@ -263,7 +264,6 @@ func New(cfg Config) (*Pipeline, error) {
 			dispatcher.Config{
 				AnswerTimeout:      cfg.AnswerTimeout,
 				AutoAnswer:         cfg.AutoAnswer,
-				CandidateContext:   candidateContext,
 				CandidateContextFn: candidateContextFn,
 				RecentTurns:        cfg.RecentTurns,
 				MaxContextTokens:   cfg.MaxContextTokens,
@@ -275,117 +275,6 @@ func New(cfg Config) (*Pipeline, error) {
 
 	ok = true
 	return p, nil
-}
-
-// resolveCandidateContext определяет источник candidate context для диспетчера.
-// Приоритет: CandidateContext.Dir (fact-level retrieval) над CandidateContextFile
-// (legacy — файл целиком). Возвращает:
-//   - legacyContext — строка legacy файла (используется, когда fn == nil);
-//   - fn — функция точечного retrieval по вопросу (nil в legacy-режиме);
-//   - err — фатальная ошибка (только когда Dir задан, retrieval упал, а legacy
-//     файл не задан). При ошибке retrieval с заданным legacy файлом — молчаливый
-//     fallback на файл (fn == nil, err == nil).
-func resolveCandidateContext(cfg Config, logf func(string)) (legacyContext string, fn func(string) string, err error) {
-	// Legacy путь: Dir не задан — читаем файл целиком (если задан).
-	if cfg.CandidateContext.Dir == "" {
-		if cfg.CandidateContextFile == "" {
-			return "", nil, nil
-		}
-		data, readErr := os.ReadFile(cfg.CandidateContextFile)
-		if readErr != nil {
-			logf(fmt.Sprintf("WARN: не удалось прочитать candidate context %s: %v", cfg.CandidateContextFile, readErr))
-			return "", nil, nil
-		}
-		return string(data), nil, nil
-	}
-
-	// Fact-level retrieval.
-	manifest, index, loadErr := candidatecontext.LoadCandidateContext(cfg.CandidateContext.Dir)
-	if loadErr != nil {
-		return fallbackToLegacyFile(cfg, logf, fmt.Errorf("pipeline: загрузка candidate context: %w", loadErr))
-	}
-
-	retriever, retErr := candidatecontext.NewRetriever(manifest, index, cfg.CandidateContext.Dir, cfg.CandidateContext.TopK, cfg.CandidateContext.MinScore)
-	if retErr != nil {
-		return fallbackToLegacyFile(cfg, logf, fmt.Errorf("pipeline: инициализация retriever candidate context: %w", retErr))
-	}
-
-	budgeter := candidatecontext.NewBudgeter(cfg.CandidateContext.MaxTokens, cfg.CandidateContext.MaxProfileTokens)
-	profile := manifest.Profile
-	fn = func(question string) string {
-		return budgeter.Budget(profile, retriever.Retrieve(question)).Render()
-	}
-	return "", fn, nil
-}
-
-// fallbackToLegacyFile обрабатывает ошибку fact-level retrieval: если legacy
-// файл задан — читает его целиком (fn == nil, err == nil); иначе возвращает
-// причину ошибки (startup завершится с ошибкой).
-func fallbackToLegacyFile(cfg Config, logf func(string), cause error) (string, func(string) string, error) {
-	if cfg.CandidateContextFile == "" {
-		return "", nil, cause
-	}
-	data, readErr := os.ReadFile(cfg.CandidateContextFile)
-	if readErr != nil {
-		logf(fmt.Sprintf("WARN: не удалось прочитать legacy candidate context %s: %v", cfg.CandidateContextFile, readErr))
-		return "", nil, nil
-	}
-	logf(fmt.Sprintf("WARN: fact-level candidate context недоступен (%v), fallback на legacy файл", cause))
-	return string(data), nil, nil
-}
-
-// resolveHints создаёт функцию подсказок-ответов на предсказуемые вопросы
-// интервьюера (каталог в формате candidate_context).
-//
-// В отличие от resolveCandidateContext, здесь нет legacy-режима и ошибки НЕ
-// фатальны: каталог hints — вспомогательный, его отсутствие или порча не
-// должны ронять pipeline. Возвращает:
-//   - fn — функция получения готового ответа по вопросу (nil, если hints
-//     выключены или недоступны);
-//   - err — всегда nil (оставлен для единообразия с resolveCandidateContext);
-//     проблемы логируются через logf в формате "WARN: ...".
-func resolveHints(cfg Config, logf func(string)) (func(string) string, error) {
-	// Hints выключены: каталог не задан.
-	if cfg.Hints.Dir == "" {
-		return nil, nil
-	}
-
-	manifest, index, loadErr := candidatecontext.LoadCandidateContext(cfg.Hints.Dir)
-	if loadErr != nil {
-		logf(fmt.Sprintf("WARN: не удалось загрузить hints %s: %v", cfg.Hints.Dir, loadErr))
-		return nil, nil
-	}
-
-	retriever, retErr := candidatecontext.NewRetriever(manifest, index, cfg.Hints.Dir, cfg.Hints.TopK, cfg.Hints.MinScore)
-	if retErr != nil {
-		logf(fmt.Sprintf("WARN: не удалось инициализировать retriever hints %s: %v", cfg.Hints.Dir, retErr))
-		return nil, nil
-	}
-
-	// Профиль hints-manifest в подсказке не используется — только тела фактов.
-	fn := func(question string) string {
-		results := retriever.Retrieve(question)
-		bodies := make([]string, 0, len(results))
-		for _, r := range results {
-			bodies = append(bodies, r.Content)
-		}
-		return strings.Join(bodies, "\n")
-	}
-	return fn, nil
-}
-
-// appendHint добавляет готовый ответ-подсказку к базовому ответу. Пустая
-// подсказка — base возвращается без изменений; иначе подсказка добавляется
-// отдельным блоком с явным указанием «использовать как есть».
-func appendHint(base, hint string) string {
-	if hint == "" {
-		return base
-	}
-	const header = "Suggested answer (use as is):\n"
-	if base == "" {
-		return header + hint
-	}
-	return base + "\n\n" + header + hint
 }
 
 // --------------------------------------------------------------------------

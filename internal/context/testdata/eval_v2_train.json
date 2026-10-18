@@ -1,0 +1,1071 @@
+{
+  "dataset_version": 1,
+  "notes": "Датасет v2 — TRAIN (M2 плана precision v3.1). Формулировки: дословно из logs/session_*.csv (канал спикера 's', EndOfTurn; склейка фрагментов одного вопроса через ' /// ' в порядке произнесения; текст не правился — сохранены ведущие пробелы, обрывы, ASR-шум) + вопросы интервью из публичных списков (source: public_list:<url>) + synthetic:<причина> для логики, которую живой транскрипт не покрывает (union, go-ambiguity, temporal, no_relevant, service-collision). Вопросы НЕ писались под факты: relevant/must_not размечались по тексту фактов обоих каталогов до прогона retriever'а. RU-кейсов в наборе нет (D1); EN-извлечения из смешанных логов взяты дословно как EN-реплики. Подробности по каждому кейсу — в notes (префикс count=N — число различных размеченных FactID).",
+  "queries": [
+    {
+      "id": "q001",
+      "question": "How did you handle transactions and guarantee data consistency across services?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-36",
+        "alarm-qa-37"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/java-interview-questions/",
+      "split": "train",
+      "notes": "count=4. M2.2(a) транзакционный Java-вопрос: relevant — dual-write и Outbox-алгоритм (hints); must_not — оба PHP-факта (PHP-сервисы, extracted bottlenecks) — 'services/atomic' рядом с php."
+    },
+    {
+      "id": "q002",
+      "question": "How do you migrate a monolith to microservices without downtime?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-arch-transformation",
+        "alarm-qa-03",
+        "skills-architecture"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-data",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty",
+        "gate"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://javarevisited.blogspot.com/2018/04/top-20-sql-linux-command-interview-questions.html",
+      "split": "train",
+      "notes": "count=5. Лексика миграции монослита тянет exp-software-engineer-data ('migration', zero downtime) и PHP-веб-факт ('performance'); relevant — трансформация (cc), выбор микросервисов (hints), архитектура."
+    },
+    {
+      "id": "q003",
+      "question": "How would you optimize performance of a slow SQL query in PostgreSQL?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-software-engineer-data",
+        "skills-data",
+        "sql-developer-experience"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-arch-transformation"
+      ],
+      "category": "negative",
+      "tags": [
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.geeksforgeeks.org/postgresql-interview-questions/",
+      "split": "train",
+      "notes": "count=4. Аудит бытовых слов: 'performance' в keywords skills-data/exp-software-engineer-data (поэтому relevant), а 'current/present' в aliases exp-fintech-arch-transformation не должны поднимать его на общем 'performance'."
+    },
+    {
+      "id": "q004",
+      "question": "What is the difference between savepoint and rollback to savepoint in a transaction?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-java-head",
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-senior-project-architect",
+        "alarm-qa-41"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:negative-borrowed-stack",
+      "split": "train",
+      "notes": "count=4. Сессия [java], вопрос стандартный JDBC; relevant намеренно включает PHP/Go-факт ('transaction' в content — единственное место), must_not — SQL-миграция healthcare и stored-procedures ETL ('transactional integrity/rollback')."
+    },
+    {
+      "id": "q005",
+      "question": "Why did you choose Yii2 over other frameworks?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-software-engineer-web"
+      ],
+      "must_not_fact_ids": [
+        "exp-lead-system-architect",
+        "exp-fintech-arch-transformation"
+      ],
+      "category": "negative",
+      "tags": [
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:negative-borrowed-stack",
+      "split": "train",
+      "notes": "count=3. PHP-вопрос из чужого плана в java-сессии: relevant — единственный Yii2-факт; must_not — Spring Boot-микросервисы и текущий fintech-факт: framework-лексика не должна тянуть чужой стек пачкой."
+    },
+    {
+      "id": "q006",
+      "question": "What is your experience with Go?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages",
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-java-head"
+      ],
+      "category": "explicit",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-14_20-04-32",
+      "split": "train",
+      "notes": "count=3. Дословно (manual-input, без ведущего пробела — как в логе). Явный Go-вопрос в Java-сессии: relevant — языки и Go-микросервисы; must_not — чисто Java-факт. Обратная проверка к (a)."
+    },
+    {
+      "id": "q007",
+      "question": "What is your experience with java?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-java-head",
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "gate",
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-14_20-04-32",
+      "split": "train",
+      "notes": "count=4. Дословно (нижний регистр 'java' — как в логе). Гейт: короткий Java-вопрос; must_not — PHP-факты как риск утечки."
+    },
+    {
+      "id": "q008",
+      "question": "How do you handle database versioning and schema migrations in production?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-software-engineer-data",
+        "exp-lead-system-architect"
+      ],
+      "must_not_fact_ids": [
+        "alarm-scheduler",
+        "alarm-qa-04"
+      ],
+      "category": "negative",
+      "tags": [
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.geeksforgeeks.org/postgresql-interview-questions/",
+      "split": "train",
+      "notes": "count=4. Liquibase живёт в двух фактах; must_not — 'service'-совпадение: alarm-scheduler (schedule/configuration в PostgreSQL) и alarm-qa-04 (PostgreSQL metadata). Проверка DF-фильтра бытовых слов."
+    },
+    {
+      "id": "q009",
+      "question": "Explain the Java memory model and happens-before relationships.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages",
+        "exp-java-head"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web",
+        "alarm-qa-28"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:no-exact-fact-growth-axes",
+      "split": "train",
+      "notes": "count=4. Узкий JVM-вопрос, факта про память нет: relevant — ближайшие JVM/Java-факты (честная 'доборная' разметка); must_not — удалённый PHP-веб-факт ('latency/throughput' общие)."
+    },
+    {
+      "id": "q010",
+      "question": " Let's start. Can you tell me a bit about yourself? Sure.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview",
+        "sum-competencies"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-07_23-15-27",
+      "split": "train",
+      "notes": "count=4. Дословно, включая хвост ASR 'Sure.' (похоже, чужой голос). Самый широкий вопрос сессии: relevant — headline/компетенции; must_not — PHP-факты, которые на открытом вопросе подтягиваются почти всегда."
+    },
+    {
+      "id": "q011",
+      "question": " You modernized this program and ///  and made it work, right?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-java-head"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web",
+        "alarm-qa-21"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "count=3. Склейка фрагментов 18:22:58 и 18:23:05 в порядке произнесения, дословно ('and' повторяется — так в логе). 'modernized this program' — лексика PHP/Golang-факта; ожидаем Java-профиль без PHP-утечки."
+    },
+    {
+      "id": "q012",
+      "question": " Can you please tell me again what technologies did you use in that project?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview",
+        "skills-languages"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "gate",
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "count=4. Живой запрос списка технологий проекта в java-сессии: relevant — сводный профиль; must_not — PHP как 'технология этого проекта'."
+    },
+    {
+      "id": "q013",
+      "question": " What technologies did you use to achieve this?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview",
+        "skills-languages",
+        "sum-competencies"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-10_18-41-50",
+      "split": "train",
+      "notes": "count=5. Дословно из сессии 2026-10-10: общий запрос технологий; must_not — PHP-факты, relevant — широкие skill-факты."
+    },
+    {
+      "id": "q014",
+      "question": "What is the hardest technical problem you have solved?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-architecture",
+        "alarm-reliability"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-32",
+        "alarm-qa-41"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=4. Без стека и без сессии: проверяет, что стек-множители не задавливают факты без stack. must_not — узкие числовые детали (TTL 24h, timeout 10s)."
+    },
+    {
+      "id": "q015",
+      "question": " Okay, can you please tell me about your achievements in architecture in IT?",
+      "session_target_stack": [],
+      "relevant_fact_ids": [
+        "alarm-qa-02",
+        "alarm-qa-03",
+        "skills-architecture"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-41",
+        "alarm-qa-32"
+      ],
+      "category": "neutral",
+      "tags": [
+        "wide-architecture"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "count=5. Тот же текст, что в eval_session_2026-10-16, но сессия без таргета — проверка независимости нейтрального архитектурного вопроса от сессии."
+    },
+    {
+      "id": "q016",
+      "question": "Tell me about a technical decision you later had to reverse.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-03",
+        "alarm-qa-39",
+        "alarm-qa-40"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-13",
+        "alarm-qa-30"
+      ],
+      "category": "neutral",
+      "tags": [
+        "wide-architecture"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=5. Reversal-вопрос: relevant — 'why X instead of Y' факты; must_not — частота поллинга и Redis-ключи ('decision/handle' общие)."
+    },
+    {
+      "id": "q017",
+      "question": "How do you approach estimating a large architectural initiative?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-competencies",
+        "skills-ai-devops"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-24",
+        "alarm-qa-15"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=4. Планирование/лидерство: relevant — компетенции и CI/CD; must_not — масштабирование пайплайна и лимит бинов (числовые 'scale' детали)."
+    },
+    {
+      "id": "q018",
+      "question": "Walk me through how you would review someone else's architecture proposal.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-architecture",
+        "exp-fintech-arch-transformation",
+        "sql-philosophy"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web",
+        "exp-software-engineer-data"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact",
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=5. Review-вопрос: relevant — enterprise architecture audits и SQL-философия; must_not — старые SQL/PHP-факты с 'refactoring/optimization'."
+    },
+    {
+      "id": "q019",
+      "question": "Why do you prefer a SQL-centric approach over a heavy ORM?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sql-philosophy",
+        "sql-dto-mapping",
+        "sql-developer-experience",
+        "exp-lead-system-architect"
+      ],
+      "must_not_fact_ids": [
+        "exp-java-head"
+      ],
+      "category": "neutral",
+      "tags": [
+        "wide-architecture"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://danielliusaphiella.github.io/springboot-interview-questions/",
+      "split": "train",
+      "notes": "count=5. ORM — не стек, вопрос про позицию: relevant — весь SQL-раздел; must_not — exp-java-head (MyBatis как инструмент, не как позиция)."
+    },
+    {
+      "id": "q020",
+      "question": "What would you do if a key stakeholder disagreed with your technical direction?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-competencies",
+        "skills-architecture"
+      ],
+      "must_not_fact_ids": [
+        "exp-freelance",
+        "pub-publications"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=4. Behavioural без технической лексики: в базе нет факта про конфликт — relevant только leadership; must_not — карьерный transition и статьи."
+    },
+    {
+      "id": "q021",
+      "question": "How do you decouple business logic from infrastructure failures?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-02",
+        "alarm-scheduler",
+        "skills-architecture"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-19",
+        "alarm-qa-47"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact",
+        "service-collision"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=5. Инфраструктура ≠ стек. alarm-scheduler (cc) валиден: в тексте факта есть 'isolates business logic completely'; must_not — zombie sockets и FTP drop ('connection/socket')."
+    },
+    {
+      "id": "q022",
+      "question": "Describe a system you designed where data consistency was the primary requirement.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-reliability",
+        "alarm-qa-36",
+        "sum-competencies"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-49",
+        "alarm-qa-21",
+        "alarm-qa-42"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=6. Consistency как требование: relevant — outbox/dual-write; must_not — 99% обрыв загрузки и parse-error ('transaction/retry')."
+    },
+    {
+      "id": "q023",
+      "question": "How do you make a legacy integration reliable when the partner's side is unstable?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-02",
+        "alarm-qa-19",
+        "alarm-qa-46"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-32",
+        "alarm-qa-30",
+        "alarm-qa-34"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=6. Надёжность интеграции: relevant — partner instability, zombie sockets (принятое ограничение), метрика стабильности; must_not — внутренние Redis-ключи и TTL."
+    },
+    {
+      "id": "q024",
+      "question": "What is your experience with Kotlin coroutines and structured concurrency?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages",
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web"
+      ],
+      "category": "explicit",
+      "tags": [
+        "explicit-stack"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/kotlin-interview-questions/",
+      "split": "train",
+      "notes": "count=3. Явное упоминание второго JVM-стека: relevant — языки (kotlin) и headline (JVM); must_not — PHP-веб-факт ('concurrency/latency' общие между стеками)."
+    },
+    {
+      "id": "q025",
+      "question": "What is your experience with java?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-java-head",
+        "sum-overview",
+        "skills-languages"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "explicit",
+      "tags": [
+        "gate"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-14_20-04-32",
+      "split": "train",
+      "notes": "count=4. Дословно (нижний регистр 'java'). Целевой explicit-кейс: Java-опыт должен найти Java-факты; must_not — PHP/Go-факт."
+    },
+    {
+      "id": "q026",
+      "question": "How does Spring handle bean scopes and proxies?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-lead-system-architect",
+        "alarm-qa-14"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-data"
+      ],
+      "category": "explicit",
+      "tags": [
+        "explicit-stack"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://danielliusaphiella.github.io/springboot-interview-questions/",
+      "split": "train",
+      "notes": "count=3. Spring-вопрос: relevant — Spring Boot (cc) и Prototype Beans (hints, 'in Spring'); must_not — Oracle-migration факт ('proxy/scope' нет, но 'bean' в content у SQL-фактов бывает — тест)."
+    },
+    {
+      "id": "q027",
+      "question": " a little case about pharmacies. Can you please tell me about it?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-01",
+        "alarm-qa-02",
+        "alarm-qa-03",
+        "alarm-qa-05"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-44"
+      ],
+      "category": "mixed",
+      "tags": [
+        "pharma-case"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "train",
+      "notes": "count=5. Дословно, фрагмент с обрывом ('a little case about pharmacies.'). Стекового слова нет, но предмет явный — кейс аптек; relevant — business goal/проблема/разделение/протоколы; must_not — false-alarm monitoring. Категория 'mixed': предметная отсылка (pharma) при живом java-таргете и PHP-риске рядом; тег pharma-case."
+    },
+    {
+      "id": "q028",
+      "question": "Why does Java use Virtual Threads for high-throughput services?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-java-head",
+        "skills-languages"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "explicit",
+      "tags": [
+        "explicit-stack"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/java-25-interview-questions/",
+      "split": "train",
+      "notes": "count=3. Loom-вопрос: relevant — exp-java-head (Virtual Threads, 'high-throughput') и языки; must_not — Go-микросервисы с 'high-concurrency/low-latency'."
+    },
+    {
+      "id": "q029",
+      "question": "What do you know about Kotlin DSLs in Spring configuration?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages",
+        "exp-lead-system-architect"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web"
+      ],
+      "category": "explicit",
+      "tags": [
+        "explicit-stack"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://danielliusaphiella.github.io/springboot-interview-questions/",
+      "split": "train",
+      "notes": "count=3. Двойной стек в одном вопросе (Kotlin+Spring): relevant — языки и Spring-факт; must_not — PHP-веб. Проверка, что оба явных стека не склеивают чужие факты."
+    },
+    {
+      "id": "q030",
+      "question": "And how did you do it in PHP, with the billing service?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web",
+        "alarm-qa-07"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic",
+        "service-collision"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-explicit-case",
+      "split": "train",
+      "expect_effective_target": [
+        "java",
+        "php"
+      ],
+      "notes": "count=3. M2.2(b) 'а на PHP?' в java-сессии (два стека рядом): relevant — PHP/Go-факт; expect_effective_target=[java,php]. must_not — 'service'-коллизия: alarm-qa-07 (Alarm service, keyword service) и PHP-веб-факт Yii2 без контекста billing."
+    },
+    {
+      "id": "q031",
+      "question": "Compare how you handled queues in PHP and in Java.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-software-engineer-web",
+        "exp-java-head",
+        "skills-streaming",
+        "alarm-qa-35"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-07"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-compare",
+      "split": "train",
+      "expect_effective_target": [
+        "java",
+        "php"
+      ],
+      "notes": "count=5. M2.2(c) 'сравните PHP и Java': PHP-очередей в базе нет (Yii2/MySQL — ближайший честный PHP-факт), Java — Kafka-экосистема (cc+hints) и обоснование Redis вместо PostgreSQL как пример выбора хранилища под нагрузку. must_not — alarm-qa-07: 'tick events → Kafka', но вопрос про очереди как тему, не про доставку тиков."
+    },
+    {
+      "id": "q032",
+      "question": "Why did you migrate from Laravel to Spring?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-lead-system-architect",
+        "exp-freelance"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-arch-transformation"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-migration",
+      "split": "train",
+      "expect_effective_target": [
+        "java",
+        "php"
+      ],
+      "notes": "count=3. M2.2(d) Laravel→Spring при session=[java]: relevant — Spring-факт (cc) и real transition (Delphi→Java/PHP); must_not — exp-fintech-arch-transformation: его 'migration' про monolith/microservices, не про фреймворки."
+    },
+    {
+      "id": "q033",
+      "question": "And what about that part in PHP?",
+      "session_target_stack": [],
+      "relevant_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-07"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic",
+        "service-collision"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-empty-session",
+      "split": "train",
+      "expect_effective_target": [
+        "php"
+      ],
+      "notes": "count=2. M2.2(b) 'а на PHP?' при пустой сессии: без таргета эффективный стек должен стать [php]; relevant — PHP/Go-факт; must_not — 'service'-коллизия alarm-qa-07."
+    },
+    {
+      "id": "q034",
+      "question": "Why did you move the new services from Laravel to Spring Boot?",
+      "session_target_stack": [],
+      "relevant_fact_ids": [
+        "exp-lead-system-architect"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-arch-transformation"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-migration-empty-session",
+      "split": "train",
+      "expect_effective_target": [
+        "php",
+        "java"
+      ],
+      "notes": "count=2. M2.2(d) при пустой сессии: effective target должен стать [php,java] — union упомянутых. must_not — fintech-факт с 'migration'."
+    },
+    {
+      "id": "q035",
+      "question": "How did you go about designing the ingestion pipeline for the pharma orders?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-platform-overview"
+      ],
+      "must_not_fact_ids": [
+        "skills-languages",
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "neutral",
+      "tags": [
+        "go-ambiguity"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:go-ambiguity",
+      "split": "train",
+      "expect_effective_target": [
+        "java"
+      ],
+      "notes": "count=3. M2.2(e) 'go about' в java-сессии: 'go' — глагол, не язык; effective target должен остаться [java]. must_not — skills-languages (keyword golang) и PHP/Golang-факт (content 'go')."
+    },
+    {
+      "id": "q036",
+      "question": "How did you go about reducing the tick drop rate?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-45"
+      ],
+      "must_not_fact_ids": [
+        "alarm-worker-management",
+        "alarm-qa-16",
+        "alarm-qa-17"
+      ],
+      "category": "neutral",
+      "tags": [
+        "go-ambiguity"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:go-ambiguity",
+      "split": "train",
+      "expect_effective_target": [
+        "java"
+      ],
+      "notes": "count=4. M2.2(e), вторая формулировка 'go about': relevant — Tick Drop Rate (hints), под которую в cc отвечает пара Drop-on-Busy/Reaper (alarm-worker-management, must_not как намеренное пересечение тем — если она нужна, это сигнал M2.6: перенести Drop-on-Busy в hints-факт 'tick drop'). 'go' остаётся глаголом."
+    },
+    {
+      "id": "q037",
+      "question": "How is the alarm schedule updated when a new host is added?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-09",
+        "alarm-qa-10",
+        "alarm-scheduler"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-11",
+        "alarm-qa-07"
+      ],
+      "category": "mixed",
+      "tags": [
+        "theme-overlap",
+        "service-collision"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:theme-overlap",
+      "split": "train",
+      "expect_effective_target": [
+        "java"
+      ],
+      "notes": "count=5. M2.2(k): вопрос ровно на стыке cc (alarm-scheduler — schedule в PostgreSQL) и hints (alarm-qa-09/10 — dynamic config, next tick). Ожидание: оба каталога возвращаются вместе; базовый alarm-qa-07 отсекается как другой вопрос ('How does the Alarm service work')."
+    },
+    {
+      "id": "q038",
+      "question": "Do you use Gradle or Maven in this team?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [],
+      "must_not_fact_ids": [
+        "exp-senior-project-architect",
+        "alarm-worker-management"
+      ],
+      "category": "negative",
+      "tags": [
+        "no_relevant"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:no-relevant-growth-axes",
+      "split": "train",
+      "expect_effective_target": [],
+      "notes": "count=2. M2.2(g): инструменты сборки в базе не упоминаются — ожидание пустой выдачи. must_not — факты с 'multi-threaded pipeline / worker management', лексически близкие к build-tools."
+    },
+    {
+      "id": "q039",
+      "question": "What are you working on right now?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-arch-transformation",
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-java-head"
+      ],
+      "category": "neutral",
+      "tags": [
+        "tuned"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:temporal",
+      "split": "train",
+      "expect_effective_target": [
+        "java"
+      ],
+      "notes": "count=3. M2.2(h): temporal-вопрос → два current-факта (period 2026-present, weight current), Java-факт 2022-2025 должен уйти. tags tuned — кейс про тюнинг буста текущего периода."
+    },
+    {
+      "id": "q040",
+      "question": "What are you doing nowadays?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-arch-transformation",
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-web",
+        "exp-senior-project-architect"
+      ],
+      "category": "neutral",
+      "tags": [
+        "temporal"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:temporal",
+      "split": "train",
+      "notes": "count=4. M2.2(h): второй temporal-вопрос без 'current' в тексте; must_not — legacy-факты (2014-2016 и раньше)."
+    },
+    {
+      "id": "q041",
+      "question": "Tell me about your latest project.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-arch-transformation",
+        "exp-fintech-php-go-modernization",
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "exp-senior-systems",
+        "pub-opensource"
+      ],
+      "category": "neutral",
+      "tags": [
+        "temporal",
+        "wide-architecture"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:temporal",
+      "split": "train",
+      "notes": "count=5. M2.2(h): 'latest' без прямого стека; relevant — текущие факты и headline; must_not — самый старый опыт (2001-2012)."
+    },
+    {
+      "id": "q042",
+      "question": "How do you present your design to stakeholders?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-competencies",
+        "skills-architecture"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-arch-transformation",
+        "alarm-qa-48"
+      ],
+      "category": "negative",
+      "tags": [
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=4. M2.2(i): 'present' — alias exp-fintech-arch-transformation, но вопрос о коммуникации, не о текущем месте: факт НЕ должен выдаваться. Если alias 'present' даёт ему топ на любом вопросе — это и есть измеряемая утечка."
+    },
+    {
+      "id": "q043",
+      "question": "Can you describe the current architecture of the platform?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-platform-overview",
+        "alarm-scheduler",
+        "skills-architecture"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-arch-transformation"
+      ],
+      "category": "negative",
+      "tags": [
+        "alias-penalty",
+        "theme-overlap"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "train",
+      "notes": "count=4. M2.2(i): 'current' — alias того же факта; must_not — он же. relevant включает alarm-scheduler (cc): 'architecture' здесь про устройство сервисов, не про период работы."
+    }
+  ]
+}

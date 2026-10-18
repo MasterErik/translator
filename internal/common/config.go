@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -53,6 +54,9 @@ type Config struct {
 	// Candidate context — fact-level retrieval (каталог с manifest.json + sections/).
 	CandidateContext CandidateContextConfig `yaml:"candidate_context"`
 
+	// Interview — параметры интервью (целевой стек для штрафов retrieval).
+	Interview InterviewConfig `yaml:"interview"`
+
 	// Hints — подсказки-ответы на предсказуемые вопросы интервьюера
 	// (каталог в формате candidate_context).
 	Hints HintsConfig `yaml:"hints"`
@@ -79,6 +83,65 @@ type CandidateContextConfig struct {
 	MaxProfileTokens int     `yaml:"max_profile_tokens"` // бюджет токенов на профиль
 	MinScore         float64 `yaml:"min_score"`          // минимальный score отобранного факта
 	TopK             int     `yaml:"top_k"`              // максимум отобранных фактов
+
+	// RelativeThreshold — относительный порог отсечения фактов (доля score
+	// лучшего факта). Отрицательное значение (< 0) ВЫКЛЮЧАЕТ порог:
+	// applyDefaults срабатывает только на нулевое значение, поэтому «выключено»
+	// кодируется именно отрицательным числом, а не нулём (−1 → выключено).
+	RelativeThreshold float64 `yaml:"relative_threshold"`
+
+	// MaxMatrixTokens — бюджет токенов на Technical Matrix.
+	MaxMatrixTokens int `yaml:"max_matrix_tokens"`
+
+	// AllowLegacyFallback — разрешить загрузку из legacy-файла, если каталог
+	// candidate_context не загрузился (D14). По умолчанию false: без явного
+	// разрешения ошибка загрузки каталога валит старт.
+	AllowLegacyFallback bool `yaml:"allow_legacy_fallback"`
+
+	// OnLoadError — поведение при ошибке загрузки каталога: "fail" (по
+	// умолчанию — ошибка валит старт) | "degraded" (работать без контекста,
+	// D15 — только по явной настройке).
+	OnLoadError string `yaml:"on_load_error"`
+}
+
+// InterviewConfig — параметры интервью.
+type InterviewConfig struct {
+	// TargetStack — целевой стек интервью (например, java, spring).
+	// По умолчанию пусто — штрафов за «чужой» стек нет; перед интервью
+	// выставляется вручную (D2).
+	TargetStack []string `yaml:"target_stack"`
+}
+
+// interviewConfigRaw — промежуточная форма для ручного разбора: target_stack
+// допускает и YAML-список, и строку с разделителем-запятой.
+type interviewConfigRaw struct {
+	TargetStack yaml.Node `yaml:"target_stack"`
+}
+
+// UnmarshalYAML принимает target_stack как YAML-список (`[java, php]` /
+// блочный список) и как строку `"java, php"` — строковая форма нормализуется
+// тем же splitList, что и env-переменная INTERVIEW_TARGET_STACK.
+func (c *InterviewConfig) UnmarshalYAML(node *yaml.Node) error {
+	var raw interviewConfigRaw
+	if err := node.Decode(&raw); err != nil {
+		return fmt.Errorf("interview: %w", err)
+	}
+
+	switch raw.TargetStack.Kind {
+	case 0:
+		// Поле отсутствует.
+	case yaml.ScalarNode:
+		c.TargetStack = splitList(raw.TargetStack.Value)
+	case yaml.SequenceNode:
+		var list []string
+		if err := raw.TargetStack.Decode(&list); err != nil {
+			return fmt.Errorf("interview.target_stack: %w", err)
+		}
+		c.TargetStack = normalizeList(list)
+	default:
+		return fmt.Errorf("interview.target_stack: ожидается список или строка, получено %s", raw.TargetStack.Tag)
+	}
+	return nil
 }
 
 // HintsConfig — параметры подсказок-ответов (готовые ответы на предсказуемые
@@ -109,13 +172,22 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.CandidateContext.MaxProfileTokens, 150)
 	setDefault(&c.CandidateContext.MinScore, 0.0)
 	setDefault(&c.CandidateContext.TopK, 5)
+	setDefault(&c.CandidateContext.RelativeThreshold, 0.45)
+	setDefault(&c.CandidateContext.MaxMatrixTokens, 100)
+	setDefault(&c.CandidateContext.OnLoadError, "fail")
+	// AllowLegacyFallback намеренно не имеет default: false — нулевое значение
+	// и есть нужный дефолт (D14: fallback только по явному разрешению).
+	// Interview.TargetStack по умолчанию пуст — штрафов нет (D2).
 	setDefault(&c.Hints.MinScore, 0.0)
 	setDefault(&c.Hints.TopK, 1)
 }
 
 // loadFromEnv loads .env via godotenv, then reads environment variables
 // using yaml struct tags directly as env var names.
-func (c *Config) loadFromEnv() {
+// Возвращает ошибку только на невалидное значение в ключах, где молчаливое
+// игнорирование опасно (CANDIDATE_CONTEXT_ON_LOAD_ERROR) — остальные ключи
+// сохраняют прежний тихий стиль (невалидное число игнорируется).
+func (c *Config) loadFromEnv() error {
 	if err := godotenv.Load(); err != nil {
 		slog.Warn("godotenv: .env не загружен", "err", err)
 	}
@@ -168,6 +240,42 @@ func (c *Config) loadFromEnv() {
 			c.CandidateContext.TopK = n
 		}
 	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_RELATIVE_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			c.CandidateContext.RelativeThreshold = f
+		}
+	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.CandidateContext.MaxMatrixTokens = n
+		}
+	}
+	if v := os.Getenv("CANDIDATE_CONTEXT_ALLOW_LEGACY_FALLBACK"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.CandidateContext.AllowLegacyFallback = b
+		}
+	}
+	// CANDIDATE_CONTEXT_ON_LOAD_ERROR — единственный ключ секции, где неверное
+	// значение не игнорируется: опечатка молча вернула бы fail-режим (или,
+	// хуже, создала иллюзию настроенного degraded), поэтому ошибка громкая.
+	if v := os.Getenv("CANDIDATE_CONTEXT_ON_LOAD_ERROR"); v != "" {
+		switch mode := strings.ToLower(strings.TrimSpace(v)); mode {
+		case "fail", "degraded":
+			c.CandidateContext.OnLoadError = mode
+		default:
+			return fmt.Errorf(
+				"CANDIDATE_CONTEXT_ON_LOAD_ERROR: недопустимое значение %q (ожидается \"fail\" или \"degraded\")",
+				v,
+			)
+		}
+	}
+
+	// Секция interview — env-override вручную (reflection не поддерживает []string).
+	// INTERVIEW_TARGET_STACK=java,php → ["java", "php"]; пустые элементы
+	// отбрасываются, значения приводятся к нижнему регистру.
+	if v := os.Getenv("INTERVIEW_TARGET_STACK"); v != "" {
+		c.Interview.TargetStack = splitList(v)
+	}
 
 	// Вложенная секция hints — env-override вручную (аналогично candidate_context).
 	if v := os.Getenv("HINTS_DIR"); v != "" {
@@ -183,6 +291,32 @@ func (c *Config) loadFromEnv() {
 			c.Hints.TopK = n
 		}
 	}
+
+	return nil
+}
+
+// splitList разбивает строку через запятую на нормализованный список:
+// элементы обрезаются от пробелов и приводятся к нижнему регистру, пустые
+// отбрасываются. Строка из одних запятых/пробелов даёт пустой слайс (nil).
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		out = append(out, part)
+	}
+	return normalizeList(out)
+}
+
+// normalizeList нормализует элементы: trim, нижний регистр, отбрасывание
+// пустых. Возвращает nil, если после нормализации ничего не осталось.
+func normalizeList(items []string) []string {
+	var out []string
+	for _, item := range items {
+		item = strings.ToLower(strings.TrimSpace(item))
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // loadFromYAMLTags reads env vars using yaml struct tags as env var names.
@@ -263,7 +397,9 @@ func LoadConfigFromYAML(path string) (*Config, error) {
 	cfg.applyDefaults()
 
 	// Environment variables override YAML values.
-	cfg.loadFromEnv()
+	if err := cfg.loadFromEnv(); err != nil {
+		return nil, fmt.Errorf("loading config from env: %w", err)
+	}
 
 	return cfg, nil
 }

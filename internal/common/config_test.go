@@ -3,6 +3,7 @@ package common
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -450,6 +451,238 @@ candidate_context:
 			t.Errorf("TopK env override: got %d, want 10", cfg.CandidateContext.TopK)
 		}
 	})
+}
+
+// TestInterviewConfig — целевой стек интервью: YAML, env-override, разбор списка.
+func TestInterviewConfig(t *testing.T) {
+	// envVars — все env, способные повлиять на новое поле (для чистого окружения).
+	envVars := []string{"INTERVIEW_TARGET_STACK"}
+
+	t.Run("default empty", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		cfg := minimalYAML(t, "")
+		if len(cfg.Interview.TargetStack) != 0 {
+			t.Errorf("TargetStack default: got %v, want empty", cfg.Interview.TargetStack)
+		}
+	})
+
+	t.Run("yaml list", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		cfg := minimalYAML(t, `
+interview:
+  target_stack:
+    - java
+    - php
+`)
+		want := []string{"java", "php"}
+		if !equalStrings(cfg.Interview.TargetStack, want) {
+			t.Errorf("TargetStack from YAML list: got %v, want %v", cfg.Interview.TargetStack, want)
+		}
+	})
+
+	t.Run("yaml string", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		cfg := minimalYAML(t, `
+interview:
+  target_stack: "java,php"
+`)
+		want := []string{"java", "php"}
+		if !equalStrings(cfg.Interview.TargetStack, want) {
+			t.Errorf("TargetStack from YAML string: got %v, want %v", cfg.Interview.TargetStack, want)
+		}
+	})
+
+	// env-разбор — table-driven.
+	envCases := []struct {
+		name string
+		env  string
+		set  bool
+		want []string
+	}{
+		{name: "env spaces and case", env: " java , PHP ,, ", set: true, want: []string{"java", "php"}},
+		{name: "env single", env: "java", set: true, want: []string{"java"}},
+		{name: "env commas only", env: " , ,, ", set: true, want: nil},
+		{name: "env empty", env: "", set: true, want: nil},
+		{name: "env absent", set: false, want: nil},
+	}
+	for _, tc := range envCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cleanEnv(t, envVars...)
+			if tc.set {
+				t.Setenv("INTERVIEW_TARGET_STACK", tc.env)
+			}
+			cfg := minimalYAML(t, "")
+			if !equalStrings(cfg.Interview.TargetStack, tc.want) {
+				t.Errorf("TargetStack env %q: got %v, want %v", tc.env, cfg.Interview.TargetStack, tc.want)
+			}
+		})
+	}
+
+	t.Run("env overrides yaml", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		t.Setenv("INTERVIEW_TARGET_STACK", "golang")
+		cfg := minimalYAML(t, `
+interview:
+  target_stack: "java,php"
+`)
+		want := []string{"golang"}
+		if !equalStrings(cfg.Interview.TargetStack, want) {
+			t.Errorf("TargetStack env override: got %v, want %v", cfg.Interview.TargetStack, want)
+		}
+	})
+}
+
+// TestCandidateContextWave1Config — поля волны 1: relative_threshold,
+// max_matrix_tokens, allow_legacy_fallback, on_load_error.
+func TestCandidateContextWave1Config(t *testing.T) {
+	envVars := []string{
+		"CANDIDATE_CONTEXT_RELATIVE_THRESHOLD", "CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS",
+		"CANDIDATE_CONTEXT_ALLOW_LEGACY_FALLBACK", "CANDIDATE_CONTEXT_ON_LOAD_ERROR",
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		cfg := minimalYAML(t, "")
+		if cfg.CandidateContext.RelativeThreshold != 0.45 {
+			t.Errorf("RelativeThreshold default: got %v, want 0.45", cfg.CandidateContext.RelativeThreshold)
+		}
+		if cfg.CandidateContext.MaxMatrixTokens != 100 {
+			t.Errorf("MaxMatrixTokens default: got %d, want 100", cfg.CandidateContext.MaxMatrixTokens)
+		}
+		if cfg.CandidateContext.AllowLegacyFallback {
+			t.Errorf("AllowLegacyFallback default: got true, want false")
+		}
+		if cfg.CandidateContext.OnLoadError != "fail" {
+			t.Errorf("OnLoadError default: got %q, want %q", cfg.CandidateContext.OnLoadError, "fail")
+		}
+	})
+
+	t.Run("yaml negative threshold preserved", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		cfg := minimalYAML(t, `
+candidate_context:
+  relative_threshold: -1
+`)
+		if cfg.CandidateContext.RelativeThreshold != -1 {
+			t.Errorf("RelativeThreshold from YAML: got %v, want -1 (порог выключен)", cfg.CandidateContext.RelativeThreshold)
+		}
+	})
+
+	t.Run("yaml values", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		cfg := minimalYAML(t, `
+candidate_context:
+  relative_threshold: 0.3
+  max_matrix_tokens: 250
+  allow_legacy_fallback: true
+  on_load_error: degraded
+`)
+		if cfg.CandidateContext.RelativeThreshold != 0.3 {
+			t.Errorf("RelativeThreshold from YAML: got %v, want 0.3", cfg.CandidateContext.RelativeThreshold)
+		}
+		if cfg.CandidateContext.MaxMatrixTokens != 250 {
+			t.Errorf("MaxMatrixTokens from YAML: got %d, want 250", cfg.CandidateContext.MaxMatrixTokens)
+		}
+		if !cfg.CandidateContext.AllowLegacyFallback {
+			t.Errorf("AllowLegacyFallback from YAML: got false, want true")
+		}
+		if cfg.CandidateContext.OnLoadError != "degraded" {
+			t.Errorf("OnLoadError from YAML: got %q, want %q", cfg.CandidateContext.OnLoadError, "degraded")
+		}
+	})
+
+	t.Run("env override", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		t.Setenv("CANDIDATE_CONTEXT_RELATIVE_THRESHOLD", "-2")
+		t.Setenv("CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS", "50")
+		t.Setenv("CANDIDATE_CONTEXT_ALLOW_LEGACY_FALLBACK", "true")
+		cfg := minimalYAML(t, "")
+		if cfg.CandidateContext.RelativeThreshold != -2 {
+			t.Errorf("RelativeThreshold env override: got %v, want -2", cfg.CandidateContext.RelativeThreshold)
+		}
+		if cfg.CandidateContext.MaxMatrixTokens != 50 {
+			t.Errorf("MaxMatrixTokens env override: got %d, want 50", cfg.CandidateContext.MaxMatrixTokens)
+		}
+		if !cfg.CandidateContext.AllowLegacyFallback {
+			t.Errorf("AllowLegacyFallback env override: got false, want true")
+		}
+	})
+
+	t.Run("env invalid number ignored", func(t *testing.T) {
+		cleanEnv(t, envVars...)
+		t.Setenv("CANDIDATE_CONTEXT_RELATIVE_THRESHOLD", "abc")
+		t.Setenv("CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS", "xyz")
+		cfg := minimalYAML(t, "")
+		if cfg.CandidateContext.RelativeThreshold != 0.45 {
+			t.Errorf("RelativeThreshold with invalid env: got %v, want default 0.45", cfg.CandidateContext.RelativeThreshold)
+		}
+		if cfg.CandidateContext.MaxMatrixTokens != 100 {
+			t.Errorf("MaxMatrixTokens with invalid env: got %d, want default 100", cfg.CandidateContext.MaxMatrixTokens)
+		}
+	})
+
+	// on_load_error — table-driven по env.
+	onLoadErrCases := []struct {
+		name    string
+		env     string
+		want    string
+		wantErr bool
+	}{
+		{name: "degraded", env: "degraded", want: "degraded"},
+		{name: "fail", env: "fail", want: "fail"},
+		{name: "case and spaces", env: "  DEGRADED ", want: "degraded"},
+		{name: "invalid", env: "oops", wantErr: true},
+		{name: "empty-ish invalid", env: "silent", wantErr: true},
+	}
+	for _, tc := range onLoadErrCases {
+		t.Run("on_load_error/"+tc.name, func(t *testing.T) {
+			cleanEnv(t, envVars...)
+			t.Setenv("CANDIDATE_CONTEXT_ON_LOAD_ERROR", tc.env)
+			cfg, err := loadTempConfig(t, "")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("CANDIDATE_CONTEXT_ON_LOAD_ERROR=%q: expected error, got nil", tc.env)
+				}
+				for _, sub := range []string{"loading config from env", "CANDIDATE_CONTEXT_ON_LOAD_ERROR", tc.env} {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("error for %q should contain %q; got %q", tc.env, sub, err.Error())
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CANDIDATE_CONTEXT_ON_LOAD_ERROR=%q: unexpected error: %v", tc.env, err)
+			}
+			if cfg.CandidateContext.OnLoadError != tc.want {
+				t.Errorf("OnLoadError: got %q, want %q", cfg.CandidateContext.OnLoadError, tc.want)
+			}
+		})
+	}
+}
+
+// loadTempConfig создаёт временный config.yaml с переданным содержимым и
+// вызывает LoadConfigFromYAML, возвращая Config и ошибку без t.Fatal.
+func loadTempConfig(t *testing.T, content string) (*Config, error) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return LoadConfigFromYAML(path)
+}
+
+// equalStrings сравнивает два слайса строк (nil и пустой слайс эквивалентны).
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // cleanEnv удаляет переменные окружения из списка.

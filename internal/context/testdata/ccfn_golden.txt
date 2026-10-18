@@ -1,0 +1,178 @@
+## Q01: What is your experience with Apache Kafka?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+
+Kafka: partitioning, consumer groups, exactly-once semantics, schema registry.
+RabbitMQ: exchanges and dead-letter queues.
+
+Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
+state, Kafka for ingestion, Kubernetes for deployment.
+--
+## Q02: Tell me about your pricing engine work.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+--
+## Q03: What databases do you work with?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
+--
+## Q04: Do you have experience with PostgreSQL?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
+
+Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
+state, Kafka for ingestion, Kubernetes for deployment.
+--
+## Q05: Tell me about your experience with Java and the JVM.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
+state, Kafka for ingestion, Kubernetes for deployment.
+
+Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
+Boot without downtime; the PHP version handled 200 rps at peak.
+--
+## Q06: What is your experience with microservices architecture?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+--
+## Q07: Have you worked with Kubernetes and Docker?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
+state, Kafka for ingestion, Kubernetes for deployment.
+--
+## Q08: What programming languages do you know?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q09: Tell me about your work at the pricing company.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+--
+## Q10: Describe your experience with MS SQL Server.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+--
+## Q11: What is your experience with Go?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q12: Tell me about your role as Lead System Architect.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q13: Do you have experience with ClickHouse?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
+--
+## Q14: What is your educational background?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q15: Tell me about your batch-to-streaming ETL redesign.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q16: Have you worked with Oracle?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
+--
+## Q17: What is your approach to SQL versus ORM?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
+--
+## Q18: Describe your experience with PHP.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
+Boot without downtime; the PHP version handled 200 rps at peak.
+--
+## Q19: Tell me about the healthcare platform migration.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
+state, Kafka for ingestion, Kubernetes for deployment.
+
+Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
+Boot without downtime; the PHP version handled 200 rps at peak.
+--
+## Q20: Do you have experience with RabbitMQ?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Kafka: partitioning, consumer groups, exactly-once semantics, schema registry.
+RabbitMQ: exchanges and dead-letter queues.
+--
+## Q21: What publications do you have?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q22: Tell me about your work with Virtual Threads.
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+--
+## Q23: Do you have open source projects?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Suggested answer (use as is):
+I am open to relocation to any EU country.
+--
+## Q24: How did you go about designing the ingestion pipeline?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
+state, Kafka for ingestion, Kubernetes for deployment.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+--
+## Q25: And how did you do it in PHP, with the billing service?
+Candidate profile:
+Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
+Boot without downtime; the PHP version handled 200 rps at peak.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
+--

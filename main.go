@@ -75,6 +75,7 @@ func main() {
 		CandidateContextFile: cfg.CandidateContextFile,
 		CandidateContext:     cfg.CandidateContext,
 		Hints:                cfg.Hints,
+		Interview:            cfg.Interview,
 		RecentTurns:          cfg.Conversation.RecentTurns,
 		MaxContextTokens:     cfg.Conversation.MaxContextTokens,
 		AutoAnswer:           cfg.Conversation.AutoAnswer,

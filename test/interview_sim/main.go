@@ -1,8 +1,10 @@
 // Command interview_sim имитирует интервью без транскрибатора: вопросы
 // интервьюера подаются напрямую в LLM, промпт собирается так же, как в
-// pipeline.New (факты candidate_context по бюджету + hints-подсказка +
-// Simple English). Печатает вопрос, сработавшую подсказку (если есть)
-// и полный ответ модели в формате "EN: ... | RU: ...".
+// pipeline.New (Simple English). Блок контекста приходит из единого контракта
+// candidatecontext.BuildContextFn — тот же вход, что у pipeline и eval
+// (факты по бюджету + hints-подсказка), поэтому расхождение «sim ≠ прод»
+// исключено на уровне источника строки. Печатает вопрос, сработавшую
+// подсказку (если есть) и полный ответ модели в формате "EN: ... | RU: ...".
 //
 // Использование:
 //
@@ -101,42 +103,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Fact-level candidate context (как resolveCandidateContext в pipeline).
-	manifest, index, err := candidatecontext.LoadCandidateContext(cfg.CandidateContext.Dir)
+	// Единая сборка контекста (M0): тот же вход, что у pipeline — retrieval →
+	// budget → render → hints. Своих копий retrieval/budget/hints здесь нет.
+	var onLoadError string
+	if cfg.CandidateContext.OnLoadError != "" {
+		onLoadError = cfg.CandidateContext.OnLoadError
+	}
+	contextFn, err := candidatecontext.BuildContextFn(candidatecontext.ContextFnConfig{
+		Dir:                 cfg.CandidateContext.Dir,
+		TopK:                cfg.CandidateContext.TopK,
+		MinScore:            cfg.CandidateContext.MinScore,
+		MaxTokens:           cfg.CandidateContext.MaxTokens,
+		MaxProfileTokens:    cfg.CandidateContext.MaxProfileTokens,
+		LegacyFile:          cfg.CandidateContextFile,
+		AllowLegacyFallback: cfg.CandidateContext.AllowLegacyFallback,
+		HintsDir:            cfg.Hints.Dir,
+		HintsTopK:           cfg.Hints.TopK,
+		HintsMinScore:       cfg.Hints.MinScore,
+		OnLoadError:         onLoadError,
+		Logf: func(msg string) {
+			fmt.Fprintf(os.Stderr, "%s\n", msg)
+		},
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: candidate context: %v\n", err)
 		os.Exit(1)
-	}
-	retriever, err := candidatecontext.NewRetriever(manifest, index, cfg.CandidateContext.Dir, cfg.CandidateContext.TopK, cfg.CandidateContext.MinScore)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: candidate context retriever: %v\n", err)
-		os.Exit(1)
-	}
-	budgeter := candidatecontext.NewBudgeter(cfg.CandidateContext.MaxTokens, cfg.CandidateContext.MaxProfileTokens)
-
-	// Hints (как resolveHints в pipeline; ошибки не фатальны).
-	var hintsFn func(string) string
-	if cfg.Hints.Dir != "" {
-		hMan, hIdx, hErr := candidatecontext.LoadCandidateContext(cfg.Hints.Dir)
-		if hErr != nil {
-			fmt.Fprintf(os.Stderr, "WARN: hints: %v\n", hErr)
-		} else {
-			hR, rErr := candidatecontext.NewRetriever(hMan, hIdx, cfg.Hints.Dir, cfg.Hints.TopK, cfg.Hints.MinScore)
-			if rErr != nil {
-				fmt.Fprintf(os.Stderr, "WARN: hints retriever: %v\n", rErr)
-			} else {
-				hintsFn = func(q string) string {
-					var sb strings.Builder
-					for i, res := range hR.Retrieve(q) {
-						if i > 0 {
-							sb.WriteString("\n")
-						}
-						sb.WriteString(res.Content)
-					}
-					return sb.String()
-				}
-			}
-		}
 	}
 
 	provider := translator.NewChatProvider(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
@@ -156,15 +147,17 @@ func main() {
 		first = false
 		executed++
 
-		// Промпт: факты по бюджету + подсказка (как appendHint в pipeline).
-		cc := budgeter.Budget(manifest.Profile, retriever.Retrieve(q)).Render()
-		hint := ""
-		if hintsFn != nil {
-			hint = hintsFn(q)
-			if hint != "" {
-				cc += "\n\nSuggested answer (use as is):\n" + hint
-			}
+		// Промпт: единый контракт отдаёт готовый блок контекста
+		// (факты по бюджету + подсказка через AppendHint внутри BuildContextFn).
+		res := contextFn(q, candidatecontext.SessionContext{})
+		cc := res.Text
+		if res.Degraded {
+			fmt.Fprintln(os.Stderr, "WARN: candidate context в degraded-режиме — факты не подключены")
 		}
+		if res.HintsDisabled {
+			fmt.Fprintln(os.Stderr, "WARN: hints отключены — ответы по вопросам без подсказок")
+		}
+		hint := hintFromContext(res)
 
 		fmt.Printf("\n================ Q%d ================\n", n)
 		fmt.Printf("QUESTION: %s\n", q)
@@ -194,6 +187,24 @@ func main() {
 	}
 
 	fmt.Printf("\n=== готово: %d вопрос(ов), ошибок: %d ===\n", executed, failures)
+}
+
+// hintHeader — заголовок блока подсказки; совпадает с заголовком,
+// который AppendHint вставляет в контекст.
+const hintHeader = "Suggested answer (use as is):\n"
+
+// hintFromContext достаёт тело подсказки из готового Text (для строки HINT:
+// в выводе). Источник значения — тот же Text, что уходит в промпт, поэтому
+// показанная подсказка не может разойтись с отправленной.
+func hintFromContext(res candidatecontext.ContextResult) string {
+	if len(res.HintIDs) == 0 {
+		return ""
+	}
+	idx := strings.LastIndex(res.Text, hintHeader)
+	if idx < 0 {
+		return ""
+	}
+	return res.Text[idx+len(hintHeader):]
 }
 
 // loadQuestions читает вопросы из файла: одна строка — один вопрос;

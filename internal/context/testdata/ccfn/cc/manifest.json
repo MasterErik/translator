@@ -1,0 +1,21 @@
+{
+  "profile": "Synthetic Candidate — backend engineer with Java, PHP and Go experience.",
+  "global_aliases": {
+    "postgres": ["postgresql"],
+    "k8s": ["kubernetes"]
+  },
+  "sections": [
+    {
+      "id": "experience",
+      "title": "Experience",
+      "summary": "projects and roles",
+      "tags": ["work"]
+    },
+    {
+      "id": "skills",
+      "title": "Skills",
+      "summary": "technologies",
+      "tags": ["stack"]
+    }
+  ]
+}

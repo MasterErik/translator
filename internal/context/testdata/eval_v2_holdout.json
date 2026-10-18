@@ -1,0 +1,374 @@
+{
+  "dataset_version": 1,
+  "notes": "SEALED HOLDOUT датасета v2 — отдельный файл, split=holdout. Запечатан 2026-10-18 вместе с train, ни разу не прогонялся через retriever/test ctx_probe. Использование сжигает holdout: каждая запись holdout_log фиксирует дату и решение по результату прогона. Состав намеренно тяжёлый: повторяет формулировки train с ДРУГИМ стеком окружения (чтобы ловить переобучение на текст), плюс отдельные no_relevant/temporal/union-кейсы. Формулировки — те же правила, что в train.",
+  "holdout_log": [
+    {
+      "date": "2026-10-18",
+      "decision": "Holdout запечатан, не использован: покрытие retriever'а не проверялось, ни один прогон по этим кейсам не выполнялся (разметка сделана только по тексту фактов до просмотра выдачи)."
+    }
+  ],
+  "queries": [
+    {
+      "id": "h001",
+      "question": "What are you working on right now?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "exp-fintech-arch-transformation",
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-java-head",
+        "edu-energy-engineering"
+      ],
+      "category": "neutral",
+      "tags": [
+        "temporal"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:temporal-holdout",
+      "split": "holdout",
+      "notes": "count=4. Дословно повторяет train q039 (другой набор must_not): holdout проверяет, что тюнинг не переобучен под конкретный список."
+    },
+    {
+      "id": "h002",
+      "question": "What is your experience with Go?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages",
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "exp-java-head"
+      ],
+      "category": "explicit",
+      "tags": [
+        "gate",
+        "explicit-stack"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-14_20-04-32",
+      "split": "holdout",
+      "notes": "count=3. Explicit Go-вопрос при пустой сессии: без таргета Go-факты должны подниматься по одной. must_not — чисто Java-факт."
+    },
+    {
+      "id": "h003",
+      "question": " Could you please brief me a little bit more about yourself?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview",
+        "sum-competencies",
+        "skills-languages"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-06_18-29-53",
+      "split": "holdout",
+      "notes": "count=5. 'brief me a little bit more about yourself' — открывающий вопрос-визитка; must_not — PHP-факты (риск утечки на любом открытом вопросе)."
+    },
+    {
+      "id": "h004",
+      "question": "How did you go about choosing the partitioning strategy?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-worker-management",
+        "alarm-qa-22",
+        "alarm-qa-23"
+      ],
+      "must_not_fact_ids": [
+        "skills-languages",
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "neutral",
+      "tags": [
+        "go-ambiguity"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:go-ambiguity-holdout",
+      "split": "holdout",
+      "expect_effective_target": [
+        "java"
+      ],
+      "notes": "count=5. Третья 'go about'-формулировка, другой предмет: relevant — partitioning key (hints) и Kafka-партиции по FTP-host (cc). expect [java]."
+    },
+    {
+      "id": "h005",
+      "question": " Why did you choose Visa?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-01"
+      ],
+      "category": "neutral",
+      "tags": [
+        "weak-question"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-10_18-41-50",
+      "split": "holdout",
+      "notes": "count=2. Дословно. Короткий вопрос без связи с платформой: если вернулся business-goal, значит лексика 'choose' слишком общая."
+    },
+    {
+      "id": "h006",
+      "question": "Tell me about the most difficult production issue you have investigated.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-47",
+        "alarm-qa-49",
+        "alarm-qa-19"
+      ],
+      "must_not_fact_ids": [
+        "exp-software-engineer-data",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "alias-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/behavioral-interview-questions/",
+      "split": "holdout",
+      "notes": "count=5. Инцидент-вопрос: relevant — resilience-факты (drop, invalid files, zombie sockets); must_not — SQL-migration и PHP-веб, которые 'production/throughput' тянут."
+    },
+    {
+      "id": "h007",
+      "question": " Oh yeah, so could you please brief me a little bit more about your career journey?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview",
+        "exp-freelance",
+        "exp-fintech-arch-transformation"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-06_18-29-53",
+      "split": "holdout",
+      "notes": "count=5. 'career journey' — естественно про переходы; relevant — transition-факт и текущая роль; must_not — PHP-факты как 'часть карьеры' (риск, что весь PHP подтянут)."
+    },
+    {
+      "id": "h008",
+      "question": " So you have nothing more to say about this case, right, Eric?",
+      "session_target_stack": [],
+      "relevant_fact_ids": [
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-44",
+        "alarm-qa-49"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no-stack-fact"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-16_18-13-34",
+      "split": "holdout",
+      "notes": "count=3. Дословно ('nothing more to say about this case, right, Eric?'). Проверка follow-up без контекста: почти пустой вопрос не должен поднимать мониторинг/ошибки."
+    },
+    {
+      "id": "h009",
+      "question": "What is your experience with java?",
+      "session_target_stack": [],
+      "relevant_fact_ids": [
+        "exp-java-head",
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "category": "negative",
+      "tags": [
+        "gate"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-14_20-04-32",
+      "split": "holdout",
+      "notes": "count=3. Тот же Java-вопрос при пустой сессии: relevant не меняется, must_not — PHP/Go."
+    },
+    {
+      "id": "h010",
+      "question": "How do you handle backpressure when a downstream service is slow?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "alarm-qa-21",
+        "alarm-qa-47",
+        "alarm-worker-management"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-13",
+        "alarm-qa-32"
+      ],
+      "category": "negative",
+      "tags": [
+        "service-collision"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/spring-interview-questions/",
+      "split": "holdout",
+      "notes": "count=5. Backpressure-вопрос: 'service' общий; relevant — отказ/повтор/standby; must_not — частота поллинга и TTL-ключи (не про давление)."
+    },
+    {
+      "id": "h011",
+      "question": " Thank you for taking some time to chat with me today. I really appreciate it. I just wanted to learn more about your background.",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "sum-overview",
+        "sum-competencies",
+        "exp-senior-systems"
+      ],
+      "must_not_fact_ids": [
+        "exp-fintech-php-go-modernization",
+        "exp-software-engineer-web",
+        "pub-publications"
+      ],
+      "category": "negative",
+      "tags": [
+        "stack-penalty"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "transcript:session_2026-10-06_18-29-53",
+      "split": "holdout",
+      "notes": "count=6. 'learn more about your background': должен работать broad-профиль; must_not — PHP-факты и статьи (риск 'длинного хвоста' на открытом вопросе)."
+    },
+    {
+      "id": "h012",
+      "question": "Why do you prefer Kotlin over Java for new services?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages",
+        "sum-overview"
+      ],
+      "must_not_fact_ids": [
+        "exp-java-head"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/kotlin-interview-questions/",
+      "split": "holdout",
+      "expect_effective_target": [
+        "java",
+        "kotlin"
+      ],
+      "notes": "count=3. Сравнение JVM-стеков: expect — union [java,kotlin] (java из session, kotlin упомянут). must_not — exp-java-head: вопрос про предпочтение, а не про историю Pricing Engine."
+    },
+    {
+      "id": "h013",
+      "question": "Do you know what is the difference between abstract class and interface?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [
+        "skills-languages"
+      ],
+      "must_not_fact_ids": [
+        "alarm-qa-48",
+        "alarm-qa-37"
+      ],
+      "category": "explicit",
+      "tags": [
+        "explicit-stack"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "public_list:https://www.interviewbit.com/java-interview-questions/",
+      "split": "holdout",
+      "notes": "count=3. Классический тривиальный Java-вопрос: relevant — только языки; must_not — dashboard 'track' и алгоритм outbox: факты, где 'track/algorithm' лексически близки к 'difference', но к вопросу не относятся."
+    },
+    {
+      "id": "h014",
+      "question": "What does your ideal next role look like?",
+      "session_target_stack": [
+        "java"
+      ],
+      "relevant_fact_ids": [],
+      "must_not_fact_ids": [
+        "exp-fintech-arch-transformation"
+      ],
+      "category": "neutral",
+      "tags": [
+        "no_relevant"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:no-relevant-growth-axes",
+      "split": "holdout",
+      "expect_effective_target": [],
+      "notes": "count=1. M2.2(g) второй no_relevant: про роль, не про факты; must_not — 'present/current' alias-факт (не должен всплыть на 'ideal role')."
+    },
+    {
+      "id": "h015",
+      "question": "And how did you handle that in PHP?",
+      "session_target_stack": [],
+      "relevant_fact_ids": [
+        "exp-fintech-php-go-modernization"
+      ],
+      "must_not_fact_ids": [
+        "alarm-scheduler",
+        "alarm-qa-07"
+      ],
+      "category": "mixed",
+      "tags": [
+        "union-logic",
+        "service-collision"
+      ],
+      "lang": "en",
+      "known_gap": false,
+      "source": "synthetic:union-empty-session",
+      "split": "holdout",
+      "expect_effective_target": [
+        "php"
+      ],
+      "notes": "count=3. Альтернативная короткая формула 'а на PHP?' при пустой сессии: expect [php]; must_not — 'handle/service' коллизия с alarm-фактами."
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "manifest_sha256": "1c846d3397bfe0a2a82276e17ffca9855783d73d1602230c218f69947f62d342",
+  "files": [
+    {
+      "path": "sections/experience.md",
+      "size": 923,
+      "sha256": "98d2f3c6dfc865632717c20f119ab4aefd1ca1626f74ca89c74aa43e8167677b"
+    },
+    {
+      "path": "sections/skills.md",
+      "size": 575,
+      "sha256": "a2b12793bd43b6e9f36afd597b8026ba7c8efacabef886bf83e83b7f2287da55"
+    }
+  ],
+  "facts": [
+    {
+      "id": "cc-pricing",
+      "section": "experience",
+      "file": "sections/experience.md",
+      "start": 162,
+      "end": 300,
+      "title": "Pricing engine",
+      "keywords": [
+        "pricing",
+        "kafka"
+      ],
+      "aliases": [
+        "billing"
+      ],
+      "content_tokens": [
+        "built",
+        "real-time",
+        "pricing",
+        "engine",
+        "kafka",
+        "microservices",
+        "pipeline",
+        "consumes",
+        "market",
+        "events",
+        "reprices",
+        "orders",
+        "50",
+        "ms"
+      ]
+    },
+    {
+      "id": "cc-php-legacy",
+      "section": "experience",
+      "file": "sections/experience.md",
+      "start": 464,
+      "end": 611,
+      "title": "PHP modernization",
+      "keywords": [
+        "php",
+        "laravel",
+        "migration"
+      ],
+      "aliases": [],
+      "content_tokens": [
+        "maintained",
+        "php/laravel",
+        "billing",
+        "service",
+        "migrated",
+        "java",
+        "spring",
+        "boot",
+        "downtime",
+        "php",
+        "version",
+        "handled",
+        "200",
+        "rps",
+        "peak"
+      ]
+    },
+    {
+      "id": "cc-java-platform",
+      "section": "experience",
+      "file": "sections/experience.md",
+      "start": 786,
+      "end": 923,
+      "title": "Java alarm platform",
+      "keywords": [
+        "java",
+        "spring",
+        "alarm"
+      ],
+      "aliases": [
+        "platform"
+      ],
+      "content_tokens": [
+        "designed",
+        "alarm",
+        "processing",
+        "platform",
+        "java",
+        "21",
+        "spring",
+        "boot",
+        "postgres",
+        "state",
+        "kafka",
+        "ingestion",
+        "k8s",
+        "deployment"
+      ]
+    },
+    {
+      "id": "cc-skills-kafka",
+      "section": "skills",
+      "file": "sections/skills.md",
+      "start": 157,
+      "end": 282,
+      "title": "Streaming",
+      "keywords": [
+        "kafka",
+        "streaming",
+        "rabbitmq"
+      ],
+      "aliases": [],
+      "content_tokens": [
+        "kafka",
+        "partitioning",
+        "consumer",
+        "groups",
+        "exactly-once",
+        "semantics",
+        "schema",
+        "registry",
+        "rabbitmq",
+        "exchanges",
+        "dead-letter",
+        "queues"
+      ]
+    },
+    {
+      "id": "cc-skills-db",
+      "section": "skills",
+      "file": "sections/skills.md",
+      "start": 443,
+      "end": 575,
+      "title": "Databases",
+      "keywords": [
+        "postgres",
+        "oracle",
+        "sql"
+      ],
+      "aliases": [
+        "postgres"
+      ],
+      "content_tokens": [
+        "postgres",
+        "preferred",
+        "oracle",
+        "legacy",
+        "systems",
+        "ms",
+        "sql",
+        "server",
+        "clickhouse",
+        "strong",
+        "preference",
+        "plain",
+        "sql",
+        "orm",
+        "abstractions"
+      ]
+    }
+  ]
+}

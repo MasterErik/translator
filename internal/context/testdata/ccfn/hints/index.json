@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "manifest_sha256": "d51f200c15fb5a3ce122670292ffa309c2dcc85f5e345280ef426462238844e0",
+  "files": [
+    {
+      "path": "sections/answers.md",
+      "size": 425,
+      "sha256": "56c0f35586b72663e037e56f134aeee7764b819266c5197e1e68a452c3fea7b8"
+    }
+  ],
+  "facts": [
+    {
+      "id": "hint-weaknesses",
+      "section": "answers",
+      "file": "sections/answers.md",
+      "start": 151,
+      "end": 230,
+      "title": "Weaknesses",
+      "keywords": [
+        "weakness",
+        "weaknesses"
+      ],
+      "aliases": [],
+      "content_tokens": [
+        "main",
+        "weakness",
+        "verify",
+        "assumptions",
+        "committing",
+        "design"
+      ]
+    },
+    {
+      "id": "hint-relocation",
+      "section": "answers",
+      "file": "sections/answers.md",
+      "start": 381,
+      "end": 425,
+      "title": "Relocation",
+      "keywords": [
+        "relocation",
+        "relocate"
+      ],
+      "aliases": [],
+      "content_tokens": [
+        "open",
+        "relocation",
+        "eu",
+        "country"
+      ]
+    }
+  ]
+}

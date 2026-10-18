@@ -1,0 +1,12 @@
+{
+  "profile": "Hints fixture",
+  "global_aliases": {},
+  "sections": [
+    {
+      "id": "answers",
+      "title": "Answers",
+      "summary": "prepared answers",
+      "tags": ["qa"]
+    }
+  ]
+}
