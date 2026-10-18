@@ -147,7 +147,11 @@ func (o *Overlay) AddMessage(msg UIMessage) {
 
 	case AnswerCandidates:
 		// История всех подсказок: append (рендерится последняя).
+		// Новый ответ/метка перекрывает прошлую ошибку генерации: errorMsg
+		// рендерится в зоне 3 ПРИОРИТЕТНО (layoutAnswersZone), и без сброса
+		// первая же ошибка залипала бы навсегда, пряча ленту меток и ответы.
 		o.answersHistory = append(o.answersHistory, msg)
+		o.errorMsg = UIMessage{}
 
 	case Error:
 		// Последняя ошибка генерации (замена).

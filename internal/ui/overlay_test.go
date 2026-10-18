@@ -83,12 +83,14 @@ func TestNewOverlay(t *testing.T) {
 func TestGetMessagesFieldOrder(t *testing.T) {
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
 
-	// Добавляем в перемешанном порядке — GetMessages всё равно сортирует по зонам.
-	o.AddMessage(UIMessage{Type: Error, Text: "ошибка"})
+	// Ошибка ДОБАВЛЯЕТСЯ ПОСЛЕДНЕЙ, чтобы она была активной: новый
+	// AnswerCandidates сбрасывает errorMsg (иначе ошибка залипала бы в зоне 3).
+	// Порядок полей в выводе от порядка добавления не зависит.
 	o.AddMessage(UIMessage{Type: AnswerCandidates, Answers: answersFrom("hint")})
 	o.AddMessage(UIMessage{Type: Translation, Text: "перевод"})
 	o.AddMessage(UIMessage{Type: Interim, Text: "речь"})
 	o.AddMessage(UIMessage{Type: History, Text: "оригинал"})
+	o.AddMessage(UIMessage{Type: Error, Text: "ошибка"})
 
 	msgs := o.GetMessages()
 	want := []struct {
