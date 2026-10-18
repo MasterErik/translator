@@ -49,9 +49,11 @@ func TestAutoScrollZone2AlwaysToEnd(t *testing.T) {
 	}
 }
 
-// TestAutoScrollZones3And4AlwaysToEnd — тот же контракт для зон 3 (подсказки,
-// список answersList) и 4 (история, transcriptionList).
-func TestAutoScrollZones3And4AlwaysToEnd(t *testing.T) {
+// TestAutoScrollZone4AlwaysToEndZone3OnNewAnswer — зона 4 (история) скроллится
+// к концу в каждый кадр (прежнее поведение), а зона 3 (ответы) — только при
+// появлении нового ответа: после ручного сдвига в начало она НЕ откатывается,
+// чтобы можно было прочитать начало ответа (Source/EN) и не дёргаться.
+func TestAutoScrollZone4AlwaysToEndZone3OnNewAnswer(t *testing.T) {
 	const fs = 18
 	th := material.NewTheme()
 	o := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: fs}, logger.NewNopSessionLogger())
@@ -78,15 +80,16 @@ func TestAutoScrollZones3And4AlwaysToEnd(t *testing.T) {
 		t.Errorf("после 1-го рендера TranscriptionAtEnd = false, want true")
 	}
 
-	// Ручной сдвиг обоих списков в начало → следующий кадр снова у конца.
+	// Ручной сдвиг обоих списков в начало → зона 4 откатывается в конец,
+	// зона 3 ОСТАЁТСЯ в начале (автоскролл зоны 3 только при новом ответе).
 	o.answersList.ScrollTo(0)
 	o.transcriptionList.ScrollTo(0)
 	gtx2, _ := newTestContext(800, 650)
 	m2 := o.render(gtx2, th)
-	if !m2.AnswersAtEnd {
-		t.Errorf("после ручного сдвига AnswersAtEnd = false, want true")
+	if m2.AnswersAtEnd {
+		t.Errorf("после ручного сдвига AnswersAtEnd = true, want false — зона 3 не должна откатываться в конец")
 	}
 	if !m2.TranscriptionAtEnd {
-		t.Errorf("после ручного сдвига TranscriptionAtEnd = false, want true")
+		t.Errorf("после ручного сдвига TranscriptionAtEnd = false, want true — зона 4 должна остаться «всегда в конец»")
 	}
 }

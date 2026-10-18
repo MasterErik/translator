@@ -268,16 +268,38 @@ func TestDebugInputFullChannelDoesNotBlock(t *testing.T) {
 // TestDebugInputRenderZoneWhenEnabled — зона ввода проникает в render() при
 // DebugInput=true (не только в изолированном layoutDebugInput): кадр рендерится,
 // и появление зоны увеличивает число separator'ов (зона ввода добавляет свой).
+// Перевод добавляем, чтобы зона 2 (Translation) НЕ скрывалась debug-режимом
+// (иначе её separator тоже исчез бы, и +1 не получилось).
 func TestDebugInputRenderZoneWhenEnabled(t *testing.T) {
 	base := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18}, logger.NewNopSessionLogger())
+	base.AddMessage(UIMessage{Type: Translation, Text: "перевод"})
 	baseMetrics := renderFrame(base, 800, 650)
 
 	dbg := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18, DebugInput: true}, logger.NewNopSessionLogger())
 	dbg.SetManualInput(make(chan string, 8))
+	dbg.AddMessage(UIMessage{Type: Translation, Text: "перевод"})
 	dbgMetrics := renderFrame(dbg, 800, 650)
 
 	if dbgMetrics.SeparatorCount != baseMetrics.SeparatorCount+1 {
 		t.Fatalf("separator'ов с debug-зоной=%d, без=%d, want +1 (зона ввода в Flex)",
 			dbgMetrics.SeparatorCount, baseMetrics.SeparatorCount)
+	}
+}
+
+// TestDebugInputHidesEmptyTranslationZone — в debug-режиме без переводов зона 2
+// (Translation) скрывается: зона 3 (ответы) получает всё место. Проверяем по
+// числу separator'ов: без переводов их на 1 меньше (нет зоны 2 и её separator).
+func TestDebugInputHidesEmptyTranslationZone(t *testing.T) {
+	dbg := NewOverlay(OverlayConfig{Width: 800, Height: 650, FontSize: 18, DebugInput: true}, logger.NewNopSessionLogger())
+	dbg.SetManualInput(make(chan string, 8))
+
+	empty := renderFrame(dbg, 800, 650)
+
+	dbg.AddMessage(UIMessage{Type: Translation, Text: "перевод"})
+	withTrans := renderFrame(dbg, 800, 650)
+
+	if withTrans.SeparatorCount != empty.SeparatorCount+1 {
+		t.Fatalf("separator'ов с переводом=%d, без=%d, want +1 (пустая зона 2 скрыта в debug-режиме)",
+			withTrans.SeparatorCount, empty.SeparatorCount)
 	}
 }

@@ -45,6 +45,14 @@ type Overlay struct {
 	// errorMsg — последняя ошибка генерации (зона 3): хранится только последняя.
 	errorMsg UIMessage
 
+	// answersSeq — монотонный счётчик AnswerCandidates-сообщений (под mu).
+	// Автоскролл зоны 3 срабатывает только при изменении seq (появился новый
+	// ответ), а не каждый кадр — иначе ручной скролл вверх откатывается вниз
+	// и начало ответа (Source/EN) никогда не видно.
+	answersSeq uint64
+	// scrolledAnswersSeq — seq, до которого список ответов уже доскроллен в конец.
+	scrolledAnswersSeq uint64
+
 	shutdown chan struct{}
 
 	invalidate func()
@@ -152,6 +160,7 @@ func (o *Overlay) AddMessage(msg UIMessage) {
 		// первая же ошибка залипала бы навсегда, пряча ленту меток и ответы.
 		o.answersHistory = append(o.answersHistory, msg)
 		o.errorMsg = UIMessage{}
+		o.answersSeq++
 
 	case Error:
 		// Последняя ошибка генерации (замена).
@@ -387,16 +396,20 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 	// Канал ручного ввода снимается копией под тем же RLock — сама debug-зона
 	// достраивается после Unlock (layoutDebugInput).
 	debugManual := o.manualInputCh
+	// answersSeq — снимок счётчика ответов под тем же RLock: автоскролл зоны 3
+	// срабатывает только когда он изменился (новый ответ), а не каждый кадр.
+	answersSeq := o.answersSeq
 	o.mu.RUnlock()
 
-	// Автоскролл «всегда в конец» (Task 3.1): зоны 2/3/4 скроллятся к концу в
-	// каждый кадр с данными, без счётчиков-дельта и needScroll-условий. Список
-	// зоны 1 (interimList) всегда прокручивается через ScrollToEnd при непустом
-	// тексте. Позиции layout.List общие для зон 2/3/4 (немедленное обновление).
+	// Автоскролл «в конец» (Task 3.1): зоны 2/4 скроллятся к концу в каждый
+	// кадр с данными; список зоны 1 (interimList) — при непустом тексте. Зона 3
+	// скроллится ТОЛЬКО при появлении нового ответа (answersSeq изменился), а не
+	// каждый кадр — иначе ручной скролл вверх откатывается вниз и начало ответа
+	// (Source/EN) не видно. Позиции layout.List общие (немедленное обновление).
 	needScrollInterim := interim.Text != ""
 	needScrollTrans := len(translations) > 0
 	needScrollHist := len(history) > 0
-	needScrollAnswers := len(answers.Answers) > 0
+	needScrollAnswers := answersSeq != o.scrolledAnswersSeq
 
 	// separatorCount собирается layout-функцией separator'а в кадре (см. ниже);
 	// локальный счётчик не течёт между оверлеями/кадрами (Task 3.2).
@@ -413,9 +426,10 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 
 	historyHeight := historyVisibleHeightPx(fs)
 
-	// Собираем children один раз: зоны 1–3 постоянны, зона 4 (история)
-	// добавляется только при historyVisible — при скрытом состоянии она
-	// и её separator отсутствуют в Flex и не занимают место в layout.
+	// Собираем children: зона 1 постоянна; зона 2 (Translation) добавляется
+	// только когда есть переводы ИЛИ режим не debug (в debug-режиме транскрибатора
+	// нет → переводов нет → пустую зону 2 не резервируем); зона 4 (история) —
+	// только при historyVisible; debug-зона — при DebugInput.
 	children := []layout.FlexChild{
 		// 1. Interim — речь, фиксированная высота interimVisibleLines строк,
 		// внутри — вертикальный скролл (длинная фраза видна целиком). Белый.
@@ -428,20 +442,33 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 			return layoutInterim(gtx, th, interim, fs, &o.interimList, needScrollInterim)
 		}),
 		layout.Rigid(layoutZoneSeparator),
+	}
 
-		// 2. Translation History — скролл, 10 строк, переводы.
-		layout.Flexed(0.45, func(gtx layout.Context) layout.Dimensions {
-			return layoutTranslationHistory(gtx, th, translations, fs, &o.translationList, needScrollTrans)
-		}),
-		layout.Rigid(layoutZoneSeparator),
+	// В debug-режиме без переводов зона 2 (Translation) пустая — не резервируем
+	// под неё высоту, чтобы зона 3 (ответы) занимала всё оставшееся место.
+	hideTranslation := o.cfg.DebugInput && len(translations) == 0
+	if !hideTranslation {
+		children = append(children,
+			// 2. Translation History — скролл, 10 строк, переводы.
+			layout.Flexed(0.45, func(gtx layout.Context) layout.Dimensions {
+				return layoutTranslationHistory(gtx, th, translations, fs, &o.translationList, needScrollTrans)
+			}),
+			layout.Rigid(layoutZoneSeparator),
+		)
+	}
 
-		// 3. AnswerCandidates — основная зона ответов: всё оставшееся место
-		// (при скрытой истории — практически вся высота окна). Ошибка
-		// генерации (Type=Error) рендерится в этой же зоне приоритетно.
-		layout.Flexed(0.55, func(gtx layout.Context) layout.Dimensions {
+	// 3. AnswerCandidates — основная зона ответов. Ошибка генерации (Type=Error)
+	// рендерится в этой же зоне приоритетно. В debug-режиме без переводов зона 3
+	// занимает весь остаток высоты (1.0), иначе делит 55/45 с зоной 2.
+	zone3Weight := float32(0.55)
+	if hideTranslation {
+		zone3Weight = 1.0
+	}
+	children = append(children,
+		layout.Flexed(zone3Weight, func(gtx layout.Context) layout.Dimensions {
 			return o.layoutAnswersZone(gtx, th, answers, hasAnswers, errorMsg, fs, needScrollAnswers)
 		}),
-	}
+	)
 
 	// 4. TranscriptionHistory — внизу окна, только при historyVisible (F4).
 	// Высота — ровно historyVisibleLines строк текста.
@@ -474,6 +501,19 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 	}
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+
+	// Зафиксировать, что новый ответ учтён автоскроллом (вне RLock выше).
+	if needScrollAnswers {
+		o.mu.Lock()
+		if o.answersSeq == answersSeq {
+			o.scrolledAnswersSeq = answersSeq
+		}
+		o.mu.Unlock()
+		// Одноразовый скролл в конец выполнен — сбрасываем флаг: Gio не сбрасывает
+		// ScrollToEnd сам, иначе список прилипал бы к концу каждый кадр и ручной
+		// скролл вверх откатывался бы обратно.
+		o.answersList.ScrollToEnd = false
+	}
 
 	// Метрики кадра: «список у конца» читаем из Position каждого списка после
 	// Layout. Пустой список → false (скроллить нечего).
