@@ -23,34 +23,54 @@ import (
 //	  "section": "...",
 //	  "title": "...",
 //	  "keywords": [...],
-//	  "aliases": [...]
+//	  "aliases": [...],
+//	  "stack": [...],
+//	  "period": "2024-present",
+//	  "weight": "primary"
 //	}
 //	-->
 //
 // Границы факта: Start = сразу после закрывающего "-->" маркера, End = начало
 // "<!--" следующего маркера (или конец файла). Текст до первого маркера вне
-// фактов. Keywords/Aliases/ContentTokens канонизируются тем же Tokenizer'ом,
-// что и runtime retriever, поэтому их семантика совпадает.
+// фактов. Keywords/Aliases/ContentTokens/Stack канонизируются тем же
+// Tokenizer'ом, что и runtime retriever, поэтому их семантика совпадает.
+//
+// Разбор строгий: неизвестное поле в маркере или в manifest.json — ошибка
+// (опечатка в tech_families/technical_matrix иначе молча игнорировалась бы).
+// Lint-предупреждения (см. BuildIndexWithLint) сборку не прерывают.
 func BuildIndex(manifest *Manifest, root string) (*Index, error) {
+	index, _, err := BuildIndexWithLint(manifest, root)
+	return index, err
+}
+
+// BuildIndexWithLint — BuildIndex плюс lint-предупреждения по разметке:
+// токен семейства в тексте факта при пустом stack (подавляется lint_ignore).
+// Предупреждения возвращаются и при успешной сборке — вызывающий обязан их
+// залогировать, иначе они теряются.
+func BuildIndexWithLint(manifest *Manifest, root string) (*Index, []LintWarning, error) {
 	tokenizer, err := NewTokenizer(manifest.GlobalAliases)
 	if err != nil {
-		return nil, fmt.Errorf("candidatecontext: build index: %w", err)
+		return nil, nil, fmt.Errorf("candidatecontext: build index: %w", err)
+	}
+	families, err := newFamilyIndex(manifest.TechFamilies)
+	if err != nil {
+		return nil, nil, fmt.Errorf("candidatecontext: build index: %w", err)
 	}
 
 	manifestPath := filepath.Join(root, "manifest.json")
 	manifestRaw, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("candidatecontext: build index: чтение manifest: %w", err)
+		return nil, nil, fmt.Errorf("candidatecontext: build index: чтение manifest: %w", err)
 	}
 	manifestSHA := sha256.Sum256(manifestRaw)
 
 	sectionIDs := make(map[string]struct{}, len(manifest.Sections))
 	for _, s := range manifest.Sections {
 		if s.ID == "" {
-			return nil, fmt.Errorf("candidatecontext: build index: пустой section id")
+			return nil, nil, fmt.Errorf("candidatecontext: build index: пустой section id")
 		}
 		if _, dup := sectionIDs[s.ID]; dup {
-			return nil, fmt.Errorf("candidatecontext: build index: дубликат section id %q", s.ID)
+			return nil, nil, fmt.Errorf("candidatecontext: build index: дубликат section id %q", s.ID)
 		}
 		sectionIDs[s.ID] = struct{}{}
 	}
@@ -62,6 +82,7 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 		Files:            make([]FileMeta, 0, len(manifest.Sections)),
 		Facts:            make([]Fact, 0),
 	}
+	warnings := make([]LintWarning, 0)
 	seenFactIDs := make(map[string]struct{})
 
 	for _, section := range manifest.Sections {
@@ -69,9 +90,9 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 		raw, err := os.ReadFile(sourcePath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("candidatecontext: build index: отсутствует source-файл для section %q", section.ID)
+				return nil, nil, fmt.Errorf("candidatecontext: build index: отсутствует source-файл для section %q", section.ID)
 			}
-			return nil, fmt.Errorf("candidatecontext: build index: чтение section %q: %w", section.ID, err)
+			return nil, nil, fmt.Errorf("candidatecontext: build index: чтение section %q: %w", section.ID, err)
 		}
 
 		fileRel := filepath.ToSlash(filepath.Join("sections", section.ID+".md"))
@@ -82,16 +103,21 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 			SHA256: hex.EncodeToString(fileSHA[:]),
 		})
 
-		facts, err := parseFactMarkers(raw, tokenizer)
+		facts, fileWarnings, err := parseFactMarkers(raw, tokenizer, families)
 		if err != nil {
-			return nil, fmt.Errorf("candidatecontext: build index: %w", err)
+			return nil, nil, fmt.Errorf("candidatecontext: build index: %w", err)
 		}
+		for i := range fileWarnings {
+			fileWarnings[i].File = fileRel
+		}
+		warnings = append(warnings, fileWarnings...)
+
 		for _, f := range facts {
 			if _, ok := sectionIDs[f.Section]; !ok {
-				return nil, fmt.Errorf("candidatecontext: build index: section %q отсутствует в manifest", f.Section)
+				return nil, nil, fmt.Errorf("candidatecontext: build index: section %q отсутствует в manifest", f.Section)
 			}
 			if _, dup := seenFactIDs[f.ID]; dup {
-				return nil, fmt.Errorf("candidatecontext: build index: дубликат fact id %q", f.ID)
+				return nil, nil, fmt.Errorf("candidatecontext: build index: дубликат fact id %q", f.ID)
 			}
 			seenFactIDs[f.ID] = struct{}{}
 			f.File = fileRel
@@ -99,7 +125,7 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 		}
 	}
 
-	return index, nil
+	return index, warnings, nil
 }
 
 // factMarker — JSON-содержимое одного маркера "<!-- fact ... -->".
@@ -120,8 +146,11 @@ type factMarker struct {
 
 // parseFactMarkers находит все маркеры "<!-- fact ... -->" в raw и строит
 // факты (без File и без валидации section против manifest — это делает
-// BuildIndex). Возвращает факты в порядке возрастания offset.
-func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
+// BuildIndex). Разбор строгий: неизвестное поле маркера — ошибка (DisallowUnknownFields),
+// иначе опечатка вроде "lint_ignore" → "lintignore" молча меняла бы поведение.
+// Стек нормализуется к каноническим именам семей (см. familyIndex.validateFact),
+// lint-предупреждения возвращаются отдельно. Факты — в порядке возрастания offset.
+func parseFactMarkers(raw []byte, tokenizer *Tokenizer, families *familyIndex) ([]Fact, []LintWarning, error) {
 	const markerStart = "<!-- fact"
 	const markerClose = "-->"
 
@@ -141,7 +170,7 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
 		start := pos + idx
 		closeIdx := bytes.Index(raw[start:], []byte(markerClose))
 		if closeIdx < 0 {
-			return nil, fmt.Errorf("маркер факта без закрывающего %q", markerClose)
+			return nil, nil, fmt.Errorf("маркер факта без закрывающего %q", markerClose)
 		}
 		closeStart := start + closeIdx
 		markers = append(markers, positioned{
@@ -153,22 +182,25 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
 	}
 
 	if len(markers) == 0 {
-		return nil, fmt.Errorf("отсутствуют fact markers в source-файле")
+		return nil, nil, fmt.Errorf("отсутствуют fact markers в source-файле")
 	}
 
 	facts := make([]Fact, 0, len(markers))
+	warnings := make([]LintWarning, 0)
 	for i, m := range markers {
 		var fm factMarker
-		if err := json.Unmarshal(bytes.TrimSpace(m.json), &fm); err != nil {
-			return nil, fmt.Errorf("парсинг fact marker: %w", err)
+		dec := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(m.json)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&fm); err != nil {
+			return nil, nil, fmt.Errorf("парсинг fact marker: %w", err)
 		}
 		fm.ID = strings.TrimSpace(fm.ID)
 		fm.Section = strings.TrimSpace(fm.Section)
 		if fm.ID == "" {
-			return nil, fmt.Errorf("fact marker без id")
+			return nil, nil, fmt.Errorf("fact marker без id")
 		}
 		if fm.Section == "" {
-			return nil, fmt.Errorf("fact marker без section")
+			return nil, nil, fmt.Errorf("fact marker без section")
 		}
 
 		start := int64(m.end)
@@ -188,15 +220,17 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
 		for _, a := range fm.Aliases {
 			aliases = append(aliases, tokenizer.Process(a)...)
 		}
-		// Stack канонизируется тем же Tokenizer'ом, что keywords/aliases:
-		// в индексе (и при валидации M6b) он обязан совпадать с Family.Name,
-		// то есть "golang", а не "go".
+		// Stack канонизируется тем же Tokenizer'ом, что keywords/aliases, а затем
+		// нормализуется к Family.Name (M6b): "kotlin" → "java", "mssql" →
+		// "microsoft sql server" → "mssql". Это гарантирует, что стек факта и
+		// стек вопроса сравнимы по одному и тому же ключу.
 		stack := make([]string, 0, len(fm.Stack))
 		for _, s := range fm.Stack {
 			stack = append(stack, tokenizer.Process(s)...)
 		}
+		contentTokens := tokenizer.Process(string(body))
 
-		facts = append(facts, Fact{
+		fact := Fact{
 			ID:            fm.ID,
 			Section:       fm.Section,
 			Start:         start,
@@ -204,13 +238,24 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
 			Title:         fm.Title,
 			Keywords:      keywords,
 			Aliases:       aliases,
-			ContentTokens: tokenizer.Process(string(body)),
+			ContentTokens: contentTokens,
 			Stack:         stack,
 			Period:        strings.TrimSpace(fm.Period),
 			Weight:        strings.TrimSpace(fm.Weight),
-		})
+		}
+
+		titleTokens := tokenizer.Process(fm.Title)
+		normalized, warn, err := families.validateFact(fact, fm.LintIgnore, titleTokens)
+		if err != nil {
+			return nil, nil, err
+		}
+		fact.Stack = normalized
+		if warn != nil {
+			warnings = append(warnings, *warn)
+		}
+		facts = append(facts, fact)
 	}
-	return facts, nil
+	return facts, warnings, nil
 }
 
 // tempFile — минимальный seam над *os.File для тестирования SaveIndex.

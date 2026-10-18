@@ -23,10 +23,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	index, err := candidatecontext.BuildIndex(manifest, *dir)
+	index, warnings, err := candidatecontext.BuildIndexWithLint(manifest, *dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "lint: %s\n", w)
 	}
 
 	indexPath := filepath.Join(*dir, "index.json")

@@ -1,6 +1,7 @@
 package candidatecontext
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,13 +12,19 @@ import (
 )
 
 // LoadManifest читает и парсит manifest.json.
+//
+// Разбор строгий: неизвестное поле — ошибка. Опечатка в tech_families или
+// technical_matrix иначе молча игнорировалась бы, и данные выглядели бы
+// корректными.
 func LoadManifest(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("candidatecontext: чтение manifest %s: %w", path, err)
 	}
 	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("candidatecontext: парсинг manifest %s: %w", path, err)
 	}
 	return &m, nil
@@ -136,9 +143,15 @@ func LoadCandidateContext(root string) (*Manifest, *Index, error) {
 
 	slog.Warn("candidatecontext: индекс устарел, пересборка", "reason", reason)
 
-	idx, err = BuildIndex(manifest, root)
+	idx, warnings, err := BuildIndexWithLint(manifest, root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("candidatecontext: rebuild index: %w", err)
+	}
+	// Lint не блокирует сборку, но обязан быть видимым: молчаливое
+	// предупреждение о разметке равно его отсутствию.
+	for _, w := range warnings {
+		slog.Warn("candidatecontext: разметка фактов требует внимания",
+			"file", w.File, "fact", w.FactID, "lint", w.Message)
 	}
 	if err := SaveIndex(idx, indexPath); err != nil {
 		return nil, nil, fmt.Errorf("candidatecontext: save index: %w", err)

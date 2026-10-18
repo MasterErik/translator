@@ -126,8 +126,16 @@ second body
 
 // TestBuildIndexStackPeriodWeight проверяет M6a: сборка индекса не падает на
 // новых полях маркера и переносит их в Fact (Stack — канонизированным тем же
-// Tokenizer'ом, Period/Weight — с обрезкой пробелов).
+// Tokenizer'ом и нормализованным к Family.Name, Period/Weight — с обрезкой пробелов).
 func TestBuildIndexStackPeriodWeight(t *testing.T) {
+	manifest := `{
+  "profile": "Erik",
+  "global_aliases": {},
+  "sections": [{"id": "experience", "title": "Опыт"}],
+  "tech_families": [
+    {"name": "php", "display": "PHP", "members": ["php", "laravel"]}
+  ]
+}`
 	content := `<!-- fact
 {
   "id": "exp-php",
@@ -135,7 +143,7 @@ func TestBuildIndexStackPeriodWeight(t *testing.T) {
   "title": "PHP backend",
   "stack": ["PHP", " Laravel "],
   "period": " 2019-2022 ",
-  "weight": " high ",
+  "weight": " secondary ",
   "lint_ignore": "осознанное исключение"
 }
 -->
@@ -143,7 +151,7 @@ php body
 <!-- fact {"id": "no-meta", "section": "experience", "title": "Без метаданных"} -->
 plain body
 `
-	dir := buildTree(t, manifestOneSection, map[string]string{"experience.md": content})
+	dir := buildTree(t, manifest, map[string]string{"experience.md": content})
 	idx, err := BuildIndex(mustLoadManifest(t, dir), dir)
 	if err != nil {
 		t.Fatalf("BuildIndex: %v", err)
@@ -153,13 +161,13 @@ plain body
 	}
 
 	f1 := idx.Facts[0]
-	if !reflect.DeepEqual(f1.Stack, []string{"php", "laravel"}) {
-		t.Errorf("Stack: got %v, want [php laravel]", f1.Stack)
+	if !reflect.DeepEqual(f1.Stack, []string{"php"}) {
+		t.Errorf("Stack: got %v, want [php] (laravel — член семьи php, нормализуется к имени)", f1.Stack)
 	}
 	if f1.Period != "2019-2022" {
 		t.Errorf("Period: got %q", f1.Period)
 	}
-	if f1.Weight != "high" {
+	if f1.Weight != "secondary" {
 		t.Errorf("Weight: got %q", f1.Weight)
 	}
 
