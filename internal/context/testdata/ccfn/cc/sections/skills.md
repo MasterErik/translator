@@ -4,7 +4,9 @@
   "section": "skills",
   "title": "Streaming",
   "keywords": ["kafka", "streaming", "rabbitmq"],
-  "aliases": []
+  "aliases": [],
+  "period": "2018-2024",
+  "weight": "secondary"
 }
 -->
 Kafka: partitioning, consumer groups, exactly-once semantics, schema registry.
@@ -16,7 +18,9 @@ RabbitMQ: exchanges and dead-letter queues.
   "section": "skills",
   "title": "Databases",
   "keywords": ["postgresql", "oracle", "sql"],
-  "aliases": ["postgres"]
+  "aliases": ["postgres"],
+  "period": "2018-2024",
+  "weight": "secondary"
 }
 -->
 PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.

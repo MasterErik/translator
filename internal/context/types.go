@@ -89,16 +89,26 @@ type Index struct {
 // Score равен Rank (score, по которому факт отсортирован). Raw сохраняет
 // прежнюю семантику score без стек-множителя (M7b): с ним сравниваются
 // min_score и абсолютный порог подсказок, чтобы бонус не проводил чужой факт
-// через порог. Breakdown заполняется только при RetrieveOptions.Explain.
+// Breakdown заполняется только при RetrieveOptions.Explain.
+//
+// Stack, Period и Weight — метки факта из Fact (M9.1). StackDisplay — уже
+// разрешённые для prompt человекочитаемые имена стеков (Family.Display, с
+// fallback на каноническое имя): Retriever заполняет их при материализации,
+// потому что Render не имеет доступа к manifest.TechFamilies. Period хранится
+// в исходном формате (2018-2024) и форматируется в Render.
 type RetrievalResult struct {
-	FactID      string          `json:"fact_id"`
-	SectionID   string          `json:"section_id"`
-	Score       float64         `json:"score"`
-	Content     string          `json:"content"`
-	Raw         float64         `json:"raw"`
-	Rank        float64         `json:"rank"`
-	OutOfTarget bool            `json:"out_of_target,omitempty"`
-	Breakdown   *ScoreBreakdown `json:"breakdown,omitempty"`
+	FactID       string          `json:"fact_id"`
+	SectionID    string          `json:"section_id"`
+	Score        float64         `json:"score"`
+	Content      string          `json:"content"`
+	Raw          float64         `json:"raw"`
+	Rank         float64         `json:"rank"`
+	OutOfTarget  bool            `json:"out_of_target,omitempty"`
+	Stack        []string        `json:"stack,omitempty"`
+	StackDisplay []string        `json:"stack_display,omitempty"`
+	Period       string          `json:"period,omitempty"`
+	Weight       string          `json:"weight,omitempty"`
+	Breakdown    *ScoreBreakdown `json:"breakdown,omitempty"`
 }
 
 // ScoreBreakdown объясняет, из чего сложился результат факта: вклады полей,
@@ -143,8 +153,19 @@ type CandidateContext struct {
 	Facts   []RetrievalResult
 }
 
+// EmptyRetrievalNotice — строка, которая уходит в Render, когда retrieval не
+// нашёл ни одного факта (M9.3): модель не должна домысливать проекты.
+const EmptyRetrievalNotice = "No relevant facts found — rely on the candidate profile and Technical Matrix; do not invent projects."
+
+// OutOfTargetNotice — пометка факта, чей стек целиком вне целевого стека
+// вопроса/сессии (M9.4): использовать только если вопрос прямо о нём.
+const OutOfTargetNotice = "OUT OF TARGET STACK — use only if the question is directly about it"
+
 // Render формирует prompt-ready строку: профиль, техническая матрица, затем
-// отобранные факты.
+// отобранные факты. Перед телом каждого факта печатается метка
+// «[Java · 2018–2024 · primary]» (M9.1) и, для фактов вне целевого стека,
+// пометка OUT OF TARGET STACK (M9.4). Если релевантных фактов нет, вместо
+// фактов печатается EmptyRetrievalNotice (M9.3).
 func (c CandidateContext) Render() string {
 	var sb strings.Builder
 	if c.Profile != "" {
@@ -158,6 +179,7 @@ func (c CandidateContext) Render() string {
 		sb.WriteString("Technical matrix:\n")
 		sb.WriteString(c.Matrix)
 	}
+	rendered := 0
 	for _, f := range c.Facts {
 		if f.Content == "" {
 			continue
@@ -165,7 +187,78 @@ func (c CandidateContext) Render() string {
 		if sb.Len() > 0 {
 			sb.WriteString("\n\n")
 		}
+		if label := f.Label(); label != "" {
+			sb.WriteString(label)
+			sb.WriteString("\n")
+		}
+		if f.OutOfTarget {
+			sb.WriteString(OutOfTargetNotice)
+			sb.WriteString("\n")
+		}
 		sb.WriteString(f.Content)
+		rendered++
+	}
+	if rendered == 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString(EmptyRetrievalNotice)
 	}
 	return sb.String()
+}
+
+// Label возвращает метку факта для prompt: «[Java · 2018–2024 · primary]».
+// Stack берётся из StackDisplay (fallback — Stack), период нормализуется
+// (en dash вместо дефиса), отсутствующие поля опускаются. Пустая метка — "".
+func (r RetrievalResult) Label() string {
+	parts := make([]string, 0, 3)
+	if stack := joinStack(r.StackDisplay, r.Stack); stack != "" {
+		parts = append(parts, stack)
+	}
+	if period := FormatPeriod(r.Period); period != "" {
+		parts = append(parts, period)
+	}
+	if weight := strings.TrimSpace(r.Weight); weight != "" {
+		parts = append(parts, weight)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(parts, " · ") + "]"
+}
+
+// joinStack склеивает готовые display-имена стеков через запятую; пустые
+// элементы опускаются. Если display пуст — используется канонический стек.
+func joinStack(display, canonical []string) string {
+	names := make([]string, 0, len(display))
+	for _, s := range display {
+		if s = strings.TrimSpace(s); s != "" {
+			names = append(names, s)
+		}
+	}
+	if len(names) == 0 {
+		for _, s := range canonical {
+			if s = strings.TrimSpace(s); s != "" {
+				names = append(names, s)
+			}
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+// FormatPeriod нормализует период к виду YYYY–YYYY / YYYY–present / YYYY:
+// разделитель-дефис заменяется на en dash. Нераспознанный период
+// возвращается как есть, пустой — "".
+func FormatPeriod(period string) string {
+	p := strings.TrimSpace(period)
+	switch {
+	case p == "":
+		return ""
+	case strings.HasSuffix(p, "-present"):
+		return strings.TrimSuffix(p, "-present") + "\u2013present"
+	case len(p) == 9 && p[4] == '-':
+		return p[:4] + "\u2013" + p[5:]
+	default:
+		return p
+	}
 }

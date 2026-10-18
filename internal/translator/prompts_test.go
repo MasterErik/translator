@@ -75,6 +75,31 @@ func TestBuildSystemPromptEmptyLangsDefault(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptStackScopingSnapshot фиксирует M9.5: промпт требует
+// использовать только факты, относящиеся к технологии вопроса, и не приписывать
+// опыт одного стека другому.
+func TestBuildSystemPromptStackScopingSnapshot(t *testing.T) {
+	prompt := BuildSystemPrompt("en", "ru")
+	want := "\n" +
+		"Answer from the candidate's perspective, in first person.\n" +
+		"Use only information available in the provided candidate context.\n" +
+		"Use only the facts that belong to the technology the question is about; " +
+		"never attribute experience with one stack to another.\n" +
+		"Do not invent experience, projects, technologies, responsibilities, or years.\n" +
+		"Keep answers brief, natural, conversational, and suitable for speaking aloud.\n" +
+		"Use IT terminology in English in both languages.\n" +
+		"Response format:\n" +
+		"- EN: <answer in the source language> | RU: <translated into the target language>\n" +
+		"Do not include explanations, instructions, reminders, or meta-comments.\n"
+	if prompt != want {
+		t.Errorf("BuildSystemPrompt(en,ru) mismatch:\n--- got ---\n%q\n--- want ---\n%q", prompt, want)
+	}
+	// Инструкция не зависит от языковой пары.
+	if got := BuildSystemPrompt("en", "de"); !strings.Contains(got, "one stack to another") {
+		t.Errorf("инструкция о стеке должна присутствовать при любой паре языков, got:\n%s", got)
+	}
+}
+
 // TestBuildSystemPromptKeepsITTerms удалён: подстрока «Use IT terminology in
 // English...» уже проверяется в TestBuildSystemPromptDefaultFormat.
 

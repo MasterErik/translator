@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -64,6 +65,11 @@ type Pipeline struct {
 	dispatchDone chan struct{} // Сигнал завершения dispatcher (буфер 1)
 	dispatch     *dispatcher.Dispatcher
 
+	// hintsDisabledReason — M10: причина отключения hints на сессию; пустая
+	// строка — подсказки работают (или не сконфигурированы). Одинаково видно
+	// в индикаторе старта, в логе сессии и в slog.
+	hintsDisabledReason string
+
 	// manualInput — канал ручного ввода текста (debug-режим). nil, если
 	// DebugInput выключен: ветка select по nil-каналу блокируется вечно.
 	manualInput <-chan string
@@ -120,6 +126,12 @@ type Config struct {
 	// DebugInput — debug-режим ручного ввода текста: overlay получает канал,
 	// введённые строки идут тем же путём, что и STT-события (speaker/EndOfTurn).
 	DebugInput bool
+
+	// HintsDisabledNotifier — M10: необязательный sink индикатора «hints
+	// отключены». Вызывается один раз при построении контекста, если hints
+	// сконфигурирован (Hints.Dir != ""), но недоступен. nil-safe; основная
+	// запись индикатора — в лог сессии и slog.
+	HintsDisabledNotifier func(reason string)
 }
 
 // --------------------------------------------------------------------------
@@ -210,6 +222,13 @@ func New(cfg Config) (*Pipeline, error) {
 		newErr = fmt.Errorf("pipeline: candidate context: %w", ccErr)
 		return nil, newErr
 	}
+	// M10: hints сконфигурирован (Dir != ""), но по итогу отключён (сбой
+	// загрузки, retriever не создался, legacy-режим) — индикатор обязан быть
+	// виден: без него отсутствие подсказок выглядит как «подсказок нет».
+	hintsDisabledReason := detectHintsDisabled(cfg, contextFn)
+	if hintsDisabledReason != "" {
+		reportHintsDisabled(sessLog, cfg.HintsDisabledNotifier, hintsDisabledReason)
+	}
 	// Диспетчер получает только prompt-ready строку: целевой стек сессии
 	// (cfg.Interview.TargetStack) попадает в retrieval начиная с M7b.
 	session := candidatecontext.SessionContext{TargetStack: cfg.Interview.TargetStack}
@@ -272,6 +291,7 @@ func New(cfg Config) (*Pipeline, error) {
 				TargetLang:         cfg.TargetLang,
 			},
 		),
+		hintsDisabledReason: hintsDisabledReason,
 	}
 
 	ok = true
@@ -281,6 +301,50 @@ func New(cfg Config) (*Pipeline, error) {
 // --------------------------------------------------------------------------
 // Жизненный цикл
 // --------------------------------------------------------------------------
+
+// hintsProbeQuestion — нейтральный вопрос для определения состояния hints в
+// момент старта. Возвращённая BuildContextFn функция не выполняет ввода-вывода:
+// выдача подсказок решается на уже загруженном каталоге, поэтому проба дешёвая
+// и детерминированная (вопрос намеренно ничего не находит — интересует только
+// флаг HintsDisabled).
+const hintsProbeQuestion = "hints status probe"
+
+// detectHintsDisabled возвращает причину отключения hints (M10) или пустую
+// строку, если подсказки работают либо не сконфигурированы вовсе. Сбой hints
+// не валит старт — он только помечается: причина, зафиксированная в логе
+// сессии функцией BuildContextFn, определяет смысл индикатора.
+func detectHintsDisabled(cfg Config, fn func(string, candidatecontext.SessionContext) candidatecontext.ContextResult) string {
+	if cfg.Hints.Dir == "" {
+		return ""
+	}
+	if !fn(hintsProbeQuestion, candidatecontext.SessionContext{}).HintsDisabled {
+		return ""
+	}
+	if cfg.CandidateContext.Dir == "" && cfg.CandidateContextFile != "" {
+		return "candidate context работает в legacy-режиме — retrieval по вопросу недоступен"
+	}
+	if cfg.CandidateContext.Dir == "" {
+		return "candidate context не сконфигурирован — подсказки требуют fact-level retrieval"
+	}
+	return "недоступен каталог " + cfg.Hints.Dir + " (см. WARN/ERROR выше в логе сессии)"
+}
+
+// reportHintsDisabled фиксирует индикатор «hints отключены» в трёх местах:
+// лог сессии (одна строка для оператора), slog WARN (структурный лог) и
+// необязательный sink Config.HintsDisabledNotifier (UI/телеметрия).
+func reportHintsDisabled(sessLog logger.SessionLogger, notify func(string), reason string) {
+	const format = "hints отключены: %s; интервью продолжается без подсказок"
+	line := fmt.Sprintf(format, reason)
+
+	// sessLog может быть nil, если Pipeline собран в обход New (тестами).
+	if sessLog != nil {
+		_ = sessLog.LogDebug("WARN: " + line)
+	}
+	slog.Warn("pipeline: hints отключены; интервью продолжается без подсказок", "reason", reason)
+	if notify != nil {
+		notify(reason)
+	}
+}
 
 // Run запускает полный жизненный цикл пайплайна: инициализирует STT, запускает
 // горутины захвата, STT, dispatch и UI-оверлея, ожидает сигнала завершения

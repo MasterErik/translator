@@ -17,5 +17,23 @@
       "summary": "technologies",
       "tags": ["stack"]
     }
+  ],
+  "tech_families": [
+    {
+      "name": "java",
+      "display": "Java",
+      "members": ["java", "spring", "hibernate", "kotlin"],
+      "ambiguous": ["spring"]
+    },
+    {
+      "name": "golang",
+      "display": "Go",
+      "members": ["golang"]
+    },
+    {
+      "name": "php",
+      "display": "PHP",
+      "members": ["php", "laravel", "symfony"]
+    }
   ]
 }

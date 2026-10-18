@@ -1,0 +1,9 @@
+Candidate profile:
+Erik Ivanov
+
+[Java · 2018–2024 · primary]
+Built the billing platform on Java and Spring Boot.
+
+[PHP · 2016–2018 · secondary]
+OUT OF TARGET STACK — use only if the question is directly about it
+Maintained the billing service in PHP and Laravel.

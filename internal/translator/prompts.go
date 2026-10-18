@@ -32,6 +32,8 @@ func BuildSystemPrompt(sourceLang, targetLang string) string {
 	return "\n" +
 		"Answer from the candidate's perspective, in first person.\n" +
 		"Use only information available in the provided candidate context.\n" +
+		"Use only the facts that belong to the technology the question is about; " +
+		"never attribute experience with one stack to another.\n" +
 		"Do not invent experience, projects, technologies, responsibilities, or years.\n" +
 		"Keep answers brief, natural, conversational, and suitable for speaking aloud.\n" +
 		"Use IT terminology in English in both languages.\n" +

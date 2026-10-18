@@ -169,9 +169,16 @@ func TestCandidateContextRender(t *testing.T) {
 	}
 }
 
+// TestCandidateContextRenderEmpty фиксирует M9.3: пустая выдача (ни одного
+// факта с телом) рендерится явной строкой, а не пустой строкой промпта.
 func TestCandidateContextRenderEmpty(t *testing.T) {
-	if got := (CandidateContext{}).Render(); got != "" {
-		t.Errorf("Render empty: got %q, want empty", got)
+	if got := (CandidateContext{}).Render(); got != EmptyRetrievalNotice {
+		t.Errorf("Render empty: got %q, want %q", got, EmptyRetrievalNotice)
+	}
+	// Факты есть, но тела у них пустые — это тоже пустая выдача.
+	cc := CandidateContext{Facts: []RetrievalResult{{FactID: "a", Content: ""}}}
+	if got := cc.Render(); got != EmptyRetrievalNotice {
+		t.Errorf("Render empty-content facts: got %q, want %q", got, EmptyRetrievalNotice)
 	}
 }
 

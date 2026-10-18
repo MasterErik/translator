@@ -356,22 +356,57 @@ func (r *Retriever) stackMultiplier(i int, sets stackdet.Sets) (float64, string)
 }
 
 // result материализует кандидата в RetrievalResult (Breakdown — только при
-// opts.Explain).
+// opts.Explain). Метки факта (Stack/Period/Weight, M9.1) копируются из Fact;
+// StackDisplay разрешается здесь, потому что Render не видит manifest.
 func (r *Retriever) result(c scoredCandidate, content string, opts RetrieveOptions) RetrievalResult {
 	res := RetrievalResult{
-		FactID:      c.fact.ID,
-		SectionID:   c.fact.Section,
-		Score:       c.parts.rankScore(),
-		Content:     content,
-		Raw:         c.parts.raw(),
-		Rank:        c.parts.rankScore(),
-		OutOfTarget: c.parts.OutOfTarget,
+		FactID:       c.fact.ID,
+		SectionID:    c.fact.Section,
+		Score:        c.parts.rankScore(),
+		Content:      content,
+		Raw:          c.parts.raw(),
+		Rank:         c.parts.rankScore(),
+		OutOfTarget:  c.parts.OutOfTarget,
+		Stack:        append([]string(nil), c.fact.Stack...),
+		StackDisplay: r.stackDisplay(c.fact.Stack),
+		Period:       c.fact.Period,
+		Weight:       c.fact.Weight,
 	}
 	if opts.Explain {
 		b := r.breakdown(c)
 		res.Breakdown = &b
 	}
 	return res
+}
+
+// stackDisplay переводит канонические имена стеков факта в человекочитаемые
+// метки семей (java → Java, golang → Go). Если семейство не найдено или у него
+// пустой Display — используется само каноническое имя.
+func (r *Retriever) stackDisplay(stack []string) []string {
+	if len(stack) == 0 {
+		return nil
+	}
+	byName := make(map[string]string, len(r.families))
+	for _, f := range r.families {
+		if d := strings.TrimSpace(f.Display); d != "" {
+			byName[f.Name] = d
+		}
+	}
+	out := make([]string, 0, len(stack))
+	for _, s := range stack {
+		if s == "" {
+			continue
+		}
+		if d, ok := byName[s]; ok {
+			out = append(out, d)
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // breakdown собирает диагностическое разложение кандидата.
