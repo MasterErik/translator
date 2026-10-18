@@ -450,7 +450,7 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 	if !hideTranslation {
 		children = append(children,
 			// 2. Translation History — скролл, 10 строк, переводы.
-			layout.Flexed(0.45, func(gtx layout.Context) layout.Dimensions {
+			layout.Flexed(0.25, func(gtx layout.Context) layout.Dimensions {
 				return layoutTranslationHistory(gtx, th, translations, fs, &o.translationList, needScrollTrans)
 			}),
 			layout.Rigid(layoutZoneSeparator),
@@ -459,8 +459,8 @@ func (o *Overlay) render(gtx layout.Context, th *material.Theme) FrameMetrics {
 
 	// 3. AnswerCandidates — основная зона ответов. Ошибка генерации (Type=Error)
 	// рендерится в этой же зоне приоритетно. В debug-режиме без переводов зона 3
-	// занимает весь остаток высоты (1.0), иначе делит 55/45 с зоной 2.
-	zone3Weight := float32(0.55)
+	// занимает весь остаток высоты (1.0), иначе делит 75/25 с зоной 2.
+	zone3Weight := float32(0.75)
 	if hideTranslation {
 		zone3Weight = 1.0
 	}
@@ -1037,11 +1037,11 @@ func layoutAnswerHint(gtx layout.Context, th *material.Theme, state string, fs i
 
 // layoutAnswers — подсказки активной метки (зона 3): лента меток и шапка
 // вопроса сверху (только для сообщений с контрактом таймлайна), затем строки
-// Source (белый) / Target (зелёный) с вертикальным скроллом. Если текста
-// ответа нет — вместо пустоты подсказка состояния (idle/queued/failed).
+// Source (зелёный, английский) / Target (белый, русский) с вертикальным
+// скроллом. Если текста ответа нет — подсказка состояния (idle/queued/failed).
 // Шрифт строк ответа — единый fs (Task 3.0). needScroll — автоскролл (Task 3.1).
 func layoutAnswers(gtx layout.Context, th *material.Theme, msg UIMessage, fs int, list *layout.List, needScroll bool) layout.Dimensions {
-	// Собираем плоский список: Source (белый), Target (зелёный).
+	// Собираем плоский список: Source (зелёный), Target (белый).
 	items := make([]answerLine, 0, len(msg.Answers)*2)
 	for _, ans := range msg.Answers {
 		if ans.Source != "" {
@@ -1104,10 +1104,12 @@ func layoutAnswerLines(gtx layout.Context, th *material.Theme, items []answerLin
 	return list.Layout(gtx, len(items), func(gtx layout.Context, idx int) layout.Dimensions {
 		line := items[idx]
 		l := overlayLabel(th, unit.Sp(fs), line.text)
+		// Английский ответ (Source) — зелёный (главный, для произнесения),
+		// русский перевод (Target) — белый (вторичный).
 		if line.isRU {
-			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
-		} else {
 			l.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		} else {
+			l.Color = color.NRGBA{R: 144, G: 238, B: 144, A: 255}
 		}
 		l.Alignment = text.Start
 		return l.Layout(gtx)
