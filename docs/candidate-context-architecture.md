@@ -32,12 +32,15 @@ section-aware бонус к score, не является hard-фильтром.
 |---|---|
 | `types.go` | `FileMeta`, `Section`, `Fact`, `Manifest`, `Index`, `RetrievalResult`, `CandidateContext.Render()` |
 | `load.go` | `LoadManifest`, `LoadIndex`, `CheckIndexFresh`, `LoadCandidateContext` |
-| `tokenize.go` | `Tokenizer`: Normalize→Tokenize→RemoveStopWords→Canonicalize; alias validation |
+| `tokenize.go` | `Tokenizer`: Normalize→Substitute→Tokenize→RemoveStopWords→Canonicalize; `TokenizerVersion` (входит в freshness) |
 | `builder.go` | `BuildIndex` (markers→facts, offsets, SHA256), `SaveIndex` (temp+rename) |
 | `score.go` | Веса полей, IDF, phrase/bigram matching |
 | `retrieval.go` | `Retriever`: dfMap, title/section tokens, ranking, точечное чтение тел |
-| `budget.go` | `Budgeter`: раздельные бюджеты profile/facts, UTF-8 safe обрезка |
-| `eval.go` | `EvalQuery`, `EvalDataset`, `LoadEvalDataset`, `EvalMetrics`, `Evaluate` (Recall@k/MRR) |
+| `budget.go` | `Budgeter`: раздельные бюджеты profile/matrix/facts, UTF-8 safe обрезка |
+| `contextfn.go` | `BuildContextFn` — единый вход сборки контекста (retrieval→budget→render→hints) |
+| `stackdet` | `stackdet.Detect`: детерминированное определение целевого стека из вопроса |
+| `eval.go` | `EvalQuery`, `EvalDataset`, `EvalMetrics`, `Evaluate` (сырой ranking) и `EvaluateContextFn` (итоговый prompt: Recall@k/MRR/LeakRate/EmptyRate/FalseShowRate) |
+| `eval_validate.go` | Валидатор v2-набора: источники меток, дубли, `no_relevant` |
 
 ## Жизненный цикл (startup)
 
@@ -51,11 +54,16 @@ LoadCandidateContext(root)
 ```
 
 Stale при: изменении manifest.json (включая global_aliases и profile), изменении
-размера/SHA256 source-файла, несовместимой версии index, отсутствии ожидаемого
-source-файла. Source-файлы не меняются в runtime — file watcher/locking не нужны.
+размера/SHA256 source-файла, несовместимой версии index, несовпадении
+`tokenizer_version` (включая отсутствие — иначе индекс со старой семантикой
+токенов молча остался бы «свежим»), отсутствии ожидаемого source-файла.
+Source-файлы не меняются в runtime — file watcher/locking не нужны.
 
-При ошибке пересборки pipeline делает legacy fallback (`CandidateContextFile`),
-если он задан; иначе startup завершается ошибкой.
+При ошибке загрузки/пересборки поведение задаёт `on_load_error` (D15):
+`fail` (default) — startup завершается ошибкой; `degraded` — сессия без фактов
+(`Degraded=true`). Legacy-путь (`CandidateContextFile`) включается только явным
+`allow_legacy_fallback` (default false) — иначе ошибка сборки не подменяется
+молча нерелевантным файлом.
 
 ## Поток retrieval (на каждый вопрос)
 
@@ -69,7 +77,8 @@ source-файла. Source-файлы не меняются в runtime — file w
   → score < minScore → отброс
   → сортировка score DESC, tie-break по FactID ASC
   → topK → точечное чтение тел через io.NewSectionReader
-  → Budgeter: profile ≤ MaxProfileTokens, факты целиком ≤ MaxTokens
+  → Budgeter: profile ≤ MaxProfileTokens, technical_matrix ≤ MaxMatrixTokens,
+    факты целиком ≤ MaxTokens
   → CandidateContext.Render() → AnswerRequest.CandidateContext (prompt-ready)
 ```
 
@@ -97,8 +106,14 @@ source-файла. Source-файлы не меняются в runtime — file w
 | `dir` / `CANDIDATE_CONTEXT_DIR` | `""` | путь к каталогу candidate_context; `""` = legacy |
 | `max_tokens` / `CANDIDATE_CONTEXT_MAX_TOKENS` | `2000` | бюджет фактов |
 | `max_profile_tokens` / `CANDIDATE_CONTEXT_MAX_PROFILE_TOKENS` | `150` | бюджет профиля |
+| `max_matrix_tokens` / `CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS` | `100` | бюджет `technical_matrix` |
 | `min_score` / `CANDIDATE_CONTEXT_MIN_SCORE` | `0` | минимальный lexical score (0 = без порога) |
 | `top_k` / `CANDIDATE_CONTEXT_TOP_K` | `5` | максимум фактов |
+| `allow_legacy_fallback` / `CANDIDATE_CONTEXT_ALLOW_LEGACY_FALLBACK` | `false` | D14: разрешить legacy-файл при ошибке сборки |
+| `on_load_error` / `CANDIDATE_CONTEXT_ON_LOAD_ERROR` | `fail` | D15: `fail` \| `degraded` |
+
+Нулевой бюджет здесь означает «поле не задано» → подставляется default с WARN
+на старте (не «без лимита»); отрицательный — ошибка старта.
 
 `Retriever` не знает о budget; `Budgeter` не знает о `min_score` и tokenizer.
 

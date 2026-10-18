@@ -197,6 +197,7 @@ func New(cfg Config) (*Pipeline, error) {
 		MinScore:            cfg.CandidateContext.MinScore,
 		MaxTokens:           cfg.CandidateContext.MaxTokens,
 		MaxProfileTokens:    cfg.CandidateContext.MaxProfileTokens,
+		MaxMatrixTokens:     cfg.CandidateContext.MaxMatrixTokens,
 		LegacyFile:          cfg.CandidateContextFile,
 		AllowLegacyFallback: cfg.CandidateContext.AllowLegacyFallback,
 		HintsDir:            cfg.Hints.Dir,

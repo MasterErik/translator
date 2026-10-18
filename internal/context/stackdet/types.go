@@ -18,10 +18,10 @@ package stackdet
 // "java", "golang"), тот же, что в Fact.Stack. Display — человекочитаемая
 // метка для prompt ("PHP", "Java", "Go").
 type Family struct {
-	Name      string   // каноническое имя: "php", "java", "golang"
-	Display   string   // "PHP", "Java", "Go" — для меток в prompt
-	Members   []string // laravel, symfony, composer / spring, hibernate, jvm / golang
-	Ambiguous []string // члены семьи, которые НЕЛЬЗЯ считать однозначным упоминанием
+	Name      string   `json:"name"`      // каноническое имя: "php", "java", "golang"
+	Display   string   `json:"display"`   // "PHP", "Java", "Go" — для меток в prompt
+	Members   []string `json:"members"`   // laravel, symfony, composer / spring, hibernate, jvm / golang
+	Ambiguous []string `json:"ambiguous"` // члены семьи, которые НЕЛЬЗЯ считать однозначным упоминанием
 }
 
 // Sets — результат Detect: три непересекающихся по смыслу множества стеков.

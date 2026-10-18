@@ -58,6 +58,7 @@ func main() {
 		MinScore:            *minScore,
 		MaxTokens:           *maxTokens,
 		MaxProfileTokens:    *maxProfileTokens,
+		MaxMatrixTokens:     candidatecontext.DefaultMaxMatrixTokens,
 		LegacyFile:          *legacyFile,
 		AllowLegacyFallback: *allowLegacy,
 		HintsDir:            *hintsDir,

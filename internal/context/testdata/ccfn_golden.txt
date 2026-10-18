@@ -83,6 +83,9 @@ consumes market events and reprices orders within 50 ms.
 ## Q11: What is your experience with Go?
 Candidate profile:
 Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Built a real-time pricing engine with Kafka and Go microservices; the pipeline
+consumes market events and reprices orders within 50 ms.
 --
 ## Q12: Tell me about your role as Lead System Architect.
 Candidate profile:
@@ -102,6 +105,9 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 ## Q15: Tell me about your batch-to-streaming ETL redesign.
 Candidate profile:
 Synthetic Candidate — backend engineer with Java, PHP and Go experience.
+
+Kafka: partitioning, consumer groups, exactly-once semantics, schema registry.
+RabbitMQ: exchanges and dead-letter queues.
 --
 ## Q16: Have you worked with Oracle?
 Candidate profile:

@@ -82,7 +82,7 @@ func TestCandidateContextE2E(t *testing.T) {
 		t.Fatalf("NewRetriever: %v", err)
 	}
 
-	budgeter := candidatecontext.NewBudgeter(maxTokens, maxProfileTokens)
+	budgeter := candidatecontext.NewBudgeter(maxTokens, maxProfileTokens, candidatecontext.DefaultMaxMatrixTokens)
 	rendered := budgeter.Budget(manifest.Profile, retriever.Retrieve("pricing engine kafka")).Render()
 
 	// Профиль должен присутствовать.

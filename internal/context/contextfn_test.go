@@ -123,6 +123,7 @@ func ccConfig(dir string) ContextFnConfig {
 		Dir:              dir,
 		MaxTokens:        2000,
 		MaxProfileTokens: 150,
+		MaxMatrixTokens:  100,
 		MinScore:         0,
 		TopK:             5,
 	}
@@ -421,9 +422,22 @@ func TestBuildContextFnZeroBudgetsFallBackToDefaults(t *testing.T) {
 			warned++
 		}
 	}
-	if warned != 2 {
-		t.Errorf("ожидались WARN про оба бюджета, got %v", logs)
+	if warned != 3 {
+		t.Errorf("ожидались WARN про все три бюджета (max_tokens, max_profile_tokens, max_matrix_tokens), got %v", logs)
 	}
+	if !containsLog(logs, fmt.Sprintf("%d", DefaultMaxMatrixTokens)) {
+		t.Errorf("в WARN нет дефолта матрицы %d: %v", DefaultMaxMatrixTokens, logs)
+	}
+}
+
+// containsLog — есть ли в логах подстрока (хелпер для проверок WARN).
+func containsLog(logs []string, sub string) bool {
+	for _, l := range logs {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestBuildContextFnNegativeBudgetsFail — отрицательный бюджет это опечатка в
@@ -439,6 +453,68 @@ func TestBuildContextFnNegativeBudgetsFail(t *testing.T) {
 	cfg.MaxProfileTokens = -1
 	if _, err := BuildContextFn(cfg); err == nil {
 		t.Fatal("ожидалась ошибка при отрицательном max_profile_tokens")
+	}
+
+	cfg = ccConfig(writeCCDir(t))
+	cfg.MaxMatrixTokens = -1
+	if _, err := BuildContextFn(cfg); err == nil {
+		t.Fatal("ожидалась ошибка при отрицательном max_matrix_tokens")
+	}
+}
+
+// TestBuildContextFnTruncatedMatrixWarns — M4: обрезка technical_matrix не
+// должна быть молчаливой. Матрица рендерится всегда (в т.ч. на вопрос без
+// технических терминов) и обрезается со WARN при старте.
+func TestBuildContextFnTruncatedMatrixWarns(t *testing.T) {
+	dir := writeCCDir(t)
+	matrix := strings.Repeat("golang | 2021-2024 | backend\n", 40) // сильно больше 100 токенов
+	writeFile(t, filepath.Join(dir, "manifest.json"), fmt.Sprintf(`{
+  "profile": "Erik Ivanov",
+  "global_aliases": {},
+  "sections": [{"id": "experience", "title": "Опыт"}],
+  "technical_matrix": %q
+}`, matrix))
+
+	var logs []string
+	cfg := ccConfig(dir)
+	cfg.Logf = func(msg string) { logs = append(logs, msg) }
+
+	fn, err := BuildContextFn(cfg)
+	if err != nil {
+		t.Fatalf("BuildContextFn: %v", err)
+	}
+	if !containsLog(logs, "technical_matrix") {
+		t.Errorf("ожидался WARN об обрезке technical_matrix, got %v", logs)
+	}
+
+	got := fn("привет, как дела", SessionContext{})
+	if !strings.Contains(got.Text, "Technical matrix:") {
+		t.Errorf("матрица должна рендериться всегда, got %q", got.Text)
+	}
+	if strings.Contains(got.Text, matrix) {
+		t.Errorf("матрица не обрезана по бюджету: %q", got.Text)
+	}
+
+	// Короткая матрица проходит целиком и без WARN.
+	shortDir := writeCCDir(t)
+	writeFile(t, filepath.Join(shortDir, "manifest.json"), `{
+  "profile": "Erik Ivanov",
+  "global_aliases": {},
+  "sections": [{"id": "experience", "title": "Опыт"}],
+  "technical_matrix": "golang | 2021-2024"
+}`)
+	var shortLogs []string
+	shortCfg := ccConfig(shortDir)
+	shortCfg.Logf = func(msg string) { shortLogs = append(shortLogs, msg) }
+	shortFn, err := BuildContextFn(shortCfg)
+	if err != nil {
+		t.Fatalf("BuildContextFn(short): %v", err)
+	}
+	if containsLog(shortLogs, "technical_matrix") {
+		t.Errorf("короткая матрица не должна давать WARN: %v", shortLogs)
+	}
+	if out := shortFn("привет", SessionContext{}).Text; !strings.Contains(out, "golang | 2021-2024") {
+		t.Errorf("короткая матрица должна попасть в контекст целиком: %q", out)
 	}
 }
 

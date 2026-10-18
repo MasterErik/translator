@@ -45,6 +45,9 @@ candidate_context:
   dir: "candidate_context"
   max_tokens: 2000
   max_profile_tokens: 150
+  # max_matrix_tokens — бюджет technical_matrix (отдельное поле manifest, не часть
+  # profile): при 0 матрица рендерилась бы бюджетом профиля и теряла хвост.
+  max_matrix_tokens: 100
   min_score: 0
   top_k: 5
 

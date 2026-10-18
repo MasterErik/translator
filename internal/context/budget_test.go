@@ -9,7 +9,7 @@ import (
 )
 
 func TestBudgetProfileWithinLimit(t *testing.T) {
-	b := NewBudgeter(1000, 1000)
+	b := NewBudgeter(1000, 1000, 1000)
 	profile := "Erik Ivanov — Staff Software Engineer"
 	got := b.Budget(profile, nil)
 	if got.Profile != profile {
@@ -24,7 +24,7 @@ func TestBudgetProfileTruncatedUTF8Safe(t *testing.T) {
 	// 2 tokens = 8 bytes. "abc" (3 ASCII bytes) + "Привет" (6 Cyrillic bytes
 	// = 12 bytes). Byte 8 lands in the middle of a multi-byte rune, so a naive
 	// byte slice would corrupt UTF-8.
-	b := NewBudgeter(1000, 2)
+	b := NewBudgeter(1000, 2, 1000)
 	profile := "abcПривет"
 	got := b.Budget(profile, nil)
 
@@ -46,7 +46,7 @@ func TestBudgetProfileTruncatedUTF8Safe(t *testing.T) {
 func TestBudgetProfileRollsBackToSpace(t *testing.T) {
 	// 3 tokens = 12 bytes. Cut lands on "and"; rolls back to the space after
 	// "world", keeping whole words.
-	b := NewBudgeter(1000, 3)
+	b := NewBudgeter(1000, 3, 1000)
 	got := b.Budget("hello world and more", nil)
 	if got.Profile != "hello world" {
 		t.Errorf("Profile: got %q, want %q", got.Profile, "hello world")
@@ -54,7 +54,7 @@ func TestBudgetProfileRollsBackToSpace(t *testing.T) {
 }
 
 func TestBudgetAllFactsFit(t *testing.T) {
-	b := NewBudgeter(1000, 1000)
+	b := NewBudgeter(1000, 1000, 1000)
 	results := []RetrievalResult{
 		{FactID: "a", SectionID: "s", Score: 3.0, Content: "fact a"},
 		{FactID: "b", SectionID: "s", Score: 2.0, Content: "fact b"},
@@ -74,7 +74,7 @@ func TestBudgetAllFactsFit(t *testing.T) {
 func TestBudgetSkipsOversizedFact(t *testing.T) {
 	// 10 tokens = 40 bytes. The big fact (100 bytes) does not fit and must be
 	// skipped; the smaller fact is then included whole.
-	b := NewBudgeter(10, 1000)
+	b := NewBudgeter(10, 1000, 1000)
 	results := []RetrievalResult{
 		{FactID: "big", Content: strings.Repeat("x", 100)},
 		{FactID: "small", Content: "small"}, // 5 bytes = 2 tokens
@@ -94,7 +94,7 @@ func TestBudgetSkipsOversizedFact(t *testing.T) {
 func TestBudgetFallbackTruncatesTop1(t *testing.T) {
 	// 4 tokens = 16 bytes. Every fact is oversized, so the top-1 must be
 	// truncated to the fact budget.
-	b := NewBudgeter(4, 1000)
+	b := NewBudgeter(4, 1000, 1000)
 	results := []RetrievalResult{
 		{FactID: "top", Content: strings.Repeat("y", 100)},
 		{FactID: "second", Content: strings.Repeat("z", 100)},
@@ -115,7 +115,7 @@ func TestBudgetFallbackTruncatesTop1(t *testing.T) {
 }
 
 func TestBudgetEmptyResults(t *testing.T) {
-	b := NewBudgeter(100, 100)
+	b := NewBudgeter(100, 100, 1000)
 	got := b.Budget("profile", nil)
 	if len(got.Facts) != 0 {
 		t.Errorf("Facts: got %d, want 0", len(got.Facts))
@@ -128,7 +128,7 @@ func TestBudgetEmptyResults(t *testing.T) {
 func TestBudgetZeroFactBudget(t *testing.T) {
 	// A zero fact budget cannot hold any non-empty fact; the fallback must
 	// truncate the top-1 to nothing rather than panic or emit oversize content.
-	b := NewBudgeter(0, 100)
+	b := NewBudgeter(0, 100, 1000)
 	results := []RetrievalResult{
 		{FactID: "a", Content: "hello"},
 		{FactID: "b", Content: "world"},
@@ -144,7 +144,7 @@ func TestBudgetZeroFactBudget(t *testing.T) {
 
 func TestBudgetSeparateBudgets(t *testing.T) {
 	// A large profile must not consume the fact budget, and vice versa.
-	b := NewBudgeter(100, 5) // 100 tokens facts, 5 tokens profile
+	b := NewBudgeter(100, 5, 1000) // 100 tokens facts, 5 tokens profile
 	profile := "a very long profile text that far exceeds the profile budget"
 	results := []RetrievalResult{
 		{FactID: "f1", Content: strings.Repeat("f", 100)}, // 25 tokens
@@ -160,5 +160,56 @@ func TestBudgetSeparateBudgets(t *testing.T) {
 	}
 	if len(got.Facts) != 2 {
 		t.Fatalf("Facts: got %d, want 2 (big profile must not eat fact budget)", len(got.Facts))
+	}
+}
+
+// TestBudgetWithMatrixTruncates фиксирует M4: technical_matrix рендерится
+// отдельным полем со своим бюджетом и обрезается по UTF-8-безопасной границе,
+// не съедая при этом бюджет ни профиля, ни фактов.
+func TestBudgetWithMatrixTruncates(t *testing.T) {
+	b := NewBudgeter(100, 1000, 5)         // 5 токенов на матрицу
+	matrix := strings.Repeat("stack ", 40) // 240 символов ≈ 60 токенов
+	results := []RetrievalResult{{FactID: "f1", Content: "kafka pricing"}}
+
+	got := b.BudgetWithMatrix("profile", matrix, results)
+
+	if got.Matrix == "" {
+		t.Fatal("Matrix пуста — матрица должна рендериться всегда")
+	}
+	if got.Matrix == matrix {
+		t.Error("Matrix не обрезана, хотя превышает max_matrix_tokens")
+	}
+	if tk := common.EstimateTokens(got.Matrix); tk > 5 {
+		t.Errorf("Matrix превышает свой бюджет: %d токенов", tk)
+	}
+	if len(got.Facts) != 1 {
+		t.Errorf("Facts: got %d, want 1 (бюджет матрицы не должен трогать факты)", len(got.Facts))
+	}
+	// Обрезка обязана оставаться валидным UTF-8 (нет разрезанной руны на хвосте).
+	if !utf8.ValidString(got.Matrix) {
+		t.Errorf("Matrix не является валидным UTF-8: %q", got.Matrix)
+	}
+}
+
+// TestBudgetWithMatrixKeepsShortMatrix проверяет, что короткая матрица
+// проходит целиком (в т.ч. с обрезкой краевых пробелов).
+func TestBudgetWithMatrixKeepsShortMatrix(t *testing.T) {
+	b := NewBudgeter(100, 100, 100)
+	got := b.BudgetWithMatrix("profile", "  stack | period\nphp | 2019-2022  ", nil)
+	if got.Matrix != "stack | period\nphp | 2019-2022" {
+		t.Errorf("Matrix: got %q", got.Matrix)
+	}
+}
+
+// TestBudgetWithoutMatrixUnchanged проверяет, что Budget (без матрицы)
+// сохраняет прежнее поведение: Matrix пуста и не влияет на рендер.
+func TestBudgetWithoutMatrixUnchanged(t *testing.T) {
+	b := NewBudgeter(100, 100, 100)
+	got := b.Budget("profile", nil)
+	if got.Matrix != "" {
+		t.Errorf("Matrix: got %q, want empty", got.Matrix)
+	}
+	if got.Profile != "profile" {
+		t.Errorf("Profile: got %q", got.Profile)
 	}
 }

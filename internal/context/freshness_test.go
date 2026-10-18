@@ -77,6 +77,70 @@ func TestCheckIndexFreshIncompatibleVersion(t *testing.T) {
 	}
 }
 
+// TestCheckIndexFreshIncompatibleTokenizerVersion: индекс, собранный другим
+// токенизатором, несовместим по СЕМАНТИКЕ токенов, даже когда формат
+// (IndexVersion) и все source-файлы совпадают.
+func TestCheckIndexFreshIncompatibleTokenizerVersion(t *testing.T) {
+	dir, manifest, index := setupTree(t)
+	if index.TokenizerVersion != TokenizerVersion {
+		t.Fatalf("BuildIndex не проставил TokenizerVersion: got %q, want %q",
+			index.TokenizerVersion, TokenizerVersion)
+	}
+	index.TokenizerVersion = TokenizerVersion + "-old"
+	fresh, reason := CheckIndexFresh(manifest, index, dir)
+	if fresh || reason != "несовместимая версия токенизатора" {
+		t.Fatalf("CheckIndexFresh: got (%v, %q), want (false, \"несовместимая версия токенизатора\")", fresh, reason)
+	}
+}
+
+// TestCheckIndexFreshMissingTokenizerVersion: отсутствие версии токенизатора
+// — stale, а не «совместимо». Индекс без поля собран до разграничения версий,
+// и его токены нельзя считать эквивалентными текущей семантике.
+func TestCheckIndexFreshMissingTokenizerVersion(t *testing.T) {
+	dir, manifest, index := setupTree(t)
+	index.TokenizerVersion = ""
+	fresh, reason := CheckIndexFresh(manifest, index, dir)
+	if fresh || reason != "index без версии токенизатора" {
+		t.Fatalf("CheckIndexFresh: got (%v, %q), want (false, \"index без версии токенизатора\")", fresh, reason)
+	}
+}
+
+// TestCheckIndexFreshTokenizerVersionJSON: то же через реальный JSON —
+// поле tokenizer_version в index.json отсутствует (старый индекс).
+func TestCheckIndexFreshTokenizerVersionJSON(t *testing.T) {
+	dir, manifest, index := setupTree(t)
+	index.TokenizerVersion = ""
+	if err := SaveIndex(index, filepath.Join(dir, "index.json")); err != nil {
+		t.Fatalf("SaveIndex: %v", err)
+	}
+	loaded, err := LoadIndex(filepath.Join(dir, "index.json"))
+	if err != nil {
+		t.Fatalf("LoadIndex: %v", err)
+	}
+	if loaded.TokenizerVersion != "" {
+		t.Fatalf("index без версии: got %q после round-trip", loaded.TokenizerVersion)
+	}
+	fresh, reason := CheckIndexFresh(manifest, loaded, dir)
+	if fresh || reason != "index без версии токенизатора" {
+		t.Fatalf("CheckIndexFresh: got (%v, %q), want (false, \"index без версии токенизатора\")", fresh, reason)
+	}
+}
+
+func TestIsTokenizerVersionCompatible(t *testing.T) {
+	if IsTokenizerVersionCompatible(nil) {
+		t.Error("nil index должен быть несовместим")
+	}
+	if !IsTokenizerVersionCompatible(&Index{TokenizerVersion: TokenizerVersion}) {
+		t.Error("текущая TokenizerVersion должна быть совместима")
+	}
+	if IsTokenizerVersionCompatible(&Index{TokenizerVersion: ""}) {
+		t.Error("пустая TokenizerVersion должна быть несовместима")
+	}
+	if IsTokenizerVersionCompatible(&Index{TokenizerVersion: TokenizerVersion + "-x"}) {
+		t.Error("другая TokenizerVersion должна быть несовместима")
+	}
+}
+
 func TestCheckIndexFreshManifestChanged(t *testing.T) {
 	dir, _, index := setupTree(t)
 	// Изменяем profile в manifest.json на диске.
@@ -100,8 +164,8 @@ func TestCheckIndexFreshGlobalAliasesChanged(t *testing.T) {
 }
 
 func TestCheckIndexFreshManifestUnreadable(t *testing.T) {
-	// index валиден по версии, но manifest.json отсутствует.
-	index := &Index{Version: IndexVersion, ManifestSHA256: "deadbeef"}
+	// index валиден по версиям, но manifest.json отсутствует.
+	index := &Index{Version: IndexVersion, TokenizerVersion: TokenizerVersion, ManifestSHA256: "deadbeef"}
 	fresh, reason := CheckIndexFresh(&Manifest{}, index, t.TempDir())
 	if fresh || reason != "не удалось прочитать manifest.json" {
 		t.Fatalf("CheckIndexFresh: got (%v, %q), want (false, \"не удалось прочитать manifest.json\")", fresh, reason)

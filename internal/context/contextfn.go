@@ -45,6 +45,9 @@ const (
 const (
 	DefaultMaxTokens        = 2000
 	DefaultMaxProfileTokens = 150
+	// DefaultMaxMatrixTokens — бюджет technical_matrix (M4). Матрица рендерится
+	// всегда, но своим бюджетом: бюджет профиля (150) обрезал бы её хвост.
+	DefaultMaxMatrixTokens = 100
 )
 
 // ContextFnConfig — конфигурация единой сборки контекста. Один и тот же вход
@@ -56,6 +59,7 @@ type ContextFnConfig struct {
 	MinScore         float64
 	MaxTokens        int
 	MaxProfileTokens int
+	MaxMatrixTokens  int
 
 	// Legacy-режим (D14).
 	LegacyFile          string // путь к файлу базы CV (передаётся целиком)
@@ -173,9 +177,9 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 	// Нулевые бюджеты — не «без лимита», а тихая потеря контекста: Budgeter
 	// с maxTokens=0 не вмещает ни одного факта и отдаёт усечённый top-1.
 	// Поэтому 0 → дефолт с WARN, отрицательное значение → ошибка старта.
-	if cfg.MaxTokens < 0 || cfg.MaxProfileTokens < 0 {
-		return nil, fmt.Errorf("candidatecontext: бюджеты контекста не могут быть отрицательными (max_tokens=%d, max_profile_tokens=%d)",
-			cfg.MaxTokens, cfg.MaxProfileTokens)
+	if cfg.MaxTokens < 0 || cfg.MaxProfileTokens < 0 || cfg.MaxMatrixTokens < 0 {
+		return nil, fmt.Errorf("candidatecontext: бюджеты контекста не могут быть отрицательными (max_tokens=%d, max_profile_tokens=%d, max_matrix_tokens=%d)",
+			cfg.MaxTokens, cfg.MaxProfileTokens, cfg.MaxMatrixTokens)
 	}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = DefaultMaxTokens
@@ -184,6 +188,10 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 	if cfg.MaxProfileTokens == 0 {
 		cfg.MaxProfileTokens = DefaultMaxProfileTokens
 		logf(fmt.Sprintf("WARN: candidate_context.max_profile_tokens не задан — используется %d", DefaultMaxProfileTokens))
+	}
+	if cfg.MaxMatrixTokens == 0 {
+		cfg.MaxMatrixTokens = DefaultMaxMatrixTokens
+		logf(fmt.Sprintf("WARN: candidate_context.max_matrix_tokens не задан — используется %d", DefaultMaxMatrixTokens))
 	}
 
 	retriever, budgeter, manifest, err := newContextRetriever(cfg)
@@ -211,11 +219,18 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 		return failOrDegraded(cause)
 	}
 
+	if matrix := strings.TrimSpace(manifest.TechnicalMatrix); matrix != "" {
+		if truncateToTokens(matrix, cfg.MaxMatrixTokens) != matrix {
+			logf(fmt.Sprintf("WARN: technical_matrix манифеста (%d символов) превышает max_matrix_tokens=%d — в prompt уйдёт обрезанная матрица",
+				len(matrix), cfg.MaxMatrixTokens))
+		}
+	}
+
 	return func(question string, s SessionContext) ContextResult {
 		// s (SessionContext) участвует в ранжировании начиная с M7b
 		// (стек-множители); на этапе M0 контракт уже зафиксирован.
 		_ = s
-		budgeted := budgeter.Budget(manifest.Profile, retriever.Retrieve(question))
+		budgeted := budgeter.BudgetWithMatrix(manifest.Profile, manifest.TechnicalMatrix, retriever.Retrieve(question))
 		out := ContextResult{
 			Text:          budgeted.Render(),
 			FactIDs:       factIDsOf(budgeted),
@@ -307,7 +322,7 @@ func newContextRetriever(cfg ContextFnConfig) (*Retriever, *Budgeter, *Manifest,
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("инициализация retriever candidate context: %w", err)
 	}
-	budgeter := NewBudgeter(cfg.MaxTokens, cfg.MaxProfileTokens)
+	budgeter := NewBudgeter(cfg.MaxTokens, cfg.MaxProfileTokens, cfg.MaxMatrixTokens)
 	return retriever, budgeter, manifest, nil
 }
 

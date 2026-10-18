@@ -56,10 +56,11 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 	}
 
 	index := &Index{
-		Version:        IndexVersion,
-		ManifestSHA256: hex.EncodeToString(manifestSHA[:]),
-		Files:          make([]FileMeta, 0, len(manifest.Sections)),
-		Facts:          make([]Fact, 0),
+		Version:          IndexVersion,
+		TokenizerVersion: TokenizerVersion,
+		ManifestSHA256:   hex.EncodeToString(manifestSHA[:]),
+		Files:            make([]FileMeta, 0, len(manifest.Sections)),
+		Facts:            make([]Fact, 0),
 	}
 	seenFactIDs := make(map[string]struct{})
 
@@ -102,12 +103,19 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 }
 
 // factMarker — JSON-содержимое одного маркера "<!-- fact ... -->".
+// Stack/Period/Weight описывают принадлежность факта стеку (M6a/M6b);
+// LintIgnore — осознанное исключение из lint'а «токен tech_families в тексте
+// без stack» (M6b), в индекс не переносится.
 type factMarker struct {
-	ID       string   `json:"id"`
-	Section  string   `json:"section"`
-	Title    string   `json:"title"`
-	Keywords []string `json:"keywords"`
-	Aliases  []string `json:"aliases"`
+	ID         string   `json:"id"`
+	Section    string   `json:"section"`
+	Title      string   `json:"title"`
+	Keywords   []string `json:"keywords"`
+	Aliases    []string `json:"aliases"`
+	Stack      []string `json:"stack"`
+	Period     string   `json:"period"`
+	Weight     string   `json:"weight"`
+	LintIgnore string   `json:"lint_ignore"`
 }
 
 // parseFactMarkers находит все маркеры "<!-- fact ... -->" в raw и строит
@@ -180,6 +188,13 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
 		for _, a := range fm.Aliases {
 			aliases = append(aliases, tokenizer.Process(a)...)
 		}
+		// Stack канонизируется тем же Tokenizer'ом, что keywords/aliases:
+		// в индексе (и при валидации M6b) он обязан совпадать с Family.Name,
+		// то есть "golang", а не "go".
+		stack := make([]string, 0, len(fm.Stack))
+		for _, s := range fm.Stack {
+			stack = append(stack, tokenizer.Process(s)...)
+		}
 
 		facts = append(facts, Fact{
 			ID:            fm.ID,
@@ -190,6 +205,9 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer) ([]Fact, error) {
 			Keywords:      keywords,
 			Aliases:       aliases,
 			ContentTokens: tokenizer.Process(string(body)),
+			Stack:         stack,
+			Period:        strings.TrimSpace(fm.Period),
+			Weight:        strings.TrimSpace(fm.Weight),
 		})
 	}
 	return facts, nil

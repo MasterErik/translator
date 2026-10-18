@@ -38,8 +38,20 @@ func LoadIndex(path string) (*Index, error) {
 
 // IsIndexVersionCompatible сообщает, совместим ли формат index с текущим
 // билдером/токенизатором. Несовместимый index требует пересборки.
+//
+// Совместимость формата и совместимость токенизатора — разные проверки:
+// формат проверяется здесь (IndexVersion), семантика токенов — в
+// IsTokenizerVersionCompatible (TokenizerVersion).
 func IsIndexVersionCompatible(idx *Index) bool {
 	return idx != nil && idx.Version == IndexVersion
+}
+
+// IsTokenizerVersionCompatible сообщает, посчитаны ли токены индекса текущей
+// версией токенизатора (TokenizerVersion). Индекс с другой ИЛИ отсутствующей
+// версией несовместим — отсутствие версии означает сборку до появления
+// разграничения, и её токены нельзя считать эквивалентными текущей семантике.
+func IsTokenizerVersionCompatible(idx *Index) bool {
+	return idx != nil && idx.TokenizerVersion == TokenizerVersion
 }
 
 // CheckIndexFresh проверяет, актуален ли index относительно manifest.json и
@@ -52,6 +64,12 @@ func CheckIndexFresh(manifest *Manifest, index *Index, root string) (fresh bool,
 	}
 	if !IsIndexVersionCompatible(index) {
 		return false, "несовместимая версия index"
+	}
+	if index.TokenizerVersion == "" {
+		return false, "index без версии токенизатора"
+	}
+	if !IsTokenizerVersionCompatible(index) {
+		return false, "несовместимая версия токенизатора"
 	}
 
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))

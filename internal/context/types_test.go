@@ -2,8 +2,11 @@ package candidatecontext
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mastererik/translator/internal/context/stackdet"
 )
 
 func TestManifestJSONRoundTrip(t *testing.T) {
@@ -49,6 +52,7 @@ func TestIndexJSONRoundTrip(t *testing.T) {
 				File: "sections/experience.md", Start: 10, End: 20,
 				Title: "Pricing Engine", Keywords: []string{"pricing", "kafka"},
 				Aliases: []string{"price engine"}, ContentTokens: []string{"pricing", "engine"},
+				Stack: []string{"java"}, Period: "2019-2022", Weight: "high",
 			},
 		},
 	}
@@ -68,6 +72,58 @@ func TestIndexJSONRoundTrip(t *testing.T) {
 	}
 	if len(got.Facts) != 1 || got.Facts[0].Start != 10 || got.Facts[0].End != 20 {
 		t.Errorf("facts round-trip failed: %v", got.Facts)
+	}
+	if !reflect.DeepEqual(got.Facts[0].Stack, []string{"java"}) ||
+		got.Facts[0].Period != "2019-2022" || got.Facts[0].Weight != "high" {
+		t.Errorf("stack/period/weight round-trip failed: %+v", got.Facts[0])
+	}
+}
+
+// TestFactStackPeriodWeightOmitEmpty фиксирует формат индекса: у фактов без
+// stack/period/weight поля не появляются в JSON (совместимость с прежним
+// форматом на уровне отдельных фактов).
+func TestFactStackPeriodWeightOmitEmpty(t *testing.T) {
+	data, err := json.Marshal(Fact{ID: "f1", Section: "experience"})
+	if err != nil {
+		t.Fatalf("marshal fact: %v", err)
+	}
+	for _, key := range []string{"\"stack\"", "\"period\"", "\"weight\""} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("пустое поле %s не должно попадать в JSON: %s", key, data)
+		}
+	}
+}
+
+func TestManifestTechFamiliesAndMatrixRoundTrip(t *testing.T) {
+	src := Manifest{
+		Profile: "p",
+		TechFamilies: []stackdet.Family{
+			{Name: "golang", Display: "Go", Members: []string{"golang", "gopher"}, Ambiguous: []string{"go"}},
+		},
+		TechnicalMatrix: "stack | period\ngolang | 2021-2024",
+	}
+	data, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if !strings.Contains(string(data), "\"tech_families\"") || !strings.Contains(string(data), "\"technical_matrix\"") {
+		t.Fatalf("новые поля не сериализуются: %s", data)
+	}
+	var got Manifest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(got.TechFamilies) != 1 {
+		t.Fatalf("TechFamilies: got %+v", got.TechFamilies)
+	}
+	fam := got.TechFamilies[0]
+	if fam.Name != "golang" || fam.Display != "Go" ||
+		!reflect.DeepEqual(fam.Members, []string{"golang", "gopher"}) ||
+		!reflect.DeepEqual(fam.Ambiguous, []string{"go"}) {
+		t.Errorf("Family round-trip failed: %+v", fam)
+	}
+	if got.TechnicalMatrix != src.TechnicalMatrix {
+		t.Errorf("TechnicalMatrix: got %q", got.TechnicalMatrix)
 	}
 }
 
@@ -116,5 +172,34 @@ func TestCandidateContextRender(t *testing.T) {
 func TestCandidateContextRenderEmpty(t *testing.T) {
 	if got := (CandidateContext{}).Render(); got != "" {
 		t.Errorf("Render empty: got %q, want empty", got)
+	}
+}
+
+// TestCandidateContextRenderWithMatrix фиксирует M4: матрица рендерится
+// отдельным блоком между профилем и фактами и не теряется.
+func TestCandidateContextRenderWithMatrix(t *testing.T) {
+	cc := CandidateContext{
+		Profile: "Erik Ivanov",
+		Matrix:  "stack | period\ngolang | 2021-2024",
+		Facts:   []RetrievalResult{{FactID: "a", Content: "Kafka pricing."}},
+	}
+	out := cc.Render()
+	profileIdx := strings.Index(out, "Candidate profile:")
+	matrixIdx := strings.Index(out, "Technical matrix:")
+	factIdx := strings.Index(out, "Kafka pricing.")
+	if profileIdx < 0 || matrixIdx < 0 || factIdx < 0 {
+		t.Fatalf("Render: блоки потеряны: %q", out)
+	}
+	if !(profileIdx < matrixIdx && matrixIdx < factIdx) {
+		t.Errorf("Render: порядок блоков профиль→матрица→факты нарушен: %q", out)
+	}
+}
+
+// TestCandidateContextRenderMatrixOnly проверяет, что матрица рендерится и без
+// профиля (нет ведущих переводов строк).
+func TestCandidateContextRenderMatrixOnly(t *testing.T) {
+	out := (CandidateContext{Matrix: "golang | 2021"}).Render()
+	if !strings.HasPrefix(out, "Technical matrix:") {
+		t.Errorf("Render: got %q", out)
 	}
 }

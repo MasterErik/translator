@@ -35,7 +35,11 @@ candidate_context/
   },
   "sections": [
     {"id": "experience", "title": "Опыт", "summary": "...", "tags": ["java", "kafka"]}
-  ]
+  ],
+  "tech_families": [
+    {"name": "golang", "display": "Go", "members": ["golang"], "ambiguous": ["go"]}
+  ],
+  "technical_matrix": "stack | period\ngolang | 2021-present"
 }
 ```
 
@@ -44,6 +48,14 @@ candidate_context/
   выполняется tokenizer'ом при старте.
 * `sections` — metadata для section-aware scoring. Целиком в prompt не
   попадают.
+* `tech_families` — белый список семейств технологий для определения стека
+  (`internal/context/stackdet`): `name` — канонический ключ (`golang`, не `go`),
+  `display` — метка для prompt, `members` — члены семьи, `ambiguous` — члены,
+  которые нельзя считать однозначным упоминанием вопроса. Он же служит
+  источником допустимых значений `Fact.stack` при валидации.
+* `technical_matrix` — компактная таблица стек × период. Рендерится отдельным
+  блоком prompt'а (`Technical matrix:`) сразу после профиля и со своим бюджетом
+  `max_matrix_tokens` (default 100): бюджет профиля (150) обрезал бы её хвост.
 
 ## sections/*.md и fact markers
 
@@ -61,7 +73,11 @@ Marker — HTML-комментарий с JSON:
   "section": "experience",
   "title": "Pricing Engine & Market Intelligence",
   "keywords": ["pricing", "kafka", "postgresql", "clickhouse"],
-  "aliases": ["price engine", "market data"]
+  "aliases": ["price engine", "market data"],
+  "stack": ["java"],
+  "period": "2021-2024",
+  "weight": "primary",
+  "lint_ignore": "осознанное исключение"
 }
 -->
 Pricing Engine: ...
@@ -75,6 +91,12 @@ Pricing Engine: ...
 * `title` — человекочитаемый заголовок факта.
 * `keywords` — термины для term matching.
 * `aliases` — синонимы факта.
+* `stack` — стеки факта, канонизируются тем же tokenizer'ом и обязаны
+  совпадать с `tech_families[].name` (`golang`, а не `go`).
+* `period` — период занятости, `^\d{4}(-\d{4}|-present)?$`.
+* `weight` — значимость факта (enum).
+* `lint_ignore` — подавляет lint-предупреждение «токен tech_families в тексте
+  при пустом `stack`»; в индекс не переносится.
 
 Отсутствие marker — ошибка builder. Текст между markers — тело факта;
 из него builder строит `ContentTokens` (canonicalized).
@@ -83,7 +105,8 @@ Pricing Engine: ...
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "tokenizer_version": "3",
   "manifest_sha256": "<hex>",
   "files": [
     {"path": "sections/experience.md", "size": 1234, "sha256": "<hex>"}
@@ -98,23 +121,33 @@ Pricing Engine: ...
       "title": "Pricing Engine & Market Intelligence",
       "keywords": ["pricing", "kafka"],
       "aliases": ["price engine"],
-      "content_tokens": ["pricing", "engine", ...]
+      "content_tokens": ["pricing", "engine", ...],
+      "stack": ["java"],
+      "period": "2021-2024",
+      "weight": "primary"
     }
   ]
 }
 ```
 
-* `version` — версия формата (v1 = `1`).
+* `version` — версия формата (`IndexVersion`; v2 = `2`). Несовместимая версия
+  приводит к автоматической пересборке индекса.
+* `tokenizer_version` — версия семантики токенизатора (`TokenizerVersion`).
+  Меняется при любом изменении нормализации, подстановок, сплита токенов,
+  стоп-слов или канонизации; **отсутствующая или чужая версия = индекс stale**
+  (иначе старый индекс молча остался бы «свежим» с токенами старой семантики).
 * `manifest_sha256` — SHA256 содержимого `manifest.json`.
 * `files` — metadata source-файлов (путь, размер, SHA256). Пути используют `/`.
 * `facts` — список фактов. `start`/`end` — byte offsets (int64) тела факта.
-  `keywords`, `aliases`, `content_tokens` — уже canonicalized.
+  `keywords`, `aliases`, `content_tokens`, `stack` — уже canonicalized.
   `title_tokens` в JSON не сохраняются (строятся при создании Retriever).
+  `stack`/`period`/`weight` опускаются в JSON, если пусты.
 
 ## Stale detection
 
 Индекс устарел, если: изменился `manifest.json`, изменился размер или SHA256
-source-файла, версия index несовместима, отсутствует ожидаемый source-файл.
+source-файла, версия index несовместима, `tokenizer_version` не совпадает
+(включая отсутствие), отсутствует ожидаемый source-файл.
 
 ## Scoring (v1)
 
@@ -130,6 +163,15 @@ max +6. `IDF(term) = log((N+1)/(df+1)) + 1`; `df` — по фактам, не п
 
 ## Budget
 
-`MaxTokens` (facts, default 2000) и `MaxProfileTokens` (profile, default 150) —
-раздельные бюджеты. Facts берутся целиком в порядке score; обрезка — только
-fallback для top-1 (UTF-8 safe).
+`MaxTokens` (facts, default 2000), `MaxProfileTokens` (profile, default 150) и
+`MaxMatrixTokens` (`technical_matrix`, default 100) — раздельные бюджеты.
+Facts берутся целиком в порядке score; обрезка — только fallback для top-1
+(UTF-8 safe). Матрица обрезается своим бюджетом независимо от профиля.
+
+**Ноль — не «без лимита».** Нулевой бюджет означает «поле не задано»: вместо
+тихой потери контекста подставляется дефолт, и на старте пишется WARN с
+подставленным значением (в v1 нулевой `MaxTokens` отдавал усечённый top-1 без
+единого предупреждения). Отрицательный бюджет — ошибка старта.
+
+Порядок блоков prompt'а: `Candidate profile:` → `Technical matrix:` (только
+при непустой матрице) → факты.

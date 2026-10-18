@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "version": 2,
+  "tokenizer_version": "3",
   "manifest_sha256": "9e65b008e8ffdab5d92219ef8c4ff4b2138f51435aa48544f08b97e895201f62",
   "files": [
     {
@@ -64,6 +65,8 @@
         "architectural",
         "problem",
         "third-party",
+        "third",
+        "party",
         "instability",
         "legacy",
         "protocols",
@@ -89,6 +92,8 @@
         "extreme",
         "instability",
         "third-party",
+        "third",
+        "party",
         "systems",
         "legacy",
         "protocols",
@@ -184,7 +189,8 @@
         "database",
         "stores",
         "metadata",
-        "ftp/mail",
+        "ftp",
+        "mail",
         "addresses",
         "credentials",
         "polling",
@@ -242,6 +248,8 @@
         "side",
         "deletion",
         "post-processing",
+        "post",
+        "processing",
         "cleanup"
       ],
       "aliases": [
@@ -513,6 +521,8 @@
         "routing",
         "key",
         "drop-on-busy",
+        "drop",
+        "busy",
         "kafka",
         "partition"
       ],
@@ -543,6 +553,8 @@
         "duplicate",
         "thanks",
         "drop-on-busy",
+        "drop",
+        "busy",
         "strategy"
       ]
     },
@@ -560,6 +572,8 @@
         "postgresql",
         "configuration",
         "partner-specific",
+        "partner",
+        "specific",
         "intervals"
       ],
       "aliases": [
@@ -674,6 +688,8 @@
       "title": "What is the Drop-on-Busy strategy?",
       "keywords": [
         "drop-on-busy",
+        "drop",
+        "busy",
         "busy",
         "worker",
         "tick",
@@ -859,7 +875,8 @@
         "threads",
         "cleared",
         "scheduled",
-        "deployments/restarts"
+        "deployments",
+        "restarts"
       ]
     },
     {
@@ -938,7 +955,8 @@
         "file",
         "downloaded",
         "temporary",
-        "directory/memory",
+        "directory",
+        "memory",
         "failure",
         "discarded",
         "transaction",
@@ -1080,6 +1098,7 @@
         "delivery",
         "guarantees",
         "at-least-once",
+        "least",
         "manual",
         "offset",
         "commit",
@@ -1095,6 +1114,7 @@
       ],
       "content_tokens": [
         "at-least-once",
+        "least",
         "manual",
         "offset",
         "commit",
@@ -1159,6 +1179,8 @@
       "title": "Why was two-stage deduplication required?",
       "keywords": [
         "two-stage",
+        "two",
+        "stage",
         "deduplication",
         "network",
         "traffic",
@@ -1202,6 +1224,8 @@
         "deduplication",
         "stage",
         "sha-256",
+        "sha",
+        "256",
         "file",
         "modification",
         "time",
@@ -1228,6 +1252,8 @@
         "fly",
         "metadata",
         "sha-256(filename",
+        "sha",
+        "256(filename",
         "lastmodifieddate",
         "downloading",
         "file",
@@ -1371,6 +1397,8 @@
         "redis",
         "ttl",
         "time-to-live",
+        "time",
+        "live",
         "deduplication",
         "keys",
         "24",
@@ -1401,6 +1429,7 @@
       "title": "How does the system handle Read-Only FTP servers that prohibit file deletion?",
       "keywords": [
         "read-only",
+        "read",
         "ftp",
         "deletion",
         "prohibited",
@@ -1416,6 +1445,7 @@
         "forbid",
         "deletion",
         "read-only",
+        "read",
         "partner",
         "handling"
       ],
@@ -1481,6 +1511,8 @@
         "file",
         "keys",
         "24-hour",
+        "24",
+        "hour",
         "ttl"
       ]
     },
@@ -1496,6 +1528,7 @@
         "vs",
         "postgresql",
         "in-memory",
+        "memory",
         "state",
         "thousands",
         "checks",
@@ -1521,6 +1554,7 @@
         "checks",
         "second",
         "in-memory",
+        "memory",
         "nature",
         "redis",
         "automatic",
@@ -1544,6 +1578,8 @@
       "title": "What is the core of the Dual-Write problem in this architecture?",
       "keywords": [
         "dual-write",
+        "dual",
+        "write",
         "problem",
         "s3",
         "write",
@@ -1557,8 +1593,12 @@
       ],
       "aliases": [
         "dual-write",
+        "dual",
+        "write",
         "issue",
         "three-way",
+        "three",
+        "way",
         "atomic",
         "write"
       ],
@@ -1695,6 +1735,7 @@
       "title": "Why was an In-Memory HashMap chosen for the wait state instead of Kafka Streams (State Store)?",
       "keywords": [
         "in-memory",
+        "memory",
         "hashmap",
         "kafka",
         "streams",
@@ -1703,6 +1744,8 @@
         "kiss",
         "principle",
         "thread-safe",
+        "thread",
+        "safe",
         "collection",
         "minimal",
         "load"
@@ -1736,6 +1779,8 @@
         "streams",
         "standard",
         "thread-safe",
+        "thread",
+        "safe",
         "collection",
         "solves",
         "problem"
@@ -1851,6 +1896,8 @@
         "offset",
         "redelivery",
         "re-execution",
+        "re",
+        "execution",
         "verification"
       ],
       "aliases": [
@@ -1858,6 +1905,8 @@
         "worker",
         "dies",
         "mid-wait",
+        "mid",
+        "wait",
         "crash",
         "wait"
       ],
@@ -1875,6 +1924,8 @@
         "offset",
         "consumer",
         "re-execute",
+        "re",
+        "execute",
         "verification"
       ]
     },
@@ -1892,6 +1943,8 @@
         "lifecycle",
         "policy",
         "15-day",
+        "15",
+        "day",
         "ttl",
         "automatic",
         "purge",
@@ -1913,6 +1966,8 @@
         "lifecycle",
         "policy",
         "15-day",
+        "15",
+        "day",
         "ttl",
         "configured",
         "bucket",
@@ -2152,6 +2207,7 @@
         "operations",
         "number",
         "cleaned-up",
+        "cleaned",
         "inactive",
         "sessions"
       ]
@@ -2188,7 +2244,8 @@
         "handling"
       ],
       "content_tokens": [
-        "canonization/parsing",
+        "canonization",
+        "parsing",
         "error",
         "parse",
         "error",

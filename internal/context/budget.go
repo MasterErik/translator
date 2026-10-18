@@ -11,22 +11,34 @@ import (
 //
 // It knows nothing about minScore, tokenizers, retrieval policy, or threshold
 // semantics — it is only responsible for fitting the candidate context into a
-// token budget. The profile and the facts have separate budgets.
+// token budget. Profile, technical matrix and facts have separate budgets:
+// matrix is a separate manifest field (not part of profile), so sharing the
+// profile budget (150 tokens) would silently cut its tail.
 type Budgeter struct {
 	maxTokens        int // budget for facts
 	maxProfileTokens int // budget for the profile
+	maxMatrixTokens  int // budget for the technical matrix (M4)
 }
 
 // NewBudgeter creates a Budgeter with separate token budgets for facts
-// (maxTokens) and the profile (maxProfileTokens).
-func NewBudgeter(maxTokens, maxProfileTokens int) *Budgeter {
+// (maxTokens), the profile (maxProfileTokens) and the technical matrix
+// (maxMatrixTokens).
+func NewBudgeter(maxTokens, maxProfileTokens, maxMatrixTokens int) *Budgeter {
 	return &Budgeter{
 		maxTokens:        maxTokens,
 		maxProfileTokens: maxProfileTokens,
+		maxMatrixTokens:  maxMatrixTokens,
 	}
 }
 
-// Budget selects prompt-ready candidate context within the configured budgets.
+// Budget selects prompt-ready candidate context within the configured budgets
+// without a technical matrix (см. BudgetWithMatrix).
+func (b *Budgeter) Budget(profile string, results []RetrievalResult) CandidateContext {
+	return b.BudgetWithMatrix(profile, "", results)
+}
+
+// BudgetWithMatrix selects prompt-ready candidate context within the configured
+// budgets, including the technical matrix (M4).
 //
 // Facts are considered in the order they appear in results (already sorted by
 // score — never re-sorted). A fact is included whole when its content fits the
@@ -34,9 +46,14 @@ func NewBudgeter(maxTokens, maxProfileTokens int) *Budgeter {
 // no fact fits whole, the top-1 result's content is truncated (UTF-8 safe) to
 // the fact budget as a fallback. Empty results yield empty facts; the Budgeter
 // never fabricates a result from absent retrieval results.
-func (b *Budgeter) Budget(profile string, results []RetrievalResult) CandidateContext {
+//
+// Matrix (like profile) is always rendered; it is truncated to its own budget
+// on a UTF-8-safe boundary. О факте обрезки сообщает вызывающий (BuildContextFn
+// пишет WARN один раз при старте): Budgeter намеренно не знает про лог.
+func (b *Budgeter) BudgetWithMatrix(profile, matrix string, results []RetrievalResult) CandidateContext {
 	out := CandidateContext{
 		Profile: b.budgetProfile(profile),
+		Matrix:  truncateToTokens(strings.TrimSpace(matrix), b.maxMatrixTokens),
 		Facts:   []RetrievalResult{},
 	}
 
