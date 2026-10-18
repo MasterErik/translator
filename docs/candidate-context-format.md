@@ -92,11 +92,14 @@ Pricing Engine: ...
 * `keywords` — термины для term matching.
 * `aliases` — синонимы факта.
 * `stack` — стеки факта: имя семьи из `tech_families` (`golang`, а не `go`) либо
-  её член (нормализуется к имени семьи при сборке индекса).
+  её член (нормализуется к имени семьи при сборке индекса). По D4 в `stack`
+  попадают только языки/платформы (whitelist: `java`, `golang`, `php`, `python`,
+  `typescript`, `vue`, `delphi`); БД/инструменты (kafka, postgresql, …) остаются
+  в `keywords` и в `stack` не входят.
 * `period` — период занятости, `^\d{4}(-\d{4}|-present)?$`.
 * `weight` — значимость факта, enum: `primary` | `secondary` | `background`.
-* `lint_ignore` — подавляет lint-предупреждение «токен tech_families в тексте
-  при пустом `stack`»; в индекс не переносится.
+* `lint_ignore` — подавляет lint-предупреждение «токен языка/платформы в тексте
+  при пустом `stack`» (whitelist D4); в индекс не переносится.
 
 Отсутствие marker — ошибка builder. Текст между markers — тело факта;
 из него builder строит `ContentTokens` (canonicalized).
@@ -122,9 +125,12 @@ Pricing Engine: ...
 
 Lint (сборка продолжается, предупреждение пишется в лог/консоль):
 
-* токен семейства в `title` или теле факта при пустом `stack` — вероятно,
-  факт размечен неполно, и retrieval не сможет ни дать ему бонус, ни
-  оштрафовать его; подавляется явным `lint_ignore`.
+* токен языка/платформы (whitelist D4: `java`, `golang`, `php`, `python`,
+  `typescript`, `vue`, `delphi`) в `title` или теле факта при пустом `stack` —
+  вероятно, факт размечен неполно, и retrieval не сможет ни дать ему бонус, ни
+  оштрафовать его; подавляется явным `lint_ignore`. Токены БД/инструментов
+  (kafka, postgresql, …) и framework-токены (hibernate, mybatis, …)
+  предупреждений не дают — по D4 они в `stack` не входят.
 
 ## index.json
 
@@ -174,6 +180,40 @@ Lint (сборка продолжается, предупреждение пиш
 source-файла, версия index несовместима, `tokenizer_version` не совпадает
 (включая отсутствие), отсутствует ожидаемый source-файл.
 
+## Токенизация
+
+`Tokenizer.Process` — порядок стадий (зафиксирован тестом `TestProcessOrder`):
+`Normalize → Substitute → Tokenize → RemoveStopWords → Canonicalize`.
+Подстановка видит сырую строку (до edge-trim и стоп-слов), канонизация — после
+подстановки. Вопрос и факты проходят один и тот же пайплайн (симметрия).
+
+Правила и примеры (из golden-теста `tokenize_test.go`, `tokenGolden`):
+
+| Вход | Токены |
+|---|---|
+| `PHP/Laravel` | `php`, `laravel` |
+| `TCP/IP` | `tcp`, `ip` |
+| `R&D` | `r&d` |
+| `low-latency` | `low-latency`, `low`, `latency` |
+| `C++` | `cpp` |
+| `C#` | `csharp` |
+| `.NET Core` | `dotnet`, `core` |
+| `Go microservices` | `golang`, `microservices` |
+| `go live` | `live` (go без контекста — стоп-слово) |
+| `the and in` | — (стоп-слова) |
+| `a | b — c & d` | `b`, `c`, `d` |
+
+Правила: сплит по `/` и `\`; дефис даёт целое + части; `&` внутри слова
+сохраняется; спецтермины (`c++`→`cpp`, `c#`→`csharp`, `.net`→`dotnet`)
+подставляются по точному совпадению и не затрагивают составные имена
+(`asp.net`, `node.js`, `c++20`); `go` → `golang` только в контексте языка
+(`go language`, `go developer`, `with go`, …), deny-list фраз (`go live`,
+`go ahead`, `go through`) остаются; стоп-слова (en+ru) удаляются; глобальные
+aliases канонизируются (`k8s`→`kubernetes`, `postgres`→`postgresql`).
+
+Любое изменение этих правил = bump `TokenizerVersion` (иначе старые индексы
+молча останутся «свежими» с токенами старой семантики).
+
 ## Scoring (v1)
 
 `fact score + section bonus + phrase bonus`. Section bonus и phrase bonus
@@ -185,6 +225,52 @@ content 2. Section fields: tags 3, summary 2; section score умножается
 `sectionWeight` (default 0.3). Phrase bonus: title +3, content +1, cumulative
 max +6. `IDF(term) = log((N+1)/(df+1)) + 1`; `df` — по фактам, не по
 вхождениям. `fact score == 0` не считается результатом.
+
+Поверх lexical score — стек-множитель (M7b): `Core = (field + phrase) × mult`,
+`Rank = Core + section`; пороги и коэффициенты множителя — в
+`docs/candidate-context-architecture.md` («Регулируемые параметры скоринга»).
+
+## Руководство по разметке фактов
+
+Правила (нарушение ломает retrieval, а не только эстетику):
+
+1. **Один факт — один стек.** Смешанный `stack` (`["java","php"]`) делает
+   множитель бесполезным: факт не штрафуется (частичное пересечение) и не
+   бонусуется (не подмножество). Разносите по фактам.
+2. **Нейтральная часть отдельно от технической.** Текст про «hardest problem»
+   без технологий — отдельный факт без `stack`; технический опыт — факт со
+   `stack`.
+3. **В `stack` только язык/платформа** (whitelist D4: java, golang, php,
+   python, typescript, vue, delphi). БД/инструменты (kafka, postgresql, …) —
+   в `keywords`, не в `stack`: иначе факт получает ложный штраф «чужой стек»
+   на сессии другого языка.
+4. **Бытовые слова — антипаттерн.** `current`, `present`, `service`, `web`,
+   `performance`, `go` (вне контекста) в keywords/aliases дают вес поля × IDF
+   и поднимают факт на нерелевантных вопросах. Такие слова — не retrieval-сигнал,
+   а шум.
+5. **`lint_ignore`** — только осознанно: когда язык/платформа упомянута в
+   тексте, но факт сознательно оставлен без `stack`.
+
+Примеры (вымышленные):
+
+Плохо (бытовые слова + инструменты в stack):
+```markdown
+<!-- fact {"id":"exp-x","section":"experience","keywords":["service","current","performance"],"stack":["java","kafka"]} -->
+```
+
+Хорошо:
+```markdown
+<!-- fact
+{"id":"exp-x","section":"experience","title":"Order Processing","keywords":["order processing","kafka","exactly-once"],"stack":["java"]}
+-->
+```
+
+Нейтральный факт без стека:
+```markdown
+<!-- fact
+{"id":"skill-x","section":"skills","keywords":["estimation","architecture initiative"],"title":"Estimating architecture initiatives"}
+-->
+```
 
 ## Budget
 
@@ -199,4 +285,17 @@ Facts берутся целиком в порядке score; обрезка — 
 единого предупреждения). Отрицательный бюджет — ошибка старта.
 
 Порядок блоков prompt'а: `Candidate profile:` → `Technical matrix:` (только
-при непустой матрице) → факты.
+при непустой матрице) → факты, каждый с меткой `[Java · 2018–2024 · primary]`;
+пустая выдача → строка «No relevant facts found…». Детали render/prompt —
+`docs/candidate-context-architecture.md` («Render и prompt (M9)»).
+
+## Миграция v1 → v2
+
+Формат v2 (текущий `IndexVersion = 2`) добавил к v1: `tech_families` и
+`technical_matrix` в `manifest.json`; поля `stack`/`period`/`weight`/`lint_ignore`
+в маркере и `Fact`; `tokenizer_version` в `index.json`. Правила разметки v2:
+`stack` — только язык/платформа (D4), бытовые слова — антипаттерн.
+
+Пересборка индекса — безусловная:
+`go run ./test/context_index -dir candidate_context` (для hints — `-dir hints`).
+Автоматически индекс пересобирается при stale (см. «Stale detection»).

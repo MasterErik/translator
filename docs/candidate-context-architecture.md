@@ -108,6 +108,53 @@ Source-файлы не меняются в runtime — file watcher/locking не
 максимум один раз на термин), TF не учитывается. Raw source файлы НЕ читаются
 для ranking — только после ranking, для отобранных фактов.
 
+## Определение стека
+
+`stackdet.Detect(questionTokens, sessionStack, families)` разводит три множества
+стеков (полные правила и примеры — `docs/candidate-context-multipliers.md`):
+
+| Множество | Смысл |
+|---|---|
+| `Penalty` | session ∪ однозначные упоминания в вопросе — вне него чужой стек штрафуется |
+| `Named` | однозначно названные в вопросе стеки — только они получают бонус |
+| `Exempt` | стеки, упомянутые неоднозначно (например `spring` у `java`) — освобождены от штрафа, без бонуса |
+
+Коэффициенты (`stackdet.DefaultParams`): `Penalty 0.3`, `Bonus 1.5`,
+`Session 1.0` (нейтрален, M7b.5). Пустая сессия и вопрос без упоминаний
+стеков → `Penalty` пусто → множитель `1.0` (штрафов нет). Источник семейств —
+`manifest.tech_families` (`Family{Name, Display, Members, Ambiguous}`).
+
+## Explain-режим
+
+`RetrieveOptions{Explain: true}` заполняет `RetrievalResult.Breakdown`
+(`ScoreBreakdown`): вклады keywords/title/aliases/content, section и phrase
+бонусы, raw/core/rank, `content_ratio`, множитель и reason, вердикты
+content-gate/relative-threshold. `ExplainQuestion` дополнительно показывает
+отклонённых кандидатов с причиной. Прод-путь платит за объяснение только при
+флаге. Инструмент: `test/context_explain -dir … -dataset … -tag … -limit N` —
+печатает строки вида `rank=… raw=… core=… ratio=… kw=… ti=… al=… ct=… sec=…
+ph=… mult=…(reason) | pass/REJ …`.
+
+## Render и prompt (M9)
+
+`CandidateContext.Render()` собирает prompt-ready строку: `Candidate profile:` →
+`Technical matrix:` (при непустой) → факты. Каждый факт предваряется меткой
+`[Java · 2018–2024 · primary]` (стек через `Family.Display`, период
+`YYYY-YYYY → YYYY–YYYY` (en dash) / `-present` / bare year, отсутствующие поля
+опускаются; пустая метка не печатается). `RetrievalResult` несёт
+`Stack`/`Period`/`Weight`/`StackDisplay` — display разрешается при materialize
+из `TechFamilies`, поэтому `Render` не требует manifest.
+
+- Пустая выдача (ноль фактов) → `EmptyRetrievalNotice`: «No relevant facts
+  found — rely on the candidate profile and Technical Matrix; do not invent
+  projects.»
+- `RetrievalResult.OutOfTarget` → пометка перед телом «OUT OF TARGET STACK — use
+  only if the question is directly about it» (hints-факт чужого стека не
+  выдаётся вовсе — D8).
+- `BuildSystemPrompt` (internal/translator) дополнен инструкцией M9.5:
+  использовать только факты, относящиеся к технологии вопроса; не приписывать
+  опыт одного стека другому.
+
 ## Интеграция
 
 - `pipeline.New`: при `CandidateContext.Dir != ""` → `LoadCandidateContext` →
@@ -117,7 +164,12 @@ Source-файлы не меняются в runtime — file watcher/locking не
 - `dispatcher.generateAnswers`: если `candidateContextFn` задан — вызывает его
   с текущим вопросом и кладёт результат (уже prompt-ready строка) в
   `AnswerRequest.CandidateContext`.
-- `BuildSystemPrompt` не меняется: получает уже собранный prompt-ready контекст.
+- `BuildSystemPrompt` получает уже собранный prompt-ready контекст и дополнен
+  инструкцией M9.5 (использовать только факты нужной технологии; не приписывать
+  опыт одного стека другому).
+- Сборка контекста выполняется в одной горутине диспетчера (retrieval не
+  конкурентный): `Retrieve*` не мутирует `Retriever`; состояние индекса
+  read-only после загрузки.
 
 ## Конфигурация
 
@@ -131,13 +183,24 @@ Source-файлы не меняются в runtime — file watcher/locking не
 | `max_matrix_tokens` / `CANDIDATE_CONTEXT_MAX_MATRIX_TOKENS` | `100` | бюджет `technical_matrix` |
 | `min_score` / `CANDIDATE_CONTEXT_MIN_SCORE` | `0` | минимальный lexical score (0 = без порога) |
 | `top_k` / `CANDIDATE_CONTEXT_TOP_K` | `5` | максимум фактов |
+| `relative_threshold` / `CANDIDATE_CONTEXT_RELATIVE_THRESHOLD` | `0.6` | относительный порог (доля лучшего core; совпадает с `DefaultRelativeThreshold` в `score.go` и с дефолтом `applyDefaults` в `config.go`) |
 | `allow_legacy_fallback` / `CANDIDATE_CONTEXT_ALLOW_LEGACY_FALLBACK` | `false` | D14: разрешить legacy-файл при ошибке сборки |
 | `on_load_error` / `CANDIDATE_CONTEXT_ON_LOAD_ERROR` | `fail` | D15: `fail` \| `degraded` |
+
+Отдельно `interview` (env `INTERVIEW_TARGET_STACK`): `target_stack` — целевой
+стек интервью, список (YAML `[java, php]` или строка через запятую). Default
+пусто (D2) — штрафов нет.
 
 Нулевой бюджет здесь означает «поле не задано» → подставляется default с WARN
 на старте (не «без лимита»); отрицательный — ошибка старта.
 
 `Retriever` не знает о budget; `Budgeter` не знает о `min_score` и tokenizer.
+
+Generic env-override (`config.go`): top-level скаляры переопределяются
+переменной окружения по yaml-тегу (reflection, string/int/bool). Вложенные
+структуры (`candidate_context`, `hints`, `interview`) и списки
+(`interview.target_stack`) разбираются явным кодом — reflection их не трогает.
+Невалидное значение `CANDIDATE_CONTEXT_ON_LOAD_ERROR` — громкая ошибка старта.
 
 ## Регулируемые параметры скоринга
 
@@ -150,7 +213,7 @@ Source-файлы не меняются в runtime — file watcher/locking не
 |---|---|---|---|
 | `stackdet.Params.Penalty` | `0.3` | `-penalty` | Штраф факту, чей стек целиком вне session ∪ названных в вопросе стеков. Ниже — сильнее давит «чужие» факты → меньше Leak, но риск задавить релевантный факт чужого стека. |
 | `stackdet.Params.Bonus` | `1.5` | `-bonus` | Бонус факту, чей стек явно назван в вопросе (Named). Выше — сильнее поднимает «свой» факт на явный вопрос о стеке. |
-| `stackdet.Params.Session` | `1.25` | `-session` | Бонус факту, чей стек целиком в session (когда вопрос стек не называет). Выше — сильнее поднимает факты session-стека, но душит релевантные контентные факты с пустым стеком; `1.0` нейтрализует бонус. |
+| `stackdet.Params.Session` | `1.0` | `-session` | Бонус факту, чей стек целиком в session (когда вопрос стек не называет). Дефолт `1.0` = нейтрализован (M7b.5): сессионный бонус душил релевантные контентные факты с пустым стеком (no-stack-fact R@1 0.000). Выше — поднимает факты session-стека ценой recall no-stack-fact. |
 | `ContentGateTau` | `0.15` | `-gate-tau` | content-only gate: минимальная доля IDF вопроса, покрытая телом факта; ниже — отброс. Выше — жёстче (меньше ложных, теряет recall). Отрицательное — выключить. |
 | `RelativeThreshold` | `0.6` | `-rel-threshold` | relative threshold: Core ниже top1.Core × порог — отброс. Выше — агрессивнее отсекает хвост. Отрицательное — выключить. |
 
@@ -163,16 +226,90 @@ Source-файлы не меняются в runtime — file watcher/locking не
 по markdown headings. Веса полей/sectionWeight — tuning defaults, меняются
 только по результатам evaluation (train/holdout, метрики Recall@k и MRR).
 
-## Evaluation (baseline)
+Известные риски:
 
-Datasets: `internal/context/testdata/train.json` (15 queries) и
-`holdout.json` (8 queries) — вопросы интервью → relevant FactID.
-Прогон: `go run ./test/context_eval --dir candidate_context --train ... --holdout ...`.
+- **Ложная детекция стека на бытовых словах.** Семейство с коротким членом
+  (например `go` у `golang`) может сработать на обычном слове; отсюда правило
+  разметки: в `stack` только язык/платформа, бытовые слова в keywords/aliases —
+  антипаттерн (см. format.md «Руководство по разметке»).
+- **Малый датасет.** Один запрос сдвигает Recall@k/LeakRate на несколько
+  пунктов; метрики — ориентир, а не точная мера. При калибровке сверяться по
+  margin, а не по сотым долям.
+- **Поведение при ошибке загрузки** зависит от `on_load_error` (fail/degraded)
+  и `allow_legacy_fallback` (см. «Жизненный цикл»).
+- **Нет стемминга/лемматизации**: `running` и `run` — разные токены; синонимия —
+  только через явные `aliases`.
 
-| Dataset | Recall@1 | Recall@3 | Recall@5 | MRR |
-|---|---|---|---|---|
-| train | 0.600 | 0.867 | 0.933 | 0.739 |
-| holdout | 0.500 | 1.000 | 1.000 | 0.729 |
+## Evaluation
 
-Recall@5 ≈ 90%+ (ориентир из плана), MRR ~0.73. Это baseline v1; field weights,
-aliases и ranking корректируются только по результатам evaluation.
+Два набора. **Legacy set** (`train.json` 15 запросов, `holdout.json` 8) —
+заморожен, это regression gate: новые изменения не должны ронять его метрики.
+**v2-набор** (`eval_v2_train.json` 43, `eval_v2_holdout.json` 15) — вопросы с
+тегами-срезами (`no-stack-fact`, `explicit-stack`, `service-collision`, …),
+считает Recall@k/MRR/LeakRate/EmptyRate/FalseShowRate.
+
+Метрики: `Recall@k` — доля кейсов, где хотя бы один relevant факт в top-k;
+`MRR` — средний обратный ранг первого relevant; `LeakRate` — доля кейсов, где
+в выдаче есть `must_not`-факт; `EmptyRate` — доля кейсов с пустой выдачей;
+`FalseShowRate` — доля ложных подсказок (hints).
+
+Реальный прогон 2026-10-18 19:25:27:
+
+```text
+go run ./test/context_eval -dir candidate_context -hints-dir hints \
+  -train internal/context/testdata/train.json -holdout internal/context/testdata/holdout.json \
+  -v2 train=internal/context/testdata/eval_v2_train.json,holdout=internal/context/testdata/eval_v2_holdout.json \
+  -slices
+```
+
+| Набор | R@1 | R@3 | R@5 | MRR | Leak |
+|---|---|---|---|---|---|
+| legacy-train | 0.733 | 0.933 | 1.000 | 0.847 | 0.000 |
+| legacy-hold | 0.875 | 1.000 | 1.000 | 0.917 | 0.000 |
+| v2-train | 0.500 | 0.643 | 0.643 | 0.560 | 0.116 |
+| v2-holdout | 0.429 | 0.429 | 0.429 | 0.429 | 0.067 |
+
+Holdout (v2) — только финальная проверка, не для подбора порогов.
+
+## Эксплуатация
+
+Чек-лист перед интервью:
+
+1. Выставить целевой стек: `interview.target_stack` (config.yaml) или
+   `INTERVIEW_TARGET_STACK` (env). Пусто = штрафов нет (D2).
+2. Убедиться, что legacy-ключ не задан (`CANDIDATE_CONTEXT_FILE` /
+   `candidate_context_file` закомментирован), иначе в prompt уходит весь файл
+   вместо fact-level retrieval.
+3. Проверить строку в логе со стартовым стеком сессии.
+
+Пересборка индекса (безусловная): `go run ./test/context_index -dir candidate_context`
+(для hints — `-dir hints`).
+
+Отладка вопроса: `go run ./test/ctx_probe -dir candidate_context -q "вопрос"`
+(флаг `-scores` — сырой ranking до бюджета/множителей).
+
+Прогон eval — команда выше в «Evaluation».
+
+## Статус и планы
+
+| Модуль | Статус |
+|---|---|
+| M0–M9 | реализованы (см. разделы выше) |
+| M10 индикатор hints off | реализован как лог+notifier, без UI-индикатора |
+
+Отложено: гибридный retrieval (embeddings), слияние инстансов
+candidate_context/hints, UI-индикатор деградации.
+
+## Глоссарий
+
+| Термин | Смысл |
+|---|---|
+| fact | единица retrieval; граница — от маркера до следующего маркера |
+| Raw | `field + section + phrase`, до множителя |
+| Core | `(field + phrase) × mult`, без section-бонуса |
+| Rank | `Core + section`, по нему ранжируется выдача |
+| penalty set | session ∪ однозначные упоминания; вне него чужой стек штрафуется |
+| bonus set | однозначно названный в вопросе стек (`Named`) |
+| OutOfTarget | факт со стеком вне penalty set, оставшийся в выдаче |
+| TokenizerVersion | версия семантики токенизатора, входит в freshness |
+| legacy set | замороженные `train.json`/`holdout.json` для regression gate |
