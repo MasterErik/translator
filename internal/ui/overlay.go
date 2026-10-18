@@ -1203,9 +1203,8 @@ func layoutError(gtx layout.Context, th *material.Theme, msg UIMessage, fs int) 
 // debugInputPrompt — подпись поля ручного ввода.
 const debugInputPrompt = "debug ▸"
 
-// debugInputColor — цвет подписи и текста debug-поля: отличим от белых строк
-// зон 2/4 и зелёных переводов, но в той же гамме, что подсказки/уточнения.
-var debugInputColor = color.NRGBA{R: 150, G: 170, B: 200, A: 255}
+// debugInputColor — цвет подписи и текста debug-поля ввода (чёрный шрифт).
+var debugInputColor = color.NRGBA{R: 0, G: 0, B: 0, A: 255}
 
 // layoutDebugInput — зона ручного ввода (debug-режим): подпись «debug ▸»
 // шрифтом smallFontSize(fs) и однострочный widget.Editor под ней. Высота строки —
