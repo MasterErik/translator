@@ -12,8 +12,10 @@ var questionWords = []string{
 	"what", "how", "why", "when", "where", "who", "which",
 	"can you", "could you", "would you", "will you", "do you",
 	"have you", "did you", "are you", "is it", "is there",
-	"explain", "describe", "tell me", "elaborate", "clarify",
-	"share", "walk me", "talk about", "let's talk about", "give me",
+	"explain", "describe", "tell me", "tell us", "elaborate", "clarify",
+	"share", "share with us", "walk me", "walk us", "walk through",
+	"talk about", "talk us through", "let's talk about", "give me",
+	"introduce yourself", "introduce",
 }
 
 // TranslationEngine orchestrates question classification and answer
@@ -51,6 +53,11 @@ func IsQuestion(text string) bool {
 	// Check for question words/phrases at the start, followed by a word
 	// boundary so that longer words sharing the prefix are not matched.
 	lower := strings.ToLower(trimmed)
+
+	// Strip a leading polite "please" (optionally followed by a comma) so that
+	// "Please tell us…", "Please, describe…" are detected as requests for an
+	// answer. Only strips when "please" is followed by a word boundary.
+	lower = stripLeadingPlease(lower)
 	for _, qw := range questionWords {
 		if !strings.HasPrefix(lower, qw) {
 			continue
@@ -62,6 +69,22 @@ func IsQuestion(text string) bool {
 	}
 
 	return false
+}
+
+// stripLeadingPlease removes a leading polite "please" (optionally followed by
+// a comma and/or whitespace) so that "Please tell us…" and "Please, describe…"
+// are classified as requests for an answer. It only strips when "please" ends
+// at a word boundary, so "pleasing" and "please" alone stay untouched.
+func stripLeadingPlease(s string) string {
+	const please = "please"
+	if !strings.HasPrefix(s, please) {
+		return s
+	}
+	rest := s[len(please):]
+	if rest == "" || (rest[0] != ' ' && rest[0] != '	' && rest[0] != ',') {
+		return s
+	}
+	return strings.TrimLeft(rest, " 	,")
 }
 
 // GenerateAnswers делегирует генерацию подсказок LLM-провайдеру.

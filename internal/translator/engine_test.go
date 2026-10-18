@@ -137,6 +137,16 @@ func TestIsQuestion_TableDriven(t *testing.T) {
 		{"walk me through", true},
 		{"talk about the design", true},
 		{"give me an example", true},
+		{"tell us about yourself", true},
+		{"Tell us a bit about yourself and your experience.", true},
+		{"walk us through your solution", true},
+		{"walk through the architecture", true},
+		{"share with us your background", true},
+		{"talk us through the design", true},
+		{"introduce yourself", true},
+		{"introduce your team", true},
+		{"please tell us about yourself", true},
+		{"Please, describe your role", true},
 
 		// Single question words.
 		{"how", true},
@@ -149,6 +159,11 @@ func TestIsQuestion_TableDriven(t *testing.T) {
 		{"I think microservices are a good fit.", false},
 		{"The weather is nice today.", false},
 		{"Question: how to handle errors", false},
+		{"please", false},
+		{"please hold", false},
+		{"pleasing", false},
+		{"tell", false},
+		{"walking the dog", false},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +225,8 @@ func TestIsQuestion_ImplicitRequests(t *testing.T) {
 		"Describe your latest project.",
 		"Your latest project?",
 		"Let's talk about your latest project.",
+		"Tell us a bit about yourself and your experience.",
+		"Please introduce yourself.",
 	} {
 		if !IsQuestion(phrase) {
 			t.Errorf("IsQuestion(%q) = false, want true", phrase)

@@ -154,6 +154,42 @@ func TestManualQuestionAutoAnswerEnabled(t *testing.T) {
 		}, 2*time.Second)
 	})
 
+	t.Run("побудительная фраза интервьюера запускает генерацию", func(t *testing.T) {
+		// Фраза без вопросительного знака и без вопросительного слова:
+		// распознаётся расширенным списком побудительных фраз («tell us …»).
+		const text = "Tell us a bit about yourself and your experience."
+
+		engine := &mockEngine{answers: []string{"EN: five years | RU: пять лет"}}
+		d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+		defer cancel()
+
+		textStream <- question(text)
+
+		// Ждём наблюдаемый результат авто-генерации: метка дошла до QReady.
+		waitFor(t, func() bool {
+			snap := d.timeline.Snapshot()
+			return len(snap) == 1 && snap[0].State == QReady
+		}, 2*time.Second)
+		waitIdle(t, d)
+
+		calls := engine.Calls()
+		if len(calls) != 1 {
+			t.Fatalf("вызовов GenerateAnswers = %d, want 1 (побудительная фраза обязана запустить генерацию)", len(calls))
+		}
+		if calls[0] != text {
+			t.Errorf("вопрос в LLM = %q, want %q", calls[0], text)
+		}
+
+		snap := d.timeline.Snapshot()
+		if len(snap) != 1 || snap[0].Question != text {
+			t.Fatalf("метка таймлайна = %+v, want 1 метка с текстом вопроса", snap)
+		}
+		waitFor(t, func() bool {
+			_, ok := lastCandidates(overlay)
+			return ok
+		}, 2*time.Second)
+	})
+
 	t.Run("обычная реплика не запускает генерацию", func(t *testing.T) {
 		engine := &mockEngine{answers: []string{"EN: five years | RU: пять лет"}}
 		d, overlay, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
