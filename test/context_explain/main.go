@@ -114,9 +114,13 @@ func main() {
 				verdict = "REJ " + it.RejectedBy
 			}
 			b := it.Breakdown
-			fmt.Printf("  %s %-24s rank=%6.3f raw=%6.3f core=%6.3f ratio=%.3f kw=%.2f ti=%.2f al=%.2f ct=%.2f sec=%.2f ph=%.2f | %s\n",
+			extra := ""
+			if b.Mult != 1 {
+				extra = fmt.Sprintf(" mult=%.2f(%s)", b.Mult, b.MultReason)
+			}
+			fmt.Printf("  %s %-24s rank=%6.3f raw=%6.3f core=%6.3f ratio=%.3f kw=%.2f ti=%.2f al=%.2f ct=%.2f sec=%.2f ph=%.2f%s | %s\n",
 				mark, it.FactID, b.Rank, b.Raw, b.Core, b.ContentRatio,
-				b.Keywords, b.Title, b.Aliases, b.Content, b.Section, b.Phrase, verdict)
+				b.Keywords, b.Title, b.Aliases, b.Content, b.Section, b.Phrase, extra, verdict)
 		}
 		if *summary {
 			continue

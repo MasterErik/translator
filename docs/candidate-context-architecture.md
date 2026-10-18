@@ -139,6 +139,24 @@ Source-файлы не меняются в runtime — file watcher/locking не
 
 `Retriever` не знает о budget; `Budgeter` не знает о `min_score` и tokenizer.
 
+## Регулируемые параметры скоринга
+
+Стек-множители (M7b) и пороги (M7a) — tuning-параметры. Дефолты живут в коде
+(`stackdet.DefaultParams`, `DefaultContentGateTau`, `DefaultRelativeThreshold`);
+для калибровки переопределяются CLI-флагами `test/context_eval` (`-penalty`,
+`-bonus`, `-session`, `-gate-tau`, `-rel-threshold`). В `config.yaml` не вынесены.
+
+| Параметр | Default | Флаг `context_eval` | Влияние |
+|---|---|---|---|
+| `stackdet.Params.Penalty` | `0.3` | `-penalty` | Штраф факту, чей стек целиком вне session ∪ названных в вопросе стеков. Ниже — сильнее давит «чужие» факты → меньше Leak, но риск задавить релевантный факт чужого стека. |
+| `stackdet.Params.Bonus` | `1.5` | `-bonus` | Бонус факту, чей стек явно назван в вопросе (Named). Выше — сильнее поднимает «свой» факт на явный вопрос о стеке. |
+| `stackdet.Params.Session` | `1.25` | `-session` | Бонус факту, чей стек целиком в session (когда вопрос стек не называет). Выше — сильнее поднимает факты session-стека, но душит релевантные контентные факты с пустым стеком; `1.0` нейтрализует бонус. |
+| `ContentGateTau` | `0.15` | `-gate-tau` | content-only gate: минимальная доля IDF вопроса, покрытая телом факта; ниже — отброс. Выше — жёстче (меньше ложных, теряет recall). Отрицательное — выключить. |
+| `RelativeThreshold` | `0.6` | `-rel-threshold` | relative threshold: Core ниже top1.Core × порог — отброс. Выше — агрессивнее отсекает хвост. Отрицательное — выключить. |
+
+Порядок правил множителя и точная семантика — `stackdet/multiplier.go`
+(комментарий над `Multiplier`). Замер влияния — `test/context_eval -slices`.
+
 ## Ограничения (v1)
 
 Без embeddings/semantic retrieval, без приоритета фактов, без авто-сегментации

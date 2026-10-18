@@ -10,14 +10,17 @@ import (
 )
 
 // manifestFamilies — manifest с семьями java (kotlin/spring — члены, spring
-// неоднозначен) и php (laravel — член).
+// неоднозначен), php (laravel — член) и postgresql (БД: по D4 не входит в
+// стек, поэтому её токены не должны давать lint-предупреждений).
 const manifestFamilies = `{
   "profile": "Erik",
   "global_aliases": {},
   "sections": [{"id": "experience", "title": "Опыт"}],
   "tech_families": [
     {"name": "java", "display": "Java", "members": ["java", "kotlin", "spring"], "ambiguous": ["spring"]},
-    {"name": "php", "display": "PHP", "members": ["php", "laravel"]}
+    {"name": "php", "display": "PHP", "members": ["php", "laravel"]},
+    {"name": "postgresql", "display": "PostgreSQL", "members": ["postgresql"]},
+    {"name": "kafka", "display": "Apache Kafka", "members": ["kafka"]}
   ]
 }`
 
@@ -117,8 +120,8 @@ func TestBuildIndexPeriodFormat(t *testing.T) {
 	}
 }
 
-// TestBuildIndexLintStacklessFamilyToken: токен семейства в тексте факта при
-// пустом stack — предупреждение (не ошибка); lint_ignore подавляет его.
+// TestBuildIndexLintStacklessFamilyToken: токен языка/платформы в тексте факта
+// при пустом stack — предупреждение (не ошибка); lint_ignore подавляет его.
 func TestBuildIndexLintStacklessFamilyToken(t *testing.T) {
 	content := factMarkerJSON(t, `{"id": "no-stack", "section": "experience", "title": "PHP legacy"}`) +
 		"\nПереписал сервис с PHP на Java, попутно тронул laravel-легаси.\n" +
@@ -143,10 +146,79 @@ func TestBuildIndexLintStacklessFamilyToken(t *testing.T) {
 	if warns[0].File != "sections/experience.md" {
 		t.Errorf("warning.File: got %q", warns[0].File)
 	}
-	for _, tok := range []string{"php", "laravel"} {
+	// laravel — framework-член семьи php, по D4 в stack не входит: в
+	// предупреждении его нет, языковые токены (java, php) остаются.
+	for _, tok := range []string{"java", "php"} {
 		if !strings.Contains(warns[0].Message, tok) {
 			t.Errorf("warning.Message %q не содержит токен %q", warns[0].Message, tok)
 		}
+	}
+	if strings.Contains(warns[0].Message, "laravel") {
+		t.Errorf("warning.Message %q не должен содержать framework-токен laravel", warns[0].Message)
+	}
+}
+
+// TestBuildIndexLintIgnoresDatabaseToolTokens: по D4 stack содержит только
+// языки/платформы, поэтому токены БД/инфраструктуры в тексте факта с пустым
+// stack предупреждений не вызывают (их место — keywords).
+func TestBuildIndexLintIgnoresDatabaseToolTokens(t *testing.T) {
+	content := factMarkerJSON(t, `{"id": "db-only", "section": "experience", "title": "PostgreSQL tuning"}`) +
+		"\nНастроил репликацию PostgreSQL и Kafka-конвейер, кэш на Redis.\n"
+
+	dir := buildTree(t, manifestFamilies, map[string]string{"experience.md": content})
+	idx, warns, err := BuildIndexWithLint(mustLoadManifest(t, dir), dir)
+	if err != nil {
+		t.Fatalf("BuildIndexWithLint: %v", err)
+	}
+	if len(idx.Facts) != 1 {
+		t.Fatalf("facts: got %d, want 1", len(idx.Facts))
+	}
+	if len(warns) != 0 {
+		t.Fatalf("warnings: got %d (%v), want 0 (токены БД/инструментов вне whitelist D4)", len(warns), warns)
+	}
+}
+
+// TestLintStacklessTokenWhitelistD4: lint срабатывает только на канонические
+// имена семей из whitelist D4 (языки/платформы); члены таких семей резолвятся
+// к имени семьи, токены БД/инструментов игнорируются, дубликаты схлопываются.
+func TestLintStacklessTokenWhitelistD4(t *testing.T) {
+	fi, err := newFamilyIndex([]stackdet.Family{
+		{Name: "java", Members: []string{"java", "kotlin", "mybatis"}, Ambiguous: []string{"hibernate"}},
+		{Name: "golang", Members: []string{"golang"}},
+		{Name: "php", Members: []string{"php", "laravel"}},
+		{Name: "python", Members: []string{"python"}},
+		{Name: "typescript", Members: []string{"typescript"}},
+		{Name: "vue", Members: []string{"vue"}},
+		{Name: "delphi", Members: []string{"delphi"}},
+		{Name: "postgresql", Members: []string{"postgresql"}},
+		{Name: "kafka", Members: []string{"kafka"}},
+		{Name: "kubernetes", Members: []string{"kubernetes"}},
+	})
+	if err != nil {
+		t.Fatalf("newFamilyIndex: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		tokens []string
+		want   string
+	}{
+		{"пусто", nil, ""},
+		{"только БД/инструменты", []string{"postgresql", "kafka", "kubernetes"}, ""},
+		{"язык по имени", []string{"golang"}, "golang"},
+		{"язык по члену семьи", []string{"kotlin"}, "kotlin"},
+		{"член семьи, не язык (ORM/framework)", []string{"mybatis", "hibernate", "laravel"}, ""},
+		{"все языки D4", []string{"vue", "typescript", "python", "delphi", "php", "golang", "java"}, "delphi, golang, java, php, python, typescript, vue"},
+		{"дубликаты схлопнуты", []string{"php", "php", "kafka", "php"}, "php"},
+		{"язык вместе с БД", []string{"kafka", "java", "postgresql"}, "java"},
+		{"члены семьи без языка (ORM/миграции)", []string{"mybatis", "liquibase", "laravel"}, ""},
+		{"framework вместе с языком", []string{"mybatis", "kotlin"}, "kotlin"}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fi.lintStacklessToken(tc.tokens); got != tc.want {
+				t.Errorf("lintStacklessToken(%v) = %q, want %q", tc.tokens, got, tc.want)
+			}
+		})
 	}
 }
 

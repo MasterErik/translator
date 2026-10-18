@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/mastererik/translator/internal/context/stackdet"
 )
 
 // Retriever выполняет fact-level lexical retrieval по уже построенному индексу.
@@ -24,6 +26,12 @@ type Retriever struct {
 	contentGateTau    float64
 	relativeThreshold float64
 
+	// M7b: семейства технологий (manifest.TechFamilies), коэффициенты
+	// множителя и режим «отбрасывать факты вне целевого стека» (hints, D8).
+	families        []stackdet.Family
+	stackParams     stackdet.Params
+	dropOutOfTarget bool
+
 	dfMap          map[string]int
 	titleTokens    [][]string            // ordered, выровнено с index.Facts
 	titleSet       []map[string]struct{} // выровнено с index.Facts
@@ -36,12 +44,18 @@ type Retriever struct {
 
 // RetrieverOptions — настройки Retriever. Нулевые пороги означают defaults
 // (DefaultContentGateTau / DefaultRelativeThreshold); чтобы отключить фильтр,
-// передайте отрицательное значение.
+// передайте отрицательное значение. Нулевые StackParams означают
+// stackdet.DefaultParams().
 type RetrieverOptions struct {
 	TopK              int
 	MinScore          float64
 	ContentGateTau    float64
 	RelativeThreshold float64
+	// StackParams — коэффициенты стек-множителей (M7b); нулевая структура
+	// означает stackdet.DefaultParams().
+	StackParams stackdet.Params
+	// DropOutOfTarget — не выдавать факты вне целевого стека (hints, D8).
+	DropOutOfTarget bool
 }
 
 // NewRetriever строит runtime metadata для retrieval. manifest даёт
@@ -84,6 +98,10 @@ func NewRetrieverWithOptions(manifest *Manifest, index *Index, root string, opts
 	}
 
 	n := len(index.Facts)
+	params := opts.StackParams
+	if params == (stackdet.Params{}) {
+		params = stackdet.DefaultParams()
+	}
 	r := &Retriever{
 		tokenizer:         tokenizer,
 		index:             index,
@@ -92,6 +110,9 @@ func NewRetrieverWithOptions(manifest *Manifest, index *Index, root string, opts
 		minScore:          minScore,
 		contentGateTau:    gateTau,
 		relativeThreshold: relThreshold,
+		families:          manifest.TechFamilies,
+		stackParams:       params,
+		dropOutOfTarget:   opts.DropOutOfTarget,
 		dfMap:             make(map[string]int),
 		titleTokens:       make([][]string, n),
 		titleSet:          make([]map[string]struct{}, n),
@@ -258,9 +279,13 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 	}
 	sectionScores := r.sectionScores(qSet)
 
+	// Стек-множества считаются один раз на запрос: сессия (TargetStack) плюс
+	// однозначные упоминания в самом вопросе.
+	sets := stackdet.Detect(qTokens, opts.Session.TargetStack, r.families)
+
 	cands := make([]scoredCandidate, 0, n)
 	for i, f := range r.index.Facts {
-		parts := r.factParts(i, sectionScores[f.Section], qSet, qTokens, opts)
+		parts := r.factParts(i, sectionScores[f.Section], qSet, qTokens, sets, opts)
 		if parts.fieldScore() == 0 {
 			// Нет fact-level совпадения — факт не всплывает за счёт section
 			// metadata (tags/summary).
@@ -270,9 +295,16 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 		if questionIDF > 0 {
 			ratio = parts.Content / contentWeight / questionIDF
 		}
-		if reason := contentGateReason(parts, ratio, r.contentGateTau); reason != "" {
-			parts.Gate = reason
-		} else if r.minScore > 0 && parts.raw() < r.minScore {
+		gateReason := contentGateReason(parts, ratio, r.contentGateTau)
+		switch {
+		case r.dropOutOfTarget && parts.OutOfTarget:
+			// Готовый ответ чужого стека не выдаётся вообще (D8).
+			parts.Gate = "out_of_target: " + parts.MultReason
+		case gateReason != "":
+			parts.Gate = gateReason
+		case r.minScore > 0 && parts.raw() < r.minScore:
+			// Порог сравнивается с Raw: множитель не может провести чужой факт
+			// через абсолютный порог (D7).
 			parts.Gate = fmt.Sprintf("min_score: raw %.3f < %.3f", parts.raw(), r.minScore)
 		}
 		cands = append(cands, scoredCandidate{fact: f, parts: parts, ratio: ratio})
@@ -296,7 +328,7 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 //	core       = (field + phrase) * mult        — сопоставимая часть
 //	rankScore  = core + section
 //	raw        = field + section + phrase       — score без стек-множителя
-func (r *Retriever) factParts(i int, sectionScore float64, qSet map[string]struct{}, qTokens []string, opts RetrieveOptions) scoreParts {
+func (r *Retriever) factParts(i int, sectionScore float64, qSet map[string]struct{}, qTokens []string, sets stackdet.Sets, opts RetrieveOptions) scoreParts {
 	n := len(r.index.Facts)
 	parts := scoreParts{
 		Keywords: keywordsWeight * sumIDF(qSet, r.keywordSet[i], r.dfMap, n),
@@ -306,15 +338,21 @@ func (r *Retriever) factParts(i int, sectionScore float64, qSet map[string]struc
 		Section:  sectionScore * sectionWeight,
 		Phrase:   phraseBonusValue(r.titleTokens[i], r.index.Facts[i].ContentTokens, qTokens),
 	}
-	parts.Mult, parts.MultReason, parts.OutOfTarget = r.stackMultiplier(i, opts)
+	parts.Mult, parts.MultReason = r.stackMultiplier(i, sets)
+	parts.OutOfTarget = stackdet.IsOutOfTarget(r.index.Facts[i].Stack, sets)
+	_ = opts // Session уже учтён в sets (collect)
 	return parts
 }
 
-// stackMultiplier — стек-множитель факта (M7b). В M7a не применяется: вся
-// выдача идёт с множителем 1. Реализация M7b использует session.TargetStack,
-// стек факта и stackdet.
-func (r *Retriever) stackMultiplier(_ int, _ RetrieveOptions) (float64, string, bool) {
-	return 1, "", false
+// stackMultiplier — стек-множитель факта (M7b): считает stackdet.Multiplier по
+// стеку факта и множествам вопроса/сессии. Пока семейства не описаны (нет
+// tech_families или нет стеков у фактов) — множитель 1, ранжирование как в M7a.
+func (r *Retriever) stackMultiplier(i int, sets stackdet.Sets) (float64, string) {
+	if len(r.families) == 0 {
+		return 1, ""
+	}
+	mult, reason := stackdet.Multiplier(r.index.Facts[i].Stack, sets, r.stackParams)
+	return mult, reason
 }
 
 // result материализует кандидата в RetrievalResult (Breakdown — только при

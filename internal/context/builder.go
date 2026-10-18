@@ -44,7 +44,9 @@ func BuildIndex(manifest *Manifest, root string) (*Index, error) {
 }
 
 // BuildIndexWithLint — BuildIndex плюс lint-предупреждения по разметке:
-// токен семейства в тексте факта при пустом stack (подавляется lint_ignore).
+// токен языка/платформы (whitelist D4: java, golang, php, python, typescript,
+// vue, delphi) в тексте факта при пустом stack (подавляется lint_ignore).
+// Токены БД/инструментов предупреждений не дают.
 // Предупреждения возвращаются и при успешной сборке — вызывающий обязан их
 // залогировать, иначе они теряются.
 func BuildIndexWithLint(manifest *Manifest, root string) (*Index, []LintWarning, error) {

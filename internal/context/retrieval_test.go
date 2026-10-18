@@ -16,6 +16,7 @@ type testFact struct {
 	Title    string   `json:"title,omitempty"`
 	Keywords []string `json:"keywords,omitempty"`
 	Aliases  []string `json:"aliases,omitempty"`
+	Stack    []string `json:"stack,omitempty"`
 }
 
 func factJSON(f testFact) string {
@@ -586,4 +587,67 @@ func TestPhraseBonusValue(t *testing.T) {
 	if got := phraseBonusValue(title, content, nil); got != 0 {
 		t.Errorf("empty question: got %v, want 0", got)
 	}
+}
+
+// TestRetrieveStackMultiplier — интеграционная проверка M7b: стек-множитель
+// меняет порядок фактов (session-бонус поднимает «свой» стек, penalty опускает
+// «чужой»), а DropOutOfTarget целиком отбрасывает чужой стек (hints, D8).
+func TestRetrieveStackMultiplier(t *testing.T) {
+	manifest := `{
+  "profile": "Erik",
+  "global_aliases": {},
+  "sections": [{"id": "experience", "title": "Опыт"}],
+  "tech_families": [
+    {"name": "java", "display": "Java", "members": ["java", "spring"]},
+    {"name": "php", "display": "PHP", "members": ["php", "laravel"]}
+  ]
+}`
+	files := map[string]string{
+		"experience.md": factJSON(testFact{ID: "f-java", Section: "experience", Title: "Architecture", Keywords: []string{"architecture"}, Stack: []string{"java"}}) + "java architecture body\n" +
+			factJSON(testFact{ID: "f-php", Section: "experience", Title: "Architecture", Keywords: []string{"architecture"}, Stack: []string{"php"}}) + "php architecture body\n",
+	}
+	r := newRetriever(t, manifest, files, 0, 0)
+	session := RetrieveOptions{Session: SessionContext{TargetStack: []string{"java"}}}
+
+	t.Run("session_bonus_beats_penalty", func(t *testing.T) {
+		got := r.RetrieveWith("architecture", session)
+		if len(got) != 2 {
+			t.Fatalf("results: got %d, want 2", len(got))
+		}
+		if got[0].FactID != "f-java" || got[1].FactID != "f-php" {
+			t.Fatalf("order: got [%s, %s], want [f-java, f-php]", got[0].FactID, got[1].FactID)
+		}
+		if got[0].Score <= got[1].Score {
+			t.Fatalf("java score %v should exceed php %v", got[0].Score, got[1].Score)
+		}
+	})
+
+	t.Run("no_session_no_multiplier", func(t *testing.T) {
+		// TargetStack пусто → Penalty пусто → оба ×1.0, порядок по tie-break (ID ASC).
+		got := r.Retrieve("architecture")
+		if len(got) != 2 {
+			t.Fatalf("results: got %d, want 2", len(got))
+		}
+		if got[0].FactID != "f-java" || got[1].FactID != "f-php" {
+			t.Fatalf("tie-break by ID: got [%s, %s], want [f-java, f-php]", got[0].FactID, got[1].FactID)
+		}
+		if got[0].Score != got[1].Score {
+			t.Fatalf("no session: scores should be equal, got %v vs %v", got[0].Score, got[1].Score)
+		}
+	})
+
+	t.Run("drop_out_of_target", func(t *testing.T) {
+		drop := newGatedRetriever(t, manifest, files, RetrieverOptions{
+			ContentGateTau:    -1,
+			RelativeThreshold: -1,
+			DropOutOfTarget:   true,
+		})
+		got := drop.RetrieveWith("architecture", session)
+		if len(got) != 1 {
+			t.Fatalf("DropOutOfTarget: got %d results, want 1 (only java)", len(got))
+		}
+		if got[0].FactID != "f-java" {
+			t.Fatalf("DropOutOfTarget: got %q, want f-java", got[0].FactID)
+		}
+	})
 }

@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	candidatecontext "github.com/mastererik/translator/internal/context"
+	"github.com/mastererik/translator/internal/context/stackdet"
 )
 
 // datasetSpec — один набор в прогоне.
@@ -46,6 +47,9 @@ func main() {
 	hintsMinScore := flag.Float64("hints-min-score", 50, "min score подсказок (как в config.yaml)")
 	gateTau := flag.Float64("gate-tau", candidatecontext.DefaultContentGateTau, "content-only gate: минимальная доля IDF вопроса, покрытая телом факта (отрицательное = выключить)")
 	relThreshold := flag.Float64("rel-threshold", candidatecontext.DefaultRelativeThreshold, "relative threshold: доля лучшего core, ниже которой факт не показывается (отрицательное = выключить)")
+	penalty := flag.Float64("penalty", 0, "stack penalty coefficient (0 = дефолт 0.3)")
+	bonus := flag.Float64("bonus", 0, "stack named-bonus coefficient (0 = дефолт 1.5)")
+	session := flag.Float64("session", 0, "stack session-bonus coefficient (0 = дефолт 1.25)")
 	onLoadError := flag.String("on-load-error", candidatecontext.OnLoadErrorFail, "поведение при сбое загрузки каталога: fail|degraded")
 	flag.Parse()
 
@@ -112,10 +116,15 @@ func main() {
 		MaxMatrixTokens:   *maxMatrixTokens,
 		ContentGateTau:    *gateTau,
 		RelativeThreshold: *relThreshold,
-		HintsTopK:         *hintsTopK,
-		HintsMinScore:     *hintsMinScore,
-		OnLoadError:       *onLoadError,
-		Logf:              func(msg string) { fmt.Fprintf(os.Stderr, "%s\n", msg) },
+		StackParams: stackdet.Params{
+			Penalty: *penalty,
+			Bonus:   *bonus,
+			Session: *session,
+		},
+		HintsTopK:     *hintsTopK,
+		HintsMinScore: *hintsMinScore,
+		OnLoadError:   *onLoadError,
+		Logf:          func(msg string) { fmt.Fprintf(os.Stderr, "%s\n", msg) },
 	}
 	if *hintsDir != "" {
 		cfg.HintsDir = *hintsDir

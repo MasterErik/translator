@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/mastererik/translator/internal/context/stackdet"
 )
 
 // SessionContext — контекст интервью, влияющий на retrieval (M7: целевой стек
@@ -65,6 +67,11 @@ type ContextFnConfig struct {
 	// DefaultRelativeThreshold), отрицательное значение отключает фильтр.
 	ContentGateTau    float64
 	RelativeThreshold float64
+
+	// StackParams — коэффициенты стек-множителей (M7b). Нулевая структура
+	// означает stackdet.DefaultParams(); нулевое поле внутри — дефолт
+	// соответствующего коэффициента (см. stackdet.Params.effective).
+	StackParams stackdet.Params
 
 	// Legacy-режим (D14).
 	LegacyFile          string // путь к файлу базы CV (передаётся целиком)
@@ -242,7 +249,7 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 			HintsDisabled: hintsDisabled,
 		}
 		if hints != nil {
-			results := hints.Retrieve(question)
+			results := hints.Retrieve(question, s)
 			hintText := joinHintBodies(results)
 			if hintText != "" {
 				out.Text = AppendHint(out.Text, hintText)
@@ -289,6 +296,7 @@ func newHintSource(dir string, topK int, minScore float64) (*hintSource, error) 
 		MinScore:          minScore,
 		ContentGateTau:    -1,
 		RelativeThreshold: -1,
+		DropOutOfTarget:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("инициализация retriever hints %s: %w", dir, err)
@@ -296,9 +304,10 @@ func newHintSource(dir string, topK int, minScore float64) (*hintSource, error) 
 	return &hintSource{retriever: retriever}, nil
 }
 
-// Retrieve возвращает готовые ответы hints по вопросу.
-func (h *hintSource) Retrieve(question string) []RetrievalResult {
-	return h.retriever.Retrieve(question)
+// Retrieve возвращает готовые ответы hints по вопросу. Сессия участвует в
+// отборе: подсказка чужого стека не выдаётся (D8).
+func (h *hintSource) Retrieve(question string, session SessionContext) []RetrievalResult {
+	return h.retriever.RetrieveWith(question, RetrieveOptions{Session: session})
 }
 
 // joinHintBodies склеивает тела отобранных подсказок (тела фактов, без профиля —
@@ -338,6 +347,7 @@ func newContextRetriever(cfg ContextFnConfig) (*Retriever, *Budgeter, *Manifest,
 		MinScore:          cfg.MinScore,
 		ContentGateTau:    cfg.ContentGateTau,
 		RelativeThreshold: cfg.RelativeThreshold,
+		StackParams:       cfg.StackParams,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("инициализация retriever candidate context: %w", err)

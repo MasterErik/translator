@@ -61,6 +61,29 @@ func Multiplier(factStack []string, s Sets, p Params) (mult float64, reason stri
 		formatStack(stack), formatSetKeys(s.Penalty))
 }
 
+// IsOutOfTarget сообщает, что стек факта целиком вне штрафного и
+// освобождённого множеств: вопрос/сессия называет другие стеки, а этот — чужой.
+// Пустой стек факта, пустой Penalty или пустые (после отбрасывания пустых
+// строк) элементы → false: судить о «чуждости» не о чем.
+//
+// Для reference-фактов это пометка в выдаче, для hints — запрет на выдачу
+// готового ответа (D8).
+func IsOutOfTarget(factStack []string, s Sets) bool {
+	stack := cleanStack(factStack)
+	if len(stack) == 0 || len(s.Penalty) == 0 {
+		return false
+	}
+	for _, st := range stack {
+		if _, ok := s.Penalty[st]; ok {
+			return false
+		}
+		if _, ok := s.Exempt[st]; ok {
+			return false
+		}
+	}
+	return true
+}
+
 // cleanStack возвращает пустой при пустом входе слайс без пустых элементов,
 // сохраняя порядок и не трогая вход.
 func cleanStack(factStack []string) []string {

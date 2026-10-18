@@ -96,18 +96,70 @@ func (fi *familyIndex) resolve(term string) (string, bool) {
 	return name, ok
 }
 
-// lintStacklessToken возвращает токен семейства, встретившийся в тексте факта
-// без указанного stack: такое слово читается как заявление о стеке, и без
-// разметки retrieval не сможет ни дать бонус, ни оштрафовать факт.
+// stackLangPlatforms — whitelist D4: в Fact.Stack попадают только языки и
+// платформы. БД и инфраструктурные инструменты (mssql, postgresql, oracle,
+// kafka, redis, kubernetes, docker и т.п.) живут в keywords и в stack не
+// входят, поэтому упоминание такого токена в тексте факта — не повод для lint.
+var stackLangPlatforms = map[string]struct{}{
+	"java":       {},
+	"golang":     {},
+	"php":        {},
+	"python":     {},
+	"typescript": {},
+	"vue":        {},
+	"delphi":     {},
+}
+
+// frameworkTokens — члены семей-языков, которые сами по себе не язык и не
+// платформа (ORM/миграции/framework'и): по D4 в stack их нет, поэтому в тексте
+// факта они не опознаются как заявление о стеке. Упоминание такого слова не
+// отменяет предупреждение о языке, если язык в факте тоже назван.
+var frameworkTokens = map[string]struct{}{
+	"hibernate": {},
+	"mybatis":   {},
+	"liquibase": {},
+	"yii2":      {},
+	"laravel":   {},
+	"symfony":   {},
+	"gunicorn":  {},
+	"winapi":    {},
+}
+
+// isStackLangPlatform сообщает, является ли каноническое имя семьи языком или
+// платформой из whitelist D4.
+func isStackLangPlatform(family string) bool {
+	_, ok := stackLangPlatforms[family]
+	return ok
+}
+
+// isFrameworkToken сообщает, что токен — член семьи-языка, но сам по себе не
+// язык/платформа (hibernate, liquibase, laravel, ...).
+func isFrameworkToken(tok string) bool {
+	_, ok := frameworkTokens[tok]
+	return ok
+}
+
+// lintStacklessToken возвращает токены семейства-языка/платформы (whitelist D4),
+// встретившиеся в тексте факта без указанного stack: такое слово читается как
+// заявление о стеке, и без разметки retrieval не сможет ни дать бонус, ни
+// оштрафовать факт. Остальные семьи и члены (БД, инфраструктура, ORM/framework)
+// в stack по D4 не относятся, поэтому их токены предупреждения не вызывают.
 func (fi *familyIndex) lintStacklessToken(tokens []string) string {
 	if fi == nil || len(fi.byMember) == 0 {
 		return ""
 	}
 	found := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
 	for _, tok := range tokens {
-		if _, ok := fi.byMember[tok]; ok {
-			found = append(found, tok)
+		name, ok := fi.byMember[tok]
+		if !ok || !isStackLangPlatform(name) || isFrameworkToken(tok) {
+			continue
 		}
+		if _, dup := seen[tok]; dup {
+			continue
+		}
+		seen[tok] = struct{}{}
+		found = append(found, tok)
 	}
 	if len(found) == 0 {
 		return ""
@@ -118,7 +170,9 @@ func (fi *familyIndex) lintStacklessToken(tokens []string) string {
 
 // validateFact проверяет поля факта и нормализует Stack к каноническим именам
 // семей (member → Family.Name). Возвращает lint-предупреждение, если у факта
-// пустой stack, но в тексте есть токены семейств, и lint_ignore не выставлен.
+// пустой stack, но в тексте есть токены семей-языков/платформ (whitelist D4),
+// и lint_ignore не выставлен. Токены БД/инструментов предупреждения не дают:
+// по D4 они в stack не входят.
 func (fi *familyIndex) validateFact(f Fact, lintIgnore string, titleTokens []string) ([]string, *LintWarning, error) {
 	if f.Weight != "" {
 		if _, ok := validWeights[f.Weight]; !ok {
@@ -151,7 +205,7 @@ func (fi *familyIndex) validateFact(f Fact, lintIgnore string, titleTokens []str
 		if hit := fi.lintStacklessToken(tokens); hit != "" {
 			return stack, &LintWarning{
 				FactID: f.ID,
-				Message: fmt.Sprintf("токен семейства (%s) в тексте факта при пустом stack — "+
+				Message: fmt.Sprintf("токен языка/платформы (%s) в тексте факта при пустом stack — "+
 					"разметить stack или подавить через lint_ignore", hit),
 			}, nil
 		}
