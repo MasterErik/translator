@@ -3,6 +3,7 @@ package translator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -77,7 +78,12 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) (
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("generate answers: no choices in response")
 	}
-	return parseAnswerHints(resp.Choices[0].Message.Content, req.SourceLang, req.TargetLang), nil
+	raw := resp.Choices[0].Message.Content
+	hints := parseAnswerHints(raw, req.SourceLang, req.TargetLang)
+	if len(hints) == 0 {
+		slog.Warn("translator: LLM вернул пустые подсказки", "question", req.Question, "raw", raw)
+	}
+	return hints, nil
 }
 
 func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, req AnswerRequest) (<-chan string, error) {
@@ -211,6 +217,14 @@ func parseAnswerHints(raw, srcLang, tgtLang string) []string {
 	// Ограничиваем количество подсказок (защита от «83 подсказок»-мусора).
 	if len(hints) > maxAnswerHints {
 		hints = hints[:maxAnswerHints]
+	}
+	// Fallback: если строгая фильтрация отбросила все строки, а сырой ответ
+	// непустой — вернуть его целиком как единственную подсказку (Source без
+	// перевода), чтобы валидный ответ не терялся из-за нестрогого формата LLM.
+	if len(hints) == 0 {
+		if t := strings.TrimSpace(raw); t != "" {
+			return []string{t}
+		}
 	}
 	return hints
 }

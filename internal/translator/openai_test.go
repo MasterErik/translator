@@ -235,17 +235,24 @@ func TestParseAnswerHints(t *testing.T) {
 		{
 			name:  "reasoning only — no valid hint",
 			input: "Let me analyze the question.\nThe candidate should mention Kubernetes.\nAlso mention CI/CD and Helm.\nThis is a good answer structure.",
-			want:  nil,
+			// Fallback: ответ модели непустой, поэтому возвращается целиком —
+			// потеря (пустой список → QFailed) была бы хуже, чем «сырой» текст.
+			want: []string{
+				"Let me analyze the question.\nThe candidate should mention Kubernetes.\n" +
+					"Also mention CI/CD and Helm.\nThis is a good answer structure.",
+			},
 		},
 		{
 			name:  "line without pipe separator is discarded",
 			input: "- EN: missing separator RU: текст",
-			want:  nil,
+			// Fallback: единственная строка не прошла строгий формат — отдаём её как есть.
+			want: []string{"- EN: missing separator RU: текст"},
 		},
 		{
 			name:  "line without EN/RU prefixes is discarded",
 			input: "- Some hint | другая часть",
-			want:  nil,
+			// Fallback: формат подсказки не соблюдён — отдаём сырую строку.
+			want: []string{"- Some hint | другая часть"},
 		},
 		{
 			name:  "reasoning plus 4 valid hints truncated to 3",
@@ -274,7 +281,9 @@ func TestParseAnswerHints(t *testing.T) {
 			input: "- EN: A cache | RU: кэш",
 			src:   "en",
 			tgt:   "de",
-			want:  nil,
+			// Fallback: строгий формат для en/de не соблюдён, но ответ непустой —
+			// возвращается сырой строкой (подсказка без перевода), а не теряется.
+			want: []string{"- EN: A cache | RU: кэш"},
 		},
 	}
 
@@ -286,6 +295,54 @@ func TestParseAnswerHints(t *testing.T) {
 				t.Fatalf("parseAnswerHints() length = %d, want %d. Got: %v", len(got), len(tt.want), got)
 			}
 
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("parseAnswerHints()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// Регрессионный контракт: если LLM ответил текстом без формата
+// «EN: … | RU: …», строгий парсер не должен терять ответ целиком (пустой
+// список → метка QFailed «подсказки пусты»). Fallback возвращает сырой ответ
+// как единственную подсказку.
+func TestParseAnswerHintsFallbackRaw(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "сырой ответ без формата подсказки",
+			input: "I would prioritize tasks by deadline and communicate early.",
+			want:  []string{"I would prioritize tasks by deadline and communicate early."},
+		},
+		{
+			name:  "сырой ответ с ведущими/хвостовыми пробелами",
+			input: "  \n  Sure, I can describe my approach.  \n  ",
+			want:  []string{"Sure, I can describe my approach."},
+		},
+		{
+			name:  "несколько строк без формата — целиком одной подсказкой",
+			input: "First line without format.\nSecond line without format.",
+			want:  []string{"First line without format.\nSecond line without format."},
+		},
+		{
+			name:  "пустой ответ — fallback не срабатывает",
+			input: "",
+			want:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseAnswerHints(tt.input, "", "")
+
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseAnswerHints() length = %d, want %d. Got: %v", len(got), len(tt.want), got)
+			}
 			for i := range tt.want {
 				if got[i] != tt.want[i] {
 					t.Errorf("parseAnswerHints()[%d] = %q, want %q", i, got[i], tt.want[i])

@@ -82,6 +82,7 @@ func TestBuildSystemPromptStackScopingSnapshot(t *testing.T) {
 	prompt := BuildSystemPrompt("en", "ru")
 	want := "\n" +
 		"Answer from the candidate's perspective, in first person.\n" +
+		"The interviewer's sentence may not end with a question mark; treat it as a question and answer anyway.\n" +
 		"Use only information available in the provided candidate context.\n" +
 		"Use only the facts that belong to the technology the question is about; " +
 		"never attribute experience with one stack to another.\n" +

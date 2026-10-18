@@ -429,6 +429,7 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 	defer close(d.answerDone)
 
 	var lastQuestion string
+	var lastAnswer []ui.Answer
 
 	for {
 		select {
@@ -450,16 +451,25 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 				d.timeline.ResetStep(task.idx)
 				continue
 			}
-			// Дедупликация: пропускаем точный повтор предыдущего вопроса,
-			// но только для авто-заданий (fresh). Regeneration по F1 не дедупим.
-			if task.fresh && task.question == lastQuestion {
+			// Дедупликация точного повтора (текст нормализован TrimSpace) для
+			// авто-заданий: копируем последний готовый ответ в новую метку БЕЗ
+			// вызова LLM. Если готового ответа ещё нет (lastAnswer==nil) —
+			// генерируем заново (fallback).
+			if task.fresh && strings.TrimSpace(task.question) == strings.TrimSpace(lastQuestion) && lastAnswer != nil {
+				d.timeline.SetAnswer(task.idx, lastAnswer)
+				d.timeline.SetState(task.idx, QReady)
+				d.timeline.SetMode(task.idx, modeAnswer)
+				if d.isActive(task.idx) {
+					d.pushHeader(task.idx, lastAnswer)
+				}
 				if d.sessLog != nil {
-					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: дубликат вопроса пропущен: text=%v", task.question))
+					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: дубликат вопроса — ответ скопирован: text=%v", task.question))
 				}
 				continue
 			}
 			lastQuestion = task.question
 			d.runAnswer(task)
+			lastAnswer = d.answerFor(task.idx)
 
 		case act := <-d.hotkeyCh:
 			d.handleHotkeyAction(act)
@@ -669,6 +679,18 @@ func (d *Dispatcher) runAnswer(task answerTask) {
 	defer d.busy.Store(false)
 	d.timeline.SetState(task.idx, QGenerating)
 	d.generateAnswers(task.question, task.cmd, task.idx)
+}
+
+// answerFor возвращает ответ метки idx из таймлайна (nil, если метки нет или
+// ответ пуст). Используется для копирования последнего готового ответа при
+// дедупликации повтора вопроса.
+func (d *Dispatcher) answerFor(idx int) []ui.Answer {
+	for _, e := range d.timeline.Snapshot() {
+		if e.Idx == idx {
+			return e.Answer
+		}
+	}
+	return nil
 }
 
 // drainQueue вычитывает все оставшиеся задания из очереди при shutdown.
