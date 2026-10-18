@@ -16,5 +16,185 @@
         "qa"
       ]
     }
+  ],
+  "tech_families": [
+    {
+      "name": "java",
+      "display": "Java / JVM",
+      "members": [
+        "java",
+        "jvm",
+        "kotlin",
+        "hibernate",
+        "mybatis",
+        "liquibase",
+        "spring"
+      ],
+      "ambiguous": [
+        "spring"
+      ]
+    },
+    {
+      "name": "golang",
+      "display": "Go",
+      "members": [
+        "golang"
+      ]
+    },
+    {
+      "name": "php",
+      "display": "PHP",
+      "members": [
+        "php",
+        "yii2",
+        "laravel",
+        "symfony"
+      ]
+    },
+    {
+      "name": "python",
+      "display": "Python",
+      "members": [
+        "python",
+        "gunicorn"
+      ]
+    },
+    {
+      "name": "typescript",
+      "display": "TypeScript",
+      "members": [
+        "typescript"
+      ]
+    },
+    {
+      "name": "vue",
+      "display": "Vue",
+      "members": [
+        "vue"
+      ]
+    },
+    {
+      "name": "delphi",
+      "display": "Delphi",
+      "members": [
+        "delphi",
+        "winapi"
+      ]
+    },
+    {
+      "name": "mssql",
+      "display": "MS SQL Server",
+      "members": [
+        "microsoft sql server"
+      ],
+      "ambiguous": [
+        "microsoft sql server"
+      ]
+    },
+    {
+      "name": "postgresql",
+      "display": "PostgreSQL",
+      "members": [
+        "postgresql"
+      ]
+    },
+    {
+      "name": "oracle",
+      "display": "Oracle",
+      "members": [
+        "oracle"
+      ]
+    },
+    {
+      "name": "mysql",
+      "display": "MySQL",
+      "members": [
+        "mysql"
+      ]
+    },
+    {
+      "name": "clickhouse",
+      "display": "ClickHouse",
+      "members": [
+        "clickhouse"
+      ]
+    },
+    {
+      "name": "redis",
+      "display": "Redis",
+      "members": [
+        "redis"
+      ]
+    },
+    {
+      "name": "mongodb",
+      "display": "MongoDB",
+      "members": [
+        "mongodb"
+      ]
+    },
+    {
+      "name": "kafka",
+      "display": "Apache Kafka",
+      "members": [
+        "kafka"
+      ]
+    },
+    {
+      "name": "rabbitmq",
+      "display": "RabbitMQ",
+      "members": [
+        "rabbitmq"
+      ]
+    },
+    {
+      "name": "kubernetes",
+      "display": "Kubernetes",
+      "members": [
+        "kubernetes"
+      ]
+    },
+    {
+      "name": "docker",
+      "display": "Docker",
+      "members": [
+        "docker"
+      ]
+    },
+    {
+      "name": "keycloak",
+      "display": "Keycloak",
+      "members": [
+        "keycloak"
+      ]
+    },
+    {
+      "name": "nginx",
+      "display": "Nginx",
+      "members": [
+        "nginx"
+      ]
+    },
+    {
+      "name": "s3",
+      "display": "Amazon S3",
+      "members": [
+        "s3"
+      ]
+    },
+    {
+      "name": "prometheus",
+      "display": "Prometheus",
+      "members": [
+        "prometheus"
+      ]
+    },
+    {
+      "name": "grafana",
+      "display": "Grafana",
+      "members": [
+        "grafana"
+      ]
+    }
   ]
 }

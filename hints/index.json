@@ -1,12 +1,12 @@
 {
   "version": 2,
   "tokenizer_version": "3",
-  "manifest_sha256": "9e65b008e8ffdab5d92219ef8c4ff4b2138f51435aa48544f08b97e895201f62",
+  "manifest_sha256": "f95476665d9c21d58bd98af17dc4f4cd539e2e7d00ebcbb197e6bba67324d463",
   "files": [
     {
       "path": "sections/alarm-qa.md",
-      "size": 27392,
-      "sha256": "7e430a2bf784bd4dcb66d89faec51dc95f6fba265a6bdd4fce2325a91a4bf4e5"
+      "size": 30192,
+      "sha256": "f818e28b4e6022623175252dc480671f0582efe47f92432e04e72e669bccb645"
     }
   ],
   "facts": [
@@ -14,8 +14,8 @@
       "id": "alarm-qa-01",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 384,
-      "end": 563,
+      "start": 440,
+      "end": 619,
       "title": "What is the main business goal of the platform?",
       "keywords": [
         "business",
@@ -52,14 +52,18 @@
         "unified",
         "canonical",
         "format"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-02",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 989,
-      "end": 1175,
+      "start": 1101,
+      "end": 1287,
       "title": "What is the main architectural problem being solved?",
       "keywords": [
         "architectural",
@@ -103,14 +107,18 @@
         "partner",
         "contract",
         "violations"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-03",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 1633,
-      "end": 1856,
+      "start": 1801,
+      "end": 2024,
       "title": "Why was a microservice approach (Alarm + Download) chosen over a monolithic poller?",
       "keywords": [
         "microservice",
@@ -156,14 +164,18 @@
         "managed",
         "separate",
         "service"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-04",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 2255,
-      "end": 2385,
+      "start": 2479,
+      "end": 2609,
       "title": "What acts as the source of truth for integration settings?",
       "keywords": [
         "source",
@@ -198,14 +210,18 @@
         "file",
         "parsing",
         "parameters"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-05",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 2699,
-      "end": 2766,
+      "start": 2979,
+      "end": 3046,
       "title": "What incoming data protocols are supported?",
       "keywords": [
         "incoming",
@@ -230,14 +246,18 @@
         "ftp",
         "sftp",
         "email"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-06",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 3135,
-      "end": 3284,
+      "start": 3471,
+      "end": 3620,
       "title": "How is file deletion handled on the partner servers?",
       "keywords": [
         "file",
@@ -273,14 +293,18 @@
         "partner's",
         "server",
         "supports"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-07",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 3619,
-      "end": 3817,
+      "start": 4011,
+      "end": 4209,
       "title": "How does the Alarm service work?",
       "keywords": [
         "alarm",
@@ -321,14 +345,18 @@
         "context",
         "needed",
         "connection"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-08",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 4225,
-      "end": 4456,
+      "start": 4673,
+      "end": 4904,
       "title": "How is High Availability (HA) ensured for the Alarm tick generator?",
       "keywords": [
         "high",
@@ -373,14 +401,18 @@
         "collisions",
         "worker",
         "pods"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-09",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 4863,
-      "end": 5061,
+      "start": 5367,
+      "end": 5565,
       "title": "How are dynamic configuration updates (e.g., adding new hosts) implemented?",
       "keywords": [
         "dynamic",
@@ -418,14 +450,18 @@
         "state",
         "applies",
         "updates"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-10",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 5401,
-      "end": 5600,
+      "start": 5961,
+      "end": 6160,
       "title": "How does Alarm know when to send the next tick?",
       "keywords": [
         "next",
@@ -466,14 +502,18 @@
         "according",
         "defined",
         "interval"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-11",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 5942,
-      "end": 6069,
+      "start": 6558,
+      "end": 6685,
       "title": "Does the Alarm topic contain business data?",
       "keywords": [
         "alarm",
@@ -506,14 +546,18 @@
         "painlessly",
         "cleared",
         "recreated"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-12",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 6416,
-      "end": 6632,
+      "start": 7088,
+      "end": 7304,
       "title": "Is the system protected against duplicate ticks?",
       "keywords": [
         "duplicate",
@@ -556,14 +600,18 @@
         "drop",
         "busy",
         "strategy"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-13",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 7005,
-      "end": 7133,
+      "start": 7733,
+      "end": 7861,
       "title": "Can different polling frequencies be set for different partners?",
       "keywords": [
         "polling",
@@ -596,14 +644,18 @@
         "depending",
         "partner's",
         "slas"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-14",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 7503,
-      "end": 7688,
+      "start": 8287,
+      "end": 8472,
       "title": "How is the isolation of different FTP connections implemented?",
       "keywords": [
         "ftp",
@@ -640,14 +692,18 @@
         "state",
         "specific",
         "connection"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-15",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 8045,
-      "end": 8138,
+      "start": 8885,
+      "end": 8978,
       "title": "What is the limit of concurrently existing Prototype Beans?",
       "keywords": [
         "prototype",
@@ -677,14 +733,18 @@
         "limit",
         "polled",
         "hosts"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-16",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 8465,
-      "end": 8691,
+      "start": 9361,
+      "end": 9587,
       "title": "What is the Drop-on-Busy strategy?",
       "keywords": [
         "drop-on-busy",
@@ -727,14 +787,18 @@
         "currently",
         "available",
         "files"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-17",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 9064,
-      "end": 9261,
+      "start": 10016,
+      "end": 10213,
       "title": "Does a busy worker delay the processing of other hosts in the same partition?",
       "keywords": [
         "partition",
@@ -775,14 +839,18 @@
         "one",
         "blocking",
         "partition"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-18",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 9662,
-      "end": 9867,
+      "start": 10670,
+      "end": 10875,
       "title": "How is the issue of memory and socket resource leaks resolved in the bean pool?",
       "keywords": [
         "resource",
@@ -824,14 +892,18 @@
         "instance",
         "closes",
         "sockets"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-19",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 10297,
-      "end": 10573,
+      "start": 11361,
+      "end": 11637,
       "title": "How does the system handle hanging FTP sessions (Zombie Sockets) that the server doesn't close?",
       "keywords": [
         "zombie",
@@ -877,14 +949,18 @@
         "scheduled",
         "deployments",
         "restarts"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-20",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 10978,
-      "end": 11174,
+      "start": 12098,
+      "end": 12294,
       "title": "What happens to open connections during a Kafka rebalance or deployment?",
       "keywords": [
         "kafka",
@@ -921,14 +997,18 @@
         "terminated",
         "operating",
         "system"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-21",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 11562,
-      "end": 11745,
+      "start": 12738,
+      "end": 12921,
       "title": "Does a file download restart if a network failure occurs at 99%?",
       "keywords": [
         "partial",
@@ -966,14 +1046,18 @@
         "next",
         "alarm",
         "tick"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-22",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 12064,
-      "end": 12110,
+      "start": 13296,
+      "end": 13342,
       "title": "What acts as the partitioning key in Kafka topics?",
       "keywords": [
         "partitioning",
@@ -997,14 +1081,18 @@
         "name",
         "ftp",
         "server"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-23",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 12498,
-      "end": 12700,
+      "start": 13786,
+      "end": 13988,
       "title": "Why is it important to partition specifically by host?",
       "keywords": [
         "host",
@@ -1048,14 +1136,18 @@
         "lead",
         "ip",
         "ban"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-24",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 13037,
-      "end": 13187,
+      "start": 14381,
+      "end": 14531,
       "title": "How does the processing pipeline scale?",
       "keywords": [
         "horizontal",
@@ -1085,14 +1177,18 @@
         "partitions",
         "kafka",
         "topics"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-25",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 13549,
-      "end": 13681,
+      "start": 14949,
+      "end": 15081,
       "title": "What delivery guarantees does the Kafka configuration provide?",
       "keywords": [
         "delivery",
@@ -1126,14 +1222,18 @@
         "written",
         "s3",
         "redis"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-26",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 13995,
-      "end": 14170,
+      "start": 15451,
+      "end": 15626,
       "title": "Is Log Compaction used for topics?",
       "keywords": [
         "log",
@@ -1168,14 +1268,18 @@
         "standard",
         "retention",
         "preferred"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-27",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 14513,
-      "end": 14628,
+      "start": 16025,
+      "end": 16140,
       "title": "Why was two-stage deduplication required?",
       "keywords": [
         "two-stage",
@@ -1209,14 +1313,18 @@
         "files",
         "haven't",
         "changed"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-28",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 14990,
-      "end": 15186,
+      "start": 16558,
+      "end": 16754,
       "title": "How does the first deduplication stage (MDTM) work?",
       "keywords": [
         "mdtm",
@@ -1258,14 +1366,18 @@
         "downloading",
         "file",
         "body"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-29",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 15545,
-      "end": 15679,
+      "start": 17169,
+      "end": 17303,
       "title": "What if the server does not support MDTM?",
       "keywords": [
         "mdtm",
@@ -1301,14 +1413,18 @@
         "binary",
         "file",
         "body"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-30",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 16024,
-      "end": 16181,
+      "start": 17704,
+      "end": 17861,
       "title": "How is file uniqueness verified?",
       "keywords": [
         "redis",
@@ -1347,14 +1463,18 @@
         "determines",
         "duplicate",
         "exists"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-31",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 16532,
-      "end": 16637,
+      "start": 18268,
+      "end": 18373,
       "title": "What happens if Redis identifies the file as a duplicate?",
       "keywords": [
         "duplicate",
@@ -1384,14 +1504,18 @@
         "file",
         "resources",
         "released"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-32",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 16976,
-      "end": 16999,
+      "start": 18768,
+      "end": 18791,
       "title": "What is the TTL (Time-To-Live) of deduplication keys in Redis?",
       "keywords": [
         "redis",
@@ -1418,14 +1542,18 @@
         "day",
         "24",
         "hours"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-33",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 17388,
-      "end": 17605,
+      "start": 19236,
+      "end": 19453,
       "title": "How does the system handle Read-Only FTP servers that prohibit file deletion?",
       "keywords": [
         "read-only",
@@ -1470,14 +1598,18 @@
         "key",
         "matching",
         "stage"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-34",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 17970,
-      "end": 18109,
+      "start": 19874,
+      "end": 20013,
       "title": "Is there a risk of Redis RAM overflowing and keys being lost due to Eviction Policy?",
       "keywords": [
         "redis",
@@ -1514,14 +1646,18 @@
         "24",
         "hour",
         "ttl"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-35",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 18499,
-      "end": 18687,
+      "start": 20459,
+      "end": 20647,
       "title": "Why use Redis for deduplication instead of PostgreSQL?",
       "keywords": [
         "redis",
@@ -1567,14 +1703,18 @@
         "processing",
         "state",
         "storage"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-36",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 19075,
-      "end": 19300,
+      "start": 21091,
+      "end": 21316,
       "title": "What is the core of the Dual-Write problem in this architecture?",
       "keywords": [
         "dual-write",
@@ -1627,14 +1767,18 @@
         "due",
         "network",
         "glitch"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-37",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 19685,
-      "end": 19881,
+      "start": 21757,
+      "end": 21953,
       "title": "What is the algorithm of the Outbox Pattern here?",
       "keywords": [
         "outbox",
@@ -1678,14 +1822,18 @@
         "kafka",
         "offset",
         "committed"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-38",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 20276,
-      "end": 20429,
+      "start": 22404,
+      "end": 22557,
       "title": "How is a desynchronization of PENDING and COMPLETE statuses handled?",
       "keywords": [
         "pending",
@@ -1724,14 +1872,18 @@
         "take",
         "o(1",
         "time"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-39",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 20862,
-      "end": 21087,
+      "start": 23046,
+      "end": 23271,
       "title": "Why was an In-Memory HashMap chosen for the wait state instead of Kafka Streams (State Store)?",
       "keywords": [
         "in-memory",
@@ -1784,14 +1936,18 @@
         "collection",
         "solves",
         "problem"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-40",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 21482,
-      "end": 21700,
+      "start": 23722,
+      "end": 23940,
       "title": "Why couldn't TTL records in Redis be used instead of the Outbox Consumer?",
       "keywords": [
         "redis",
@@ -1835,14 +1991,18 @@
         "ensures",
         "strict",
         "binding"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-41",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 22066,
-      "end": 22212,
+      "start": 24362,
+      "end": 24508,
       "title": "What is the wait timeout in the HashMap for the COMPLETE status?",
       "keywords": [
         "wait",
@@ -1879,14 +2039,18 @@
         "retains",
         "old",
         "offset"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-42",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 22597,
-      "end": 22759,
+      "start": 24949,
+      "end": 25111,
       "title": "What happens if the worker crashes in the middle of the 10-second wait window?",
       "keywords": [
         "worker",
@@ -1927,14 +2091,18 @@
         "re",
         "execute",
         "verification"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-43",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 23153,
-      "end": 23299,
+      "start": 25561,
+      "end": 25707,
       "title": "How is the problem of \"Orphaned\" files in S3 (caused by service crashes) solved?",
       "keywords": [
         "orphaned",
@@ -1976,14 +2144,18 @@
         "automatically",
         "purged",
         "storage"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-44",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 23765,
-      "end": 23965,
+      "start": 26229,
+      "end": 26429,
       "title": "How does monitoring distinguish between false alarms (partner didn't upload files) and real pipeline failures?",
       "keywords": [
         "monitoring",
@@ -2026,14 +2198,18 @@
         "files",
         "zero",
         "results"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-45",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 24336,
-      "end": 24539,
+      "start": 26856,
+      "end": 27059,
       "title": "Which metric signals the need to change the schedule in Alarm?",
       "keywords": [
         "tick",
@@ -2076,14 +2252,18 @@
         "frequency",
         "specific",
         "host"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-46",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 24917,
-      "end": 25099,
+      "start": 27493,
+      "end": 27675,
       "title": "How is the stability of partner servers tracked?",
       "keywords": [
         "connection",
@@ -2120,14 +2300,18 @@
         "timeouts",
         "connection",
         "refusals"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-47",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 25464,
-      "end": 25608,
+      "start": 28096,
+      "end": 28240,
       "title": "Does an FTP connection drop lead to a worker crash?",
       "keywords": [
         "ftp",
@@ -2163,14 +2347,18 @@
         "enters",
         "standby",
         "mode"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-48",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 25977,
-      "end": 26145,
+      "start": 28665,
+      "end": 28833,
       "title": "What does the Resource Metrics dashboard track?",
       "keywords": [
         "resource",
@@ -2210,14 +2398,18 @@
         "cleaned",
         "inactive",
         "sessions"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-49",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 26575,
-      "end": 26797,
+      "start": 29319,
+      "end": 29541,
       "title": "How is the appearance of invalid files (corrupted archives, wrong format) tracked?",
       "keywords": [
         "invalid",
@@ -2266,14 +2458,18 @@
         "room",
         "manual",
         "retry"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     },
     {
       "id": "alarm-qa-50",
       "section": "alarm-qa",
       "file": "sections/alarm-qa.md",
-      "start": 27211,
-      "end": 27392,
+      "start": 30011,
+      "end": 30192,
       "title": "Is manual intervention required if the PostgreSQL database temporarily fails?",
       "keywords": [
         "postgresql",
@@ -2312,7 +2508,11 @@
         "direct",
         "dependencies",
         "postgresql"
-      ]
+      ],
+      "stack": [
+        "java"
+      ],
+      "weight": "primary"
     }
   ]
 }

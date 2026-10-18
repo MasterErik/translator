@@ -15,7 +15,11 @@
   "aliases": [
     "main business objective",
     "why the platform exists"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Collecting medication orders from over 1,000 heterogeneous external sources (pharmacies, distributors) without data loss and converting them into a unified canonical format.
@@ -35,7 +39,11 @@ Collecting medication orders from over 1,000 heterogeneous external sources (pha
   "aliases": [
     "what architecture problem is solved",
     "why isolate internal systems"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Isolating the internal infrastructure from the extreme instability of third-party systems (legacy protocols, unpredictable communication channels, and partner contract violations).
@@ -56,7 +64,11 @@ Isolating the internal infrastructure from the extreme instability of third-part
   "aliases": [
     "why two microservices instead of one poller",
     "services split rationale"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 To ensure the stateless nature of the download workers. This allows for independent scaling of the download nodes pool and seamless restarts without losing the polling schedule, which is managed by a separate service.
@@ -77,7 +89,11 @@ To ensure the stateless nature of the download workers. This allows for independ
   "aliases": [
     "where integration config is stored",
     "configuration database"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 A PostgreSQL database that stores metadata: FTP/Mail addresses, credentials, polling frequency, and file parsing parameters.
@@ -96,7 +112,11 @@ A PostgreSQL database that stores metadata: FTP/Mail addresses, credentials, pol
   "aliases": [
     "which transfer protocols are supported",
     "how files arrive"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The system supports receiving files via FTP, SFTP, and Email.
@@ -115,7 +135,11 @@ The system supports receiving files via FTP, SFTP, and Email.
   "aliases": [
     "is the file removed from the partner server",
     "delete after download"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 After successful downloading and processing, the platform executes a deletion command on the source side (if the partner's server supports it).
@@ -135,7 +159,11 @@ After successful downloading and processing, the platform executes a deletion co
   "aliases": [
     "how the alarm tick generator works",
     "tick production flow"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 It cyclically polls the integration schedule and generates control ticks (Tick Events), sending them to Kafka for the workers. Each message contains the full context needed for the connection.
@@ -156,7 +184,11 @@ It cyclically polls the integration schedule and generates control ticks (Tick E
   "aliases": [
     "how alarm ha is achieved",
     "tick distribution guarantees"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Generated ticks are efficiently distributed across Kafka partitions, with the `ftp host` acting as the partitioning key. This guarantees sequential processing of ticks for a single host without collisions between worker pods.
@@ -176,7 +208,11 @@ Generated ticks are efficiently distributed across Kafka partitions, with the `f
   "aliases": [
     "how new hosts are added at runtime",
     "config propagation"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The logic is extracted into a separate configuration microservice. It periodically broadcasts the current configuration; the `Alarm` service compares it with its own state and applies updates.
@@ -195,7 +231,11 @@ The logic is extracted into a separate configuration microservice. It periodical
   "aliases": [
     "how alarm schedules the next tick",
     "interval enforcement"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The service tracks the time of the last packet sent for each host. A separate background thread iterates through the actual list and generates events strictly according to the defined interval.
@@ -214,7 +254,11 @@ The service tracks the time of the last packet sent for each host. A separate ba
   "aliases": [
     "does the alarm topic hold business data",
     "can alarm topic be cleared"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 No, the `Alarm` topic is purely technical. It only transmits tick metadata, so it can be painlessly cleared or recreated.
@@ -233,7 +277,11 @@ No, the `Alarm` topic is purely technical. It only transmits tick metadata, so i
   "aliases": [
     "is duplication of ticks protected against",
     "tick duplication safety"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Yes, by using the `ftp host` as the Kafka routing key, even if there is a brief duplication of a tick from `Alarm`, the worker will correctly process or drop the duplicate thanks to the `Drop-on-Busy` strategy.
@@ -252,7 +300,11 @@ Yes, by using the `ftp host` as the Kafka routing key, even if there is a brief 
   "aliases": [
     "different schedules per partner",
     "configurable poll interval"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Yes, the polling frequency is dynamic and configured in PostgreSQL (from 2 to 30 minutes) depending on the partner's SLAs.
@@ -271,7 +323,11 @@ Yes, the polling frequency is dynamic and configured in PostgreSQL (from 2 to 30
   "aliases": [
     "how connections are isolated per tick",
     "bean instance per connection"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Via the `Prototype Beans` pattern in Spring. For each incoming tick from Kafka, a separate bean instance is created or reused, encapsulating the state of that specific connection.
@@ -290,7 +346,11 @@ Via the `Prototype Beans` pattern in Spring. For each incoming tick from Kafka, 
   "aliases": [
     "how many prototype beans can exist",
     "concurrency cap"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 A maximum of 1,000 instances, which corresponds to the upper limit of the polled hosts.
@@ -309,7 +369,11 @@ A maximum of 1,000 instances, which corresponds to the upper limit of the polled
   "aliases": [
     "what happens when the worker is busy",
     "tick skipping strategy"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 If the target `Prototype Bean` is busy downloading files, and a new tick arrives from Kafka for the same host, the message is dropped. Skipping is safe because the tick's job is to download all currently available files.
@@ -328,7 +392,11 @@ If the target `Prototype Bean` is busy downloading files, and a new tick arrives
   "aliases": [
     "does one host block the partition",
     "partition throughput"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 No. The consumer thread reads the message and checks the target bean's busy state. If busy, the consumer instantly drops the message and moves to the next one, without blocking the partition.
@@ -348,7 +416,11 @@ No. The consumer thread reads the message and checks the target bean's busy stat
   "aliases": [
     "how memory and socket leaks are prevented",
     "idle bean cleanup"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 A background `Reaper Thread` is implemented. It tracks the inactivity time of the beans. If there is no activity for 15 minutes, the thread forcibly destroys the bean instance and closes the sockets.
@@ -368,7 +440,11 @@ A background `Reaper Thread` is implemented. It tracks the inactivity time of th
   "aliases": [
     "how stuck ftp connections are handled",
     "unclosable sockets"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 When using blocking sockets within standard network libraries, it is fundamentally impossible to programmatically sever a hanging connection. The platform accepts this as an architectural limitation, and hanging threads are cleared during scheduled deployments/restarts.
@@ -388,7 +464,11 @@ When using blocking sockets within standard network libraries, it is fundamental
   "aliases": [
     "what happens to connections during rebalance",
     "restart behavior"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 A rebalance during deployment implies a full application restart. At this moment, all running `Prototype Beans` and their network connections are properly terminated by the operating system.
@@ -408,7 +488,11 @@ A rebalance during deployment implies a full application restart. At this moment
   "aliases": [
     "is a failed download resumed",
     "99% failure behavior"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The file is downloaded to a temporary directory/memory. Upon failure, it is discarded, and the transaction is not completed. The download will start over at the next Alarm tick.
@@ -426,7 +510,11 @@ The file is downloaded to a temporary directory/memory. Upon failure, it is disc
   "aliases": [
     "what kafka keys messages by",
     "partition key choice"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The identifier (name) of the FTP server.
@@ -446,7 +534,11 @@ The identifier (name) of the FTP server.
   "aliases": [
     "why partition by host",
     "avoiding parallel connections to one server"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 This guarantees that all tasks for the same legacy server will always hit the same worker pod, preventing simultaneous multiple connection attempts to a weak server, which could lead to an IP ban.
@@ -465,7 +557,11 @@ This guarantees that all tasks for the same legacy server will always hit the sa
   "aliases": [
     "how the pipeline scales out",
     "scaling strategy"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 By increasing the number of replicas for the `Download` microservice and proportionally increasing the number of partitions in the Kafka topics.
@@ -485,7 +581,11 @@ By increasing the number of replicas for the `Download` microservice and proport
   "aliases": [
     "kafka delivery semantics",
     "when offsets are committed"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 `At-least-once`. Manual Offset Commit ensures that the offset is shifted only after the data is fully written to S3 and Redis.
@@ -504,7 +604,11 @@ By increasing the number of replicas for the `Download` microservice and proport
   "aliases": [
     "is log compaction used",
     "compaction vs retention"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 In the Alarm topic, `Log Compaction` is unnecessary (it is technical and ephemeral). In Outbox topics, compaction can be configured, but standard retention is preferred.
@@ -523,7 +627,11 @@ In the Alarm topic, `Log Compaction` is unnecessary (it is technical and ephemer
   "aliases": [
     "why two dedup stages",
     "purpose of deduplication"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 To radically save network traffic and processing time by skipping the download of files that haven't changed.
@@ -543,7 +651,11 @@ To radically save network traffic and processing time by skipping the download o
   "aliases": [
     "how mdtm deduplication works",
     "hash without download"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 If the FTP server supports the `MDTM` (Modification Time) command, a hash is generated on the fly from the metadata: `SHA-256(FileName + LastModifiedDate)` without downloading the file body.
@@ -563,7 +675,11 @@ If the FTP server supports the `MDTM` (Modification Time) command, a hash is gen
   "aliases": [
     "what if the server lacks mdtm",
     "fallback dedup stage"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The second stage is engaged: the file is downloaded completely, and then a Content Hash is calculated from the binary file body.
@@ -584,7 +700,11 @@ The second stage is engaged: the file is downloaded completely, and then a Conte
   "aliases": [
     "how duplicates are detected in redis",
     "uniqueness check"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The calculated hash serves as part of the Redis key (`[Host_ID + File_Name + File_Hash]`). An atomic request to Redis determines if a duplicate exists.
@@ -603,7 +723,11 @@ The calculated hash serves as part of the Redis key (`[Host_ID + File_Name + Fil
   "aliases": [
     "what happens on a redis duplicate hit",
     "duplicate handling"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The file is ignored, the tick is completed (or moves to the next file), and resources are released.
@@ -622,7 +746,11 @@ The file is ignored, the tick is completed (or moves to the next file), and reso
   "aliases": [
     "how long dedup keys live",
     "expiration of redis keys"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 1 day (24 hours).
@@ -642,7 +770,11 @@ The file is ignored, the tick is completed (or moves to the next file), and reso
   "aliases": [
     "servers that forbid deletion",
     "read-only partner handling"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Even if the file remains on the FTP, its key is placed in Redis during the first processing. For the next 24 hours (while the TTL is alive), the file will be instantly filtered out during the key matching stage.
@@ -661,7 +793,11 @@ Even if the file remains on the FTP, its key is placed in Redis during the first
   "aliases": [
     "can redis evict dedup keys",
     "ram overflow risk"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 This risk is eliminated at the sizing level: enough memory is allocated to guarantee the storage of all file keys with a 24-hour TTL.
@@ -681,7 +817,11 @@ This risk is eliminated at the sizing level: enough memory is allocated to guara
   "aliases": [
     "why redis instead of a database",
     "dedup store choice"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Deduplication operations require thousands of checks per second. The in-memory nature of Redis and automatic key cleanup via TTL make it ideal for ephemeral processing state storage.
@@ -702,7 +842,11 @@ Deduplication operations require thousands of checks per second. The in-memory n
   "aliases": [
     "what the dual-write issue is",
     "three-way atomic write"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The need to atomically write a binary file to Amazon S3, commit the key in Redis, and send a message to the next Kafka topic, eliminating the scenario where one action succeeds but another fails due to a network glitch.
@@ -722,7 +866,11 @@ The need to atomically write a binary file to Amazon S3, commit the key in Redis
   "aliases": [
     "how the transactional outbox works",
     "pending and complete flow"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The file is written to S3, and a PENDING event is sent to Kafka. The consumer waits for a COMPLETE event. Upon receiving it, the key is committed in Redis, and the Kafka offset is committed.
@@ -742,7 +890,11 @@ The file is written to S3, and a PENDING event is sent to Kafka. The consumer wa
   "aliases": [
     "how status mismatches are handled",
     "outbox consumer design"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 There is always exactly one consumer dedicated to this task. Failure events are negligibly rare, and lookups in the local `HashMap` take O(1) time.
@@ -762,7 +914,11 @@ There is always exactly one consumer dedicated to this task. Failure events are 
   "aliases": [
     "why a hashmap instead of kafka streams",
     "state store decision"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 To adhere to the KISS (Keep It Simple, Stupid) principle. The load is minimal, so there's no reason to complicate the system with heavy tools like Kafka Streams when a standard thread-safe collection solves the problem.
@@ -782,7 +938,11 @@ To adhere to the KISS (Keep It Simple, Stupid) principle. The load is minimal, s
   "aliases": [
     "why not use redis ttl instead of outbox",
     "consistency binding"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 If Redis were used, a key could be destroyed (by TTL or memory failure) while the uncommitted record in Kafka remained, leading to inconsistency. The `HashMap` with a manual Kafka commit ensures a strict binding.
@@ -802,7 +962,11 @@ If Redis were used, a key could be destroyed (by TTL or memory failure) while th
   "aliases": [
     "how long the hashmap waits",
     "timeout behavior"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The worker waits up to 10 seconds for the COMPLETE event. If a timeout occurs, the transaction rolls back, and Kafka retains the old offset.
@@ -821,7 +985,11 @@ The worker waits up to 10 seconds for the COMPLETE event. If a timeout occurs, t
   "aliases": [
     "what happens if the worker dies mid-wait",
     "crash during wait"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 The Kafka offset won't shift. After the pod restarts, Kafka will redeliver the event with the old offset, and the Consumer will re-execute the verification.
@@ -841,7 +1009,11 @@ The Kafka offset won't shift. After the pod restarts, Kafka will redeliver the e
   "aliases": [
     "how orphaned s3 objects are cleaned",
     "s3 ttl policy"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 An automatic `S3 Lifecycle Policy` with a 15-day TTL is configured for the bucket. Unlinked objects are automatically purged by the storage.
@@ -862,7 +1034,11 @@ An automatic `S3 Lifecycle Policy` with a 15-day TTL is configured for the bucke
   "aliases": [
     "distinguishing partner silence from failure",
     "observability of the pipeline"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Grafana displays a metric for successful `Alarm` packet processing. This clearly shows that the pipeline is functioning normally and polling hosts, even if there are no new files (zero results).
@@ -882,7 +1058,11 @@ Grafana displays a metric for successful `Alarm` packet processing. This clearly
   "aliases": [
     "which metric triggers a schedule change",
     "drop rate signal"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 `Tick Drop Rate`. If it is high, it means the workers are constantly busy and dropping new ticks, which requires either scaling the workers or reducing the polling frequency for that specific host.
@@ -902,7 +1082,11 @@ Grafana displays a metric for successful `Alarm` packet processing. This clearly
   "aliases": [
     "how partner stability is measured",
     "external server errors"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Via the `Connection Error Rate` metric, which visualizes the availability of external servers across each of the 1000+ partners (a counter of timeouts and connection refusals).
@@ -922,7 +1106,11 @@ Via the `Connection Error Rate` metric, which visualizes the availability of ext
   "aliases": [
     "does a connection failure kill the worker",
     "error resilience"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 No, the error context is logged and sent to Prometheus. The worker gracefully completes the tick without crashing and enters standby mode.
@@ -941,7 +1129,11 @@ No, the error context is logged and sent to Prometheus. The worker gracefully co
   "aliases": [
     "what the resource dashboard shows",
     "bean pool telemetry"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 It monitors the current number of running `Prototype Beans` and gathers statistics on the `Reaper Thread` operations (the number of cleaned-up inactive sessions).
@@ -962,7 +1154,11 @@ It monitors the current number of running `Prototype Beans` and gathers statisti
   "aliases": [
     "how corrupted files are tracked",
     "parse failure handling"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 Upon a canonization/parsing error, a `Parse Error` metric is generated, the file is marked as `FAILED` (or sent to a Dead Letter Queue - DLQ), and the key is not recorded as successful, leaving room for manual retry.
@@ -982,7 +1178,11 @@ Upon a canonization/parsing error, a `Parse Error` metric is generated, the file
   "aliases": [
     "what if the database goes down",
     "db outage resilience"
-  ]
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
 }
 -->
 No. The Alarm service will cache the last known schedule and continue generating ticks until the DB recovers. The Download microservice has no direct dependencies on PostgreSQL.
