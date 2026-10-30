@@ -72,6 +72,7 @@ func main() {
 		LLMAPIKey:            cfg.LLMAPIKey,
 		LLMModel:             cfg.LLMModel,
 		MaxTokens:            cfg.MaxTokens,
+		SystemPromptFile:     cfg.SystemPromptFile,
 		CandidateContextFile: cfg.CandidateContextFile,
 		CandidateContext:     cfg.CandidateContext,
 		Hints:                cfg.Hints,

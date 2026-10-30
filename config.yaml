@@ -28,6 +28,15 @@ MIC_DEVICE: ""
 # Default false — set true to enable for debugging or post-session review.
 SAVE_AUDIO: false
 
+# System prompt (правила генерации ответа) — вынесен из кода в обычный текстовый
+# файл: правки применяются при следующем старте БЕЗ перекомпиляции.
+# Плейсхолдеры: {{SRC_TAG}} и {{TGT_TAG}} — подставляются SOURCE_LANG/TARGET_LANG
+# в верхнем регистре (EN, RU, DE). Если файла нет — он создаётся при старте из
+# встроенного дефолта (go:embed) и работа продолжается. Пустой путь, нечитаемый
+# файл или неизвестный плейсхолдер — ошибка старта (fail-fast).
+# Многострочный текст в YAML НЕ нужен: переносы строк живут в файле как есть.
+SYSTEM_PROMPT_FILE: "candidate_context/system_prompt.md"
+
 # Candidate context (база CV) — путь к текстовому файлу с фактами кандидата (legacy-режим).
 # ЗАКОММЕНТИРОВАНО на время работ по плану candidate-context-precision-v3.1 (волна 0):
 # любой top-level ключ Config переопределяется переменной окружения с тем же именем

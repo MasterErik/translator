@@ -20,6 +20,10 @@ type ChatProvider struct {
 	model     string
 	maxTokens int
 	mu        sync.Mutex
+
+	// systemTemplate — шаблон system-промпта из SYSTEM_PROMPT_FILE (nil →
+	// встроенный дефолт). Читается под p.mu.
+	systemTemplate *SystemPromptTemplate
 }
 
 func NewChatProvider(baseURL, apiKey, model string) *ChatProvider {
@@ -39,15 +43,34 @@ func (p *ChatProvider) SetMaxTokens(n int) {
 	p.maxTokens = n
 }
 
+// SetSystemPromptTemplate задаёт шаблон system-промпта (из SYSTEM_PROMPT_FILE).
+// nil возвращает встроенный дефолт. Вызывается на старте, до первых запросов.
+func (p *ChatProvider) SetSystemPromptTemplate(tpl *SystemPromptTemplate) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.systemTemplate = tpl
+}
+
+// buildSystemPromptUnderLock собирает system-сообщение, используя уже
+// захваченный p.mu (обычный field read без повторного lock — иначе deadlock).
+func (p *ChatProvider) buildSystemPromptUnderLock(candidateContext, sourceLang, targetLang string) string {
+	return buildSystemPromptWith(p.systemTemplate, candidateContext, sourceLang, targetLang)
+}
+
 // buildSystemPrompt собирает system-промпт: правила формата подсказки
 // (BuildSystemPrompt) всегда идут первыми. Candidate context добавляется
 // отдельной секцией для персонализации — он НЕ затирает правила формата.
 // Раньше непустой cvContext полностью заменял правила, из-за чего модель
 // отвечала без «SRC: … | TGT: …» и parseAnswerHints отбрасывал всё.
-func buildSystemPrompt(candidateContext, sourceLang, targetLang string) string {
-	prompt := BuildSystemPrompt(sourceLang, targetLang)
+// buildSystemPromptWith собирает system-сообщение из заданного шаблона.
+// nil-шаблон даёт пустые правила — провайдер отвергает такой запрос раньше
+// (см. GenerateAnswers/GenerateAnswersStream), т.к. SYSTEM_PROMPT_FILE обязателен.
+func buildSystemPromptWith(tpl *SystemPromptTemplate, candidateContext, sourceLang, targetLang string) string {
+	prompt := tpl.Render(sourceLang, targetLang)
 	if candidateContext != "" {
-		prompt += "\n\nCandidate context:\n" + candidateContext
+		// Render гарантирует один завершающий "\n"; убираем его, чтобы между
+		// правилами и candidate context была ровно одна пустая строка.
+		prompt = strings.TrimRight(prompt, "\n") + "\n\nCandidate context:\n" + candidateContext
 	}
 	return prompt
 }
@@ -56,9 +79,13 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) (
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.systemTemplate == nil {
+		return nil, fmt.Errorf("translator: шаблон system-промпта не задан (SYSTEM_PROMPT_FILE)")
+	}
+
 	userPrompt := BuildAnswerPrompt(req)
 
-	systemPrompt := buildSystemPrompt(req.CandidateContext, req.SourceLang, req.TargetLang)
+	systemPrompt := p.buildSystemPromptUnderLock(req.CandidateContext, req.SourceLang, req.TargetLang)
 
 	chatReq := openai.ChatCompletionRequest{
 		Model: p.model,
@@ -90,11 +117,15 @@ func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, req AnswerRequ
 	tokenCh := make(chan string, 64)
 	userPrompt := BuildAnswerPrompt(req)
 
-	systemPrompt := buildSystemPrompt(req.CandidateContext, req.SourceLang, req.TargetLang)
-
 	p.mu.Lock()
 	maxTok := p.maxTokens
+	hasTemplate := p.systemTemplate != nil
+	systemPrompt := p.buildSystemPromptUnderLock(req.CandidateContext, req.SourceLang, req.TargetLang)
 	p.mu.Unlock()
+
+	if !hasTemplate {
+		return nil, fmt.Errorf("translator: шаблон system-промпта не задан (SYSTEM_PROMPT_FILE)")
+	}
 
 	chatReq := openai.ChatCompletionRequest{
 		Model: p.model,

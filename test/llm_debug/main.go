@@ -26,6 +26,13 @@ func main() {
 	prov := translator.NewChatProvider(cfg.LLMBaseURL, apiKey, cfg.LLMModel)
 	prov.SetMaxTokens(cfg.MaxTokens)
 
+	tpl, tplErr := translator.LoadSystemPromptTemplate(cfg.SystemPromptFile)
+	if tplErr != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: system prompt:", tplErr)
+		os.Exit(1)
+	}
+	prov.SetSystemPromptTemplate(tpl)
+
 	cv := "Senior Go developer, 5+ years, expert in concurrency patterns."
 	q := "What is the difference between a mutex and a channel in Go?"
 

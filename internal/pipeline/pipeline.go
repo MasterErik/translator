@@ -97,6 +97,10 @@ type Config struct {
 	LLMModel   string
 	MaxTokens  int
 
+	// SystemPromptFile — путь к шаблону system-промпта (правила ответа).
+	// Пусто → встроенный дефолт; нечитаемый файл валит старт (fail-fast).
+	SystemPromptFile string
+
 	// Candidate context (база CV) и conversation context.
 	CandidateContextFile string                        // путь к файлу базы CV (legacy)
 	CandidateContext     common.CandidateContextConfig // fact-level retrieval (Dir) — приоритет над File
@@ -195,6 +199,16 @@ func New(cfg Config) (*Pipeline, error) {
 
 	llmProv := translator.NewChatProvider(llmBaseURL, llmAPIKey, llmModel)
 	llmProv.SetMaxTokens(cfg.MaxTokens)
+
+	// Шаблон system-промпта: файл из SYSTEM_PROMPT_FILE, иначе встроенный
+	// дефолт. Ошибка чтения/парсинга валит старт — иначе правка файла
+	// «молча не применяется», что дороже падения на старте.
+	systemTpl, tplErr := translator.LoadSystemPromptTemplate(cfg.SystemPromptFile)
+	if tplErr != nil {
+		newErr = fmt.Errorf("pipeline: system prompt: %w", tplErr)
+		return nil, newErr
+	}
+	llmProv.SetSystemPromptTemplate(systemTpl)
 
 	// TranslationEngine.
 	engine := translator.NewEngine(llmProv)

@@ -152,6 +152,14 @@ loop:
 func testAnswerGeneration(ctx context.Context, cfg *common.Config) {
 	prov := translator.NewChatProvider(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
 
+	// Шаблон system-промпта обязателен (текста правил в коде больше нет).
+	tpl, tplErr := translator.LoadSystemPromptTemplate(cfg.SystemPromptFile)
+	if tplErr != nil {
+		fmt.Println("  SYSTEM PROMPT ERROR:", tplErr)
+		return
+	}
+	prov.SetSystemPromptTemplate(tpl)
+
 	// Test answer generation.
 	fmt.Println("  --- Answer Generation ---")
 	q := "What is the difference between a mutex and a channel in Go?"

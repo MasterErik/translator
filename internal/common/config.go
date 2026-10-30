@@ -31,6 +31,12 @@ type Config struct {
 	SourceLang string `yaml:"SOURCE_LANG"`
 	TargetLang string `yaml:"TARGET_LANG"`
 
+	// SystemPromptFile — путь к файлу шаблона system-промпта (правила
+	// генерации ответа). Пусто → встроенный дефолт (go:embed). Файл — обычный
+	// текст, поддерживает плейсхолдеры {{SRC_TAG}} и {{TGT_TAG}}, в которые
+	// подставляются SOURCE_LANG/TARGET_LANG в верхнем регистре.
+	SystemPromptFile string `yaml:"SYSTEM_PROMPT_FILE"`
+
 	// Logging.
 	LogDir    string `yaml:"LOG_DIR"`
 	LogLevel  string `yaml:"LOG_LEVEL"`

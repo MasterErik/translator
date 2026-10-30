@@ -14,8 +14,12 @@ import (
 )
 
 // newTestChatProvider creates an ChatProvider pointed at a mock server.
+// Шаблон system-промпта в production обязателен и приходит из SYSTEM_PROMPT_FILE;
+// в тестах подставляем фикстуру, чтобы не зависеть от файла на диске.
 func newTestChatProvider(server *httptest.Server, model string) *ChatProvider {
-	return NewChatProvider(server.URL+"/v1", "sk-test-key", model)
+	p := NewChatProvider(server.URL+"/v1", "sk-test-key", model)
+	p.SetSystemPromptTemplate(testSystemPromptTemplate())
+	return p
 }
 
 func setupMockServer(handler http.HandlerFunc) *httptest.Server {
@@ -353,7 +357,8 @@ func TestParseAnswerHintsFallbackRaw(t *testing.T) {
 }
 
 func TestBuildSystemPrompt(t *testing.T) {
-	defaultPrompt := BuildSystemPrompt("en", "ru")
+	tpl := mustTestSystemPromptTemplate(t)
+	defaultPrompt := tpl.Render("en", "ru")
 	tests := []struct {
 		name      string
 		cvContext string
@@ -394,7 +399,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.check(t, buildSystemPrompt(tt.cvContext, "", ""))
+			tt.check(t, buildSystemPromptWith(tpl, tt.cvContext, "", ""))
 		})
 	}
 }
@@ -404,9 +409,10 @@ func TestBuildSystemPrompt(t *testing.T) {
 // идут первыми, а пустой candidate context секцию не порождает.
 func TestBuildSystemPromptCandidateContext(t *testing.T) {
 	const candidate = "some candidate context"
+	tpl := mustTestSystemPromptTemplate(t)
 
-	got := buildSystemPrompt(candidate, "", "")
-	if !strings.HasPrefix(got, BuildSystemPrompt("en", "ru")) {
+	got := buildSystemPromptWith(tpl, candidate, "", "")
+	if !strings.HasPrefix(got, tpl.Render("en", "ru")) {
 		t.Errorf("buildSystemPrompt(%q) должен начинаться с правил формата, got:\n%s", candidate, got)
 	}
 	if !strings.Contains(got, candidate) {
@@ -416,12 +422,12 @@ func TestBuildSystemPromptCandidateContext(t *testing.T) {
 		t.Errorf("buildSystemPrompt(%q) должен содержать секцию «Candidate context:», got:\n%s", candidate, got)
 	}
 
-	if got := buildSystemPrompt("", "", ""); got != BuildSystemPrompt("en", "ru") {
+	if got := buildSystemPromptWith(tpl, "", "", ""); got != tpl.Render("en", "ru") {
 		t.Errorf("buildSystemPrompt(\"\") должен быть равен формату без секции candidate context, got:\n%s", got)
 	}
 
 	// Параметризованные языки доходят до правил формата.
-	deGot := buildSystemPrompt(candidate, "en", "de")
+	deGot := buildSystemPromptWith(tpl, candidate, "en", "de")
 	if !strings.Contains(deGot, "| DE:") || strings.Contains(deGot, "RU") {
 		t.Errorf("buildSystemPrompt(_, en, de) должен содержать | DE: и не содержать RU, got:\n%s", deGot)
 	}
@@ -471,6 +477,7 @@ func TestNewChatProvider_CustomBaseURL(t *testing.T) {
 
 	// Создаём провайдер с кастомным base_url (симулируем GLM API).
 	provider := NewChatProvider(server.URL+"/v1", "sk-test-key", "glm-4-flash")
+	provider.SetSystemPromptTemplate(testSystemPromptTemplate())
 	ctx := context.Background()
 
 	if provider.model != "glm-4-flash" {

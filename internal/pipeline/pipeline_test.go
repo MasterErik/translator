@@ -891,9 +891,10 @@ func TestPipelineNew_ValidConfig_Minimal(t *testing.T) {
 		t.Fatalf("LoadConfigFromYAML: %v", err)
 	}
 	cfg := Config{
-		LLMAPIKey:  "sk-test-key",
-		LLMBaseURL: commonCfg.LLMBaseURL,
-		LLMModel:   commonCfg.LLMModel,
+		LLMAPIKey:        dummyLLMKey,
+		LLMBaseURL:       commonCfg.LLMBaseURL,
+		LLMModel:         commonCfg.LLMModel,
+		SystemPromptFile: testSystemPromptFile(t),
 	}
 	p, err := New(cfg)
 	if err != nil {
@@ -934,10 +935,11 @@ func TestPipelineNew_ValidConfig_WithLogDir(t *testing.T) {
 		t.Fatalf("LoadConfigFromYAML: %v", err)
 	}
 	cfg := Config{
-		LLMAPIKey:  "sk-test-key",
-		LLMBaseURL: commonCfg.LLMBaseURL,
-		LLMModel:   commonCfg.LLMModel,
-		LogDir:     tmpDir,
+		LLMAPIKey:        dummyLLMKey,
+		LLMBaseURL:       commonCfg.LLMBaseURL,
+		LLMModel:         commonCfg.LLMModel,
+		SystemPromptFile: testSystemPromptFile(t),
+		LogDir:           tmpDir,
 	}
 	p, err := New(cfg)
 	if err != nil {

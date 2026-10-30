@@ -692,3 +692,34 @@ func cleanEnv(t *testing.T, vars ...string) {
 		os.Unsetenv(v)
 	}
 }
+
+// TestSystemPromptFileConfig — SYSTEM_PROMPT_FILE: путь к шаблону system-промпта
+// (пусто → встроенный дефолт), yaml-ключ и env-override того же имени.
+func TestSystemPromptFileConfig(t *testing.T) {
+	const envVar = "SYSTEM_PROMPT_FILE"
+
+	t.Run("default empty", func(t *testing.T) {
+		cleanEnv(t, envVar)
+		cfg := minimalYAML(t, "")
+		if cfg.SystemPromptFile != "" {
+			t.Errorf("SystemPromptFile default: got %q, want \"\" (встроенный дефолт)", cfg.SystemPromptFile)
+		}
+	})
+
+	t.Run("yaml value", func(t *testing.T) {
+		cleanEnv(t, envVar)
+		cfg := minimalYAML(t, "SYSTEM_PROMPT_FILE: \"prompts/system_prompt.md\"\n")
+		if cfg.SystemPromptFile != "prompts/system_prompt.md" {
+			t.Errorf("SystemPromptFile from YAML: got %q, want %q", cfg.SystemPromptFile, "prompts/system_prompt.md")
+		}
+	})
+
+	t.Run("env override", func(t *testing.T) {
+		cleanEnv(t, envVar)
+		t.Setenv(envVar, "custom/prompt.md")
+		cfg := minimalYAML(t, "SYSTEM_PROMPT_FILE: \"prompts/system_prompt.md\"\n")
+		if cfg.SystemPromptFile != "custom/prompt.md" {
+			t.Errorf("SystemPromptFile env override: got %q, want %q", cfg.SystemPromptFile, "custom/prompt.md")
+		}
+	})
+}

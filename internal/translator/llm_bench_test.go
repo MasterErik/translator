@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -55,6 +57,23 @@ type latencyStats struct {
 
 // ── HTTP-запрос ───────────────────────────────────────────────────────────
 
+// integrationSystemPromptTemplate — шаблон system-промпта для интеграционных
+// прогонов: тот же файл, что и в приложении (SYSTEM_PROMPT_FILE), по умолчанию
+// candidate_context/system_prompt.md. Текста в коде больше нет, поэтому без
+// файла тест падает с понятным сообщением.
+func integrationSystemPromptTemplate(t *testing.T) *SystemPromptTemplate {
+	t.Helper()
+	path := os.Getenv("SYSTEM_PROMPT_FILE")
+	if path == "" {
+		path = filepath.Join("..", "..", "candidate_context", "system_prompt.md")
+	}
+	tpl, err := LoadSystemPromptTemplate(path)
+	if err != nil {
+		t.Fatalf("шаблон system-промпта: %v (задайте SYSTEM_PROMPT_FILE)", err)
+	}
+	return tpl
+}
+
 // sendChatRequest отправляет запрос к chat/completions и возвращает
 // полное тело ответа. Если disableThinking=true, добавляет поле thinking.
 func sendChatRequest(t *testing.T, baseURL, apiKey, model, question string, disableThinking bool) string {
@@ -63,7 +82,7 @@ func sendChatRequest(t *testing.T, baseURL, apiKey, model, question string, disa
 	body := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
-			{"role": "system", "content": BuildSystemPrompt("en", "ru")},
+			{"role": "system", "content": integrationSystemPromptTemplate(t).Render("en", "ru")},
 			{"role": "user", "content": BuildAnswerPrompt(AnswerRequest{Question: question})},
 		},
 		"temperature": 0.3,
@@ -142,6 +161,7 @@ func runLatencyBench(t *testing.T, cfg benchConfig, question string, runs int) [
 
 	var latencies []time.Duration
 	provider := NewChatProvider(cfg.BaseURL, cfg.APIKey, cfg.Model)
+	provider.SetSystemPromptTemplate(integrationSystemPromptTemplate(t))
 	errors := 0
 
 	t.Log("")
@@ -215,6 +235,7 @@ func benchAllModels(t *testing.T, baseURL, apiKey, question string, models []str
 
 	for _, model := range models {
 		provider := NewChatProvider(baseURL, apiKey, model)
+		provider.SetSystemPromptTemplate(integrationSystemPromptTemplate(t))
 
 		start := time.Now()
 		answers, err := provider.GenerateAnswers(context.Background(), AnswerRequest{Question: question})
@@ -267,6 +288,7 @@ func benchSingle(t *testing.T, baseURL, apiKey, model, question string) {
 
 	t.Run("parsed_answers", func(t *testing.T) {
 		provider := NewChatProvider(baseURL, apiKey, model)
+		provider.SetSystemPromptTemplate(integrationSystemPromptTemplate(t))
 
 		start := time.Now()
 		answers, err := provider.GenerateAnswers(context.Background(), AnswerRequest{Question: question})

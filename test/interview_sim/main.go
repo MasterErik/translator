@@ -133,6 +133,13 @@ func main() {
 
 	provider := translator.NewChatProvider(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
 
+	tpl, tplErr := translator.LoadSystemPromptTemplate(cfg.SystemPromptFile)
+	if tplErr != nil {
+		fmt.Fprintf(os.Stderr, "error: system prompt: %v\n", tplErr)
+		os.Exit(1)
+	}
+	provider.SetSystemPromptTemplate(tpl)
+
 	first := true
 	failures := 0
 	executed := 0

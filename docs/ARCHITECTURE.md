@@ -152,7 +152,7 @@ conversation:
 
 ## LLM
 
-OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`), строится `BuildSystemPrompt(sourceLang, targetLang)`. Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
+OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`). Правила ответа (system-промпт) вынесены из кода в текстовый файл `SYSTEM_PROMPT_FILE` (по умолчанию `candidate_context/system_prompt.md`): он читается на старте `translator.LoadSystemPromptTemplate`, плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` подставляются языковой парой; если файла нет — он создаётся из встроенного дефолта (go:embed) и работа продолжается; пустой путь, нечитаемый файл или неизвестный плейсхолдер валят старт (fail-fast). Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
 
 **Подробнее:** `docs/qa-architecture.md`
 
@@ -259,7 +259,7 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 
 - `UIMessage.Answers []Answer`, где `Answer{Source, Target}` — пара «ответ в исходном языке / перевод в целевом». Поля нейтральны, т.к. языковая пара настраиваема.
 - Формат строки подсказки: `SRC: <…> | TGT: <…>`. Разбор — `translator.ParseAnswer(s, srcTag, tgtTag)`; теги — `strings.ToUpper(SOURCE_LANG/TARGET_LANG)`.
-- **Параметризация языков:** `Config.SourceLang/TargetLang` (из `SOURCE_LANG`/`TARGET_LANG`, ISO 639-1, дефолт **en→ru**) прокидывается через dispatcher в `ParseAnswer` и `BuildSystemPrompt`. Пустые значения трактуются как дефолт.
+- **Параметризация языков:** `Config.SourceLang/TargetLang` (из `SOURCE_LANG`/`TARGET_LANG`, ISO 639-1, дефолт **en→ru**) прокидывается через dispatcher в `ParseAnswer` и в рендер шаблона system-промпта (`SYSTEM_PROMPT_FILE`, плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}`). Пустые значения трактуются как дефолт.
 - **Тип `Error`:** ошибка движка генерации отправляется как `UIMessage{Type: Error}` (не как строка в `Answers`); рисуется красным в зоне 3 и имеет приоритет над подсказками. `AddMessage(Error)` заменяет предыдущую ошибку.
 - **Переводы — без стриминга:** зона 2 — только `append` финальных переводов; ветки `pending`/`streaming` (`MsgStatus`) удалены, dispatcher шлёт только `done`. `Translation` в pipeline не стримится.
 

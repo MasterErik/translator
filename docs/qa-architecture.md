@@ -38,8 +38,9 @@ AnswerRequest{Question, Clarifications, CandidateContext, ConversationContext, C
 ├─ BuildAnswerPrompt(req)          // user prompt
 │     "Recent conversation: …\nThe interviewer asked: <question>\n[Clarifications from the interviewer: …]…[модификатор]"
 │     // блок уточнений — только если Clarifications непусто (пусто → опускается, >3 → последние 3)
-├─ BuildSystemPrompt(srcLang, tgtLang)  // system prompt
-│     SystemPromptAnswerGen + "\n\nCandidate context:\n" + candidate
+├─ system prompt из SYSTEM_PROMPT_FILE     // шаблон: candidate_context/system_prompt.md
+│     Render(srcLang, tgtLang) — подстановка {{SRC_TAG}}/{{TGT_TAG}}
+│     + "\n\nCandidate context:\n" + candidate
         ▼
 llm.GenerateAnswers(ctx, req)
         ▼
@@ -148,12 +149,13 @@ AutoAnswer *bool // nil→true: вопрос сразу ставит задан�
 
 | Контекст | Содержание | Куда попадает | Источник |
 |---|---|---|---|
-| **Candidate Context** | Постоянные факты кандидата: опыт, проекты, технологии, обязанности, достижения | system prompt | файл `candidate_context.md` (`CANDIDATE_CONTEXT_FILE`, gitignored) |
+| **Candidate Context** | Постоянные факты кандидата: опыт, проекты, технологии, обязанности, достижения | system prompt | каталог `candidate_context/` (`CANDIDATE_CONTEXT_DIR`) или legacy-файл `candidate_context_file` |
+| **System Prompt (правила)** | Правила генерации ответа: формат `SRC: … | TGT: …`, запрет выдумывать факты, краткость | system prompt (первым блоком) | файл `SYSTEM_PROMPT_FILE` (`candidate_context/system_prompt.md`), плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` |
 | **Conversation Context** | Уже обсуждавшееся в текущем интервью (Q/A пары) | user prompt | `ConversationHistory` в памяти |
 
 Правила:
 
-1. LLM не придумывает факты сверх Candidate Context — `SystemPromptAnswerGen` прямо требует «Use only information available in the provided candidate context».
+1. LLM не придумывает факты сверх Candidate Context — шаблон system-промпта прямо требует «Use only information available in the provided candidate context».
 2. Информация о компании/вакансии (зарплата, «у нас 500 сотрудников» и т.п.) остаётся в conversation history как реплика интервьюера и НЕ становится фактом кандидата.
 3. Динамическая история НЕ помещается в system prompt — только статичный Candidate Context.
 4. Candidate Context имеет приоритет над conversation history.

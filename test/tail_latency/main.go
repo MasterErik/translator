@@ -228,6 +228,20 @@ func setupLLMEngine() dispatcher.AnswerGenerator {
 	}
 
 	prov := translator.NewChatProvider(baseURL, apiKey, model)
+
+	// Шаблон system-промпта: из SYSTEM_PROMPT_FILE (как в приложении), иначе
+	// файл данных по умолчанию. Текста правил в коде больше нет.
+	promptPath := os.Getenv("SYSTEM_PROMPT_FILE")
+	if promptPath == "" {
+		promptPath = "candidate_context/system_prompt.md"
+	}
+	tpl, tplErr := translator.LoadSystemPromptTemplate(promptPath)
+	if tplErr != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: system prompt:", tplErr)
+		os.Exit(1)
+	}
+	prov.SetSystemPromptTemplate(tpl)
+
 	// Не дизейблим thinking — для GLM это ломает подсказки.
 	return &llmAdapter{prov: prov}
 }

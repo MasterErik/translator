@@ -9,7 +9,7 @@ func TestBuildSystemPromptDefaultFormat(t *testing.T) {
 	// Verify the answer generation prompt specifies the answer format,
 	// first-person perspective, candidate-context grounding, and the default
 	// en→ru language pair.
-	prompt := BuildSystemPrompt("en", "ru")
+	prompt := mustTestSystemPromptTemplate(t).Render("en", "ru")
 	checks := []string{
 		"first person",
 		"candidate context",
@@ -27,7 +27,8 @@ func TestBuildSystemPromptDefaultFormat(t *testing.T) {
 
 func TestBuildSystemPromptParameterizedTarget(t *testing.T) {
 	// en→de: EN label and "| DE:" separator present, RU must be absent.
-	enDe := BuildSystemPrompt("en", "de")
+	tpl := mustTestSystemPromptTemplate(t)
+	enDe := tpl.Render("en", "de")
 	if !strings.Contains(enDe, "EN:") {
 		t.Errorf("BuildSystemPrompt(en,de) must contain EN label, got:\n%s", enDe)
 	}
@@ -39,7 +40,7 @@ func TestBuildSystemPromptParameterizedTarget(t *testing.T) {
 	}
 
 	// Parameterized source label as well.
-	deEn := BuildSystemPrompt("de", "en")
+	deEn := tpl.Render("de", "en")
 	if !strings.Contains(deEn, "DE:") || !strings.Contains(deEn, "| EN:") {
 		t.Errorf("BuildSystemPrompt(de,en) must contain DE: label and | EN: separator, got:\n%s", deEn)
 	}
@@ -53,8 +54,9 @@ func TestBuildSystemPromptUppercasesTags(t *testing.T) {
 		{"En", "Ru"},
 		{"EN", "RU"},
 	}
+	tpl := mustTestSystemPromptTemplate(t)
 	for _, v := range variants {
-		got := BuildSystemPrompt(v[0], v[1])
+		got := tpl.Render(v[0], v[1])
 		if !strings.Contains(got, "EN:") {
 			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать EN:", v[0], v[1])
 		}
@@ -70,8 +72,9 @@ func TestBuildSystemPromptUppercasesTags(t *testing.T) {
 // TestBuildSystemPromptEmptyLangsDefault — пустые языки дают дефолт en→ru
 // (SourceLang/TargetLang по умолчанию).
 func TestBuildSystemPromptEmptyLangsDefault(t *testing.T) {
-	if got, want := BuildSystemPrompt("", ""), BuildSystemPrompt("en", "ru"); got != want {
-		t.Errorf("BuildSystemPrompt(\"\",\"\") must equal the en/ru default")
+	tpl := mustTestSystemPromptTemplate(t)
+	if got, want := tpl.Render("", ""), tpl.Render("en", "ru"); got != want {
+		t.Errorf("Render(\"\",\"\") must equal the en/ru default")
 	}
 }
 
@@ -79,9 +82,12 @@ func TestBuildSystemPromptEmptyLangsDefault(t *testing.T) {
 // использовать только факты, относящиеся к технологии вопроса, и не приписывать
 // опыт одного стека другому.
 func TestBuildSystemPromptStackScopingSnapshot(t *testing.T) {
-	prompt := BuildSystemPrompt("en", "ru")
-	want := "\n" +
-		"Answer from the candidate's perspective, in first person.\n" +
+	tpl := mustTestSystemPromptTemplate(t)
+	prompt := tpl.Render("en", "ru")
+	// Ведущего "\n" больше нет: шаблон вынесен в файл
+	// (candidate_context/system_prompt.md) и Render нормализует края (см.
+	// normalizeSystemPromptText). Остальной текст — прежний.
+	want := "Answer from the candidate's perspective, in first person.\n" +
 		"The interviewer's sentence may not end with a question mark; treat it as a question and answer anyway.\n" +
 		"Use only information available in the provided candidate context.\n" +
 		"Use only the facts that belong to the technology the question is about; " +
@@ -96,7 +102,7 @@ func TestBuildSystemPromptStackScopingSnapshot(t *testing.T) {
 		t.Errorf("BuildSystemPrompt(en,ru) mismatch:\n--- got ---\n%q\n--- want ---\n%q", prompt, want)
 	}
 	// Инструкция не зависит от языковой пары.
-	if got := BuildSystemPrompt("en", "de"); !strings.Contains(got, "one stack to another") {
+	if got := tpl.Render("en", "de"); !strings.Contains(got, "one stack to another") {
 		t.Errorf("инструкция о стеке должна присутствовать при любой паре языков, got:\n%s", got)
 	}
 }
@@ -177,7 +183,7 @@ func TestBuildAnswerPrompt_SeparatesContexts(t *testing.T) {
 	}
 
 	userPrompt := BuildAnswerPrompt(req)
-	systemPrompt := buildSystemPrompt(req.CandidateContext, "", "")
+	systemPrompt := buildSystemPromptWith(testSystemPromptTemplate(), req.CandidateContext, "", "")
 
 	if strings.Contains(userPrompt, "Candidate: Senior Go developer") {
 		t.Error("candidate context must not be in the user prompt (it goes to system)")
@@ -202,7 +208,7 @@ func TestBuildAnswerPrompt_CompanyInfoNotCandidateFacts(t *testing.T) {
 	}
 
 	userPrompt := BuildAnswerPrompt(req)
-	systemPrompt := buildSystemPrompt(candidate, "", "")
+	systemPrompt := buildSystemPromptWith(testSystemPromptTemplate(), candidate, "", "")
 
 	if strings.Contains(systemPrompt, "500 employees") {
 		t.Error("company info must not leak into candidate context (system prompt)")

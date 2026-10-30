@@ -46,6 +46,7 @@ func TestGroqHints_RealAnswers(t *testing.T) {
 
 	prov := NewChatProvider(baseURL, apiKey, model)
 	prov.SetMaxTokens(maxTokens)
+	prov.SetSystemPromptTemplate(integrationSystemPromptTemplate(t))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -132,7 +133,7 @@ func rawContent(t *testing.T, ctx context.Context, prov *ChatProvider, model, qu
 	req := openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: buildSystemPrompt(cvContext, "en", "ru")},
+			{Role: openai.ChatMessageRoleSystem, Content: buildSystemPromptWith(integrationSystemPromptTemplate(t), cvContext, "en", "ru")},
 			{Role: openai.ChatMessageRoleUser, Content: BuildAnswerPrompt(AnswerRequest{Question: question, CandidateContext: cvContext})},
 		},
 		Temperature: 0.3,

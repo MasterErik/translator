@@ -149,10 +149,11 @@ func pipelineConfigWithHints(t *testing.T, ccDir, hintsDir, legacyFile string) C
 	return Config{
 		LLMBaseURL:           commonCfg.LLMBaseURL,
 		LLMModel:             commonCfg.LLMModel,
+		LLMAPIKey:            dummyLLMKey,
+		SystemPromptFile:     testSystemPromptFile(t),
 		CandidateContext:     common.CandidateContextConfig{Dir: ccDir, TopK: 5},
 		CandidateContextFile: legacyFile,
 		Hints:                common.HintsConfig{Dir: hintsDir, TopK: 3},
-		LLMAPIKey:            dummyLLMKey,
 	}
 }
 

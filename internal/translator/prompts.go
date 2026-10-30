@@ -4,22 +4,115 @@
 package translator
 
 import (
+	_ "embed"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 // DefaultSourceLang/DefaultTargetLang are the language pair used when a caller
-// passes empty strings to BuildSystemPrompt.
+// passes empty strings to SystemPromptTemplate.Render.
 const (
 	DefaultSourceLang = "en"
 	DefaultTargetLang = "ru"
 )
 
-// BuildSystemPrompt builds the system prompt for answer generation, templated
-// from the configured language pair. The response format is
-// "<SRC>: <answer in source> | <TGT>: <translation in target>" where the tags
-// are the uppercased ISO 639-1 codes (EN:, RU:, DE:, FR:). Empty langs fall
-// back to the defaults (en/ru), so the default en→ru behaviour is unchanged.
-func BuildSystemPrompt(sourceLang, targetLang string) string {
+// defaultSystemPromptBody — встроенный (go:embed) дефолтный шаблон. Им
+// заполняется отсутствующий файл SYSTEM_PROMPT_FILE при старте; после создания
+// файла источником правды становится сам файл (правится без перекомпиляции).
+//
+//go:embed default_system_prompt.md
+var defaultSystemPromptBody string
+
+// Плейсхолдеры шаблона system-промпта. Подставляются тегами языка в верхнем
+// регистре (EN, RU, DE), как раньше делал зашитый в код текст.
+const (
+	SystemPromptPlaceholderSrcTag = "{{SRC_TAG}}"
+	SystemPromptPlaceholderTgtTag = "{{TGT_TAG}}"
+)
+
+// systemPromptPlaceholderRe находит любой {{...}}-плейсхолдер, чтобы отвергать
+// неизвестные имена на старте, а не отправлять в LLM текст с «{{TYPO}}».
+var systemPromptPlaceholderRe = regexp.MustCompile(`\{\{[A-Za-z0-9_]+\}\}`)
+
+// SystemPromptTemplate — шаблон системного промпта (правила генерации ответа),
+// прочитанный из файла SYSTEM_PROMPT_FILE. Текст живёт вне кода, чтобы
+// формулировки правились без перекомпиляции; язык ответа остаётся
+// параметризованным через плейсхолдеры {{SRC_TAG}}/{{TGT_TAG}}.
+type SystemPromptTemplate struct {
+	body string
+}
+
+// ParseSystemPromptTemplate проверяет и принимает текст шаблона: пустой шаблон
+// и неизвестные плейсхолдеры — ошибка (fail-fast на старте приложения).
+func ParseSystemPromptTemplate(text string) (*SystemPromptTemplate, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("пустой шаблон system-промпта")
+	}
+	for _, match := range systemPromptPlaceholderRe.FindAllString(text, -1) {
+		if match != SystemPromptPlaceholderSrcTag && match != SystemPromptPlaceholderTgtTag {
+			return nil, fmt.Errorf("неизвестный плейсхолдер %q (поддерживаются %s и %s)",
+				match, SystemPromptPlaceholderSrcTag, SystemPromptPlaceholderTgtTag)
+		}
+	}
+	return &SystemPromptTemplate{body: text}, nil
+}
+
+// LoadSystemPromptTemplate читает шаблон из файла SYSTEM_PROMPT_FILE.
+// Если файла нет — создаёт его из встроенного дефолта (go:embed) и работает на
+// нём: первый запуск не требует ручных шагов, а дальше файл правится как обычный
+// текст без перекомпиляции. Пустой путь, нечитаемый файл или битый шаблон —
+// ошибка (fail-fast), а не тихая подмена: иначе «правка промпта не применяется»
+// остаётся без следов в логах.
+func LoadSystemPromptTemplate(path string) (*SystemPromptTemplate, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("SYSTEM_PROMPT_FILE не задан: укажите путь к файлу шаблона system-промпта")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("чтение файла system-промпта %s: %w", path, err)
+		}
+		if werr := writeDefaultSystemPrompt(path); werr != nil {
+			return nil, fmt.Errorf("создание файла system-промпта %s: %w", path, werr)
+		}
+		data = []byte(defaultSystemPromptBody)
+	}
+
+	tpl, err := ParseSystemPromptTemplate(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("файл system-промпта %s: %w", path, err)
+	}
+	return tpl, nil
+}
+
+// writeDefaultSystemPrompt создаёт отсутствующий файл шаблона из встроенного
+// дефолта (создавая каталог при необходимости).
+func writeDefaultSystemPrompt(path string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("каталог шаблона: %w", err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(defaultSystemPromptBody), 0o644); err != nil {
+		return err
+	}
+	slog.Info("translator: создан файл system-промпта по умолчанию", "path", path)
+	return nil
+}
+
+// Render подставляет языковую пару в шаблон. Пустые языки дают дефолт en/ru,
+// теги — в верхнем регистре (EN:, RU:, DE:).
+func (t *SystemPromptTemplate) Render(sourceLang, targetLang string) string {
+	if t == nil {
+		return ""
+	}
 	if sourceLang == "" {
 		sourceLang = DefaultSourceLang
 	}
@@ -29,18 +122,24 @@ func BuildSystemPrompt(sourceLang, targetLang string) string {
 	srcTag := strings.ToUpper(sourceLang)
 	tgtTag := strings.ToUpper(targetLang)
 
-	return "\n" +
-		"Answer from the candidate's perspective, in first person.\n" +
-		"The interviewer's sentence may not end with a question mark; treat it as a question and answer anyway.\n" +
-		"Use only information available in the provided candidate context.\n" +
-		"Use only the facts that belong to the technology the question is about; " +
-		"never attribute experience with one stack to another.\n" +
-		"Do not invent experience, projects, technologies, responsibilities, or years.\n" +
-		"Keep answers brief, natural, conversational, and suitable for speaking aloud.\n" +
-		"Use IT terminology in English in both languages.\n" +
-		"Response format:\n" +
-		"- " + srcTag + ": <answer in the source language> | " + tgtTag + ": <translated into the target language>\n" +
-		"Do not include explanations, instructions, reminders, or meta-comments.\n"
+	rendered := strings.NewReplacer(
+		SystemPromptPlaceholderSrcTag, srcTag,
+		SystemPromptPlaceholderTgtTag, tgtTag,
+	).Replace(t.body)
+
+	return normalizeSystemPromptText(rendered)
+}
+
+// normalizeSystemPromptText делает результат независимым от привычек редактора:
+// CRLF → LF, пустые строки по краям не влияют, ровно один завершающий \n
+// (к нему в openai.go приклеивается секция candidate context).
+func normalizeSystemPromptText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.Trim(s, "\n")
+	if s == "" {
+		return ""
+	}
+	return s + "\n"
 }
 
 // BuildAnswerPrompt constructs the full user prompt for generating interview

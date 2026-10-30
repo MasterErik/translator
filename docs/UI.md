@@ -104,7 +104,8 @@
 - `app.Size(unit.Dp(...))` — размер в dp, `app.Title("")` — пустой заголовок (screen sharing privacy).
 - Заголовки зон: **отсутствуют** — только разделители 3px между зонами.
 - Языковая пара: `SOURCE_LANG`/`TARGET_LANG` из `.env` (ISO 639-1, дефолт **en→ru**)
-  прокидывается через `Config` → dispatcher → `ParseAnswer`/`BuildSystemPrompt`.
+  прокидывается через `Config` → dispatcher → `ParseAnswer`/рендер шаблона
+  system-промпта (`SYSTEM_PROMPT_FILE`).
 - **Межстрочный интервал:** стандартный Gio — `overlayLabel` задаёт `LineHeightScale = 1.0`
   (крутилка `lineSpacingScale` на будущее; `LineHeightScale` масштабирует шрифт, поэтому
   дефолт = стандартный Gio) и **не задаёт** `LineHeight`. Все строки во всех зонах — только
@@ -182,7 +183,7 @@
 **Языковая пара:** формат подсказок зоны 3 — `SRC: … | TGT: …`, где теги выводятся из
 конфигурации (`SOURCE_LANG`/`TARGET_LANG`, ISO 639-1) через `strings.ToUpper`; пустые
 значения трактуются как дефолт **en→ru**. Разбор строки — `translator.ParseAnswer`,
-промпт — `translator.BuildSystemPrompt(sourceLang, targetLang)`.
+промпт — шаблон из `SYSTEM_PROMPT_FILE` (`candidate_context/system_prompt.md`).
 
 ## Debug-режим ручного ввода (`DEBUG_INPUT=1`)
 
