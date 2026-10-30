@@ -428,8 +428,8 @@ func TestBuildSystemPromptCandidateContext(t *testing.T) {
 
 	// Параметризованные языки доходят до правил формата.
 	deGot := buildSystemPromptWith(tpl, candidate, "en", "de")
-	if !strings.Contains(deGot, "| DE:") || strings.Contains(deGot, "RU") {
-		t.Errorf("buildSystemPrompt(_, en, de) должен содержать | DE: и не содержать RU, got:\n%s", deGot)
+	if !strings.Contains(deGot, "| DE:") || strings.Contains(deGot, "RU:") {
+		t.Errorf("buildSystemPrompt(_, en, de) должен содержать | DE: и не содержать метку RU:, got:\n%s", deGot)
 	}
 }
 

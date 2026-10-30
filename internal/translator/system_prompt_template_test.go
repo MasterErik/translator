@@ -12,25 +12,37 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// TestFixtureTemplateParses — фикстура тестов обязана парситься и содержать
-// оба плейсхолдера, иначе тесты проверяют не тот контракт.
+// TestFixtureTemplateParses — фикстура тестов обязана парситься, содержать
+// формат EN:|RU: и не иметь нераскрытых плейсхолдеров, иначе тесты проверяют
+// не тот контракт, что уходит в LLM.
 func TestFixtureTemplateParses(t *testing.T) {
 	tpl := mustTestSystemPromptTemplate(t)
 	rendered := tpl.Render("en", "ru")
-	if !strings.Contains(rendered, "- EN: <answer in the source language> | RU:") {
+	if !strings.Contains(rendered, "- EN:") || !strings.Contains(rendered, "| RU:") {
 		t.Errorf("фикстура потеряла формат EN:|RU:, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "{{") {
+		t.Errorf("в отрендеренном шаблоне остались плейсхолдеры:\n%s", rendered)
 	}
 }
 
-// TestEmbeddedDefaultTemplateMatchesFixture — встроенный (go:embed) дефолт обязан
-// парситься и совпадать с фикстурой тестов: им заполняется отсутствующий файл.
-func TestEmbeddedDefaultTemplateMatchesFixture(t *testing.T) {
+// TestEmbeddedDefaultTemplateContract — встроенный (go:embed) дефолт должен
+// парситься и содержать контракт первого запуска: оба плейсхолдера и правило
+// простого английского первым (оно приоритетнее остальных правил стиля).
+func TestEmbeddedDefaultTemplateContract(t *testing.T) {
 	tpl, err := ParseSystemPromptTemplate(defaultSystemPromptBody)
 	if err != nil {
 		t.Fatalf("встроенный дефолт не парсится: %v", err)
 	}
-	if got, want := tpl.Render("en", "ru"), mustTestSystemPromptTemplate(t).Render("en", "ru"); got != want {
-		t.Errorf("встроенный дефолт разошёлся с фикстурой тестов:\n--- embed ---\n%q\n--- фикстура ---\n%q", got, want)
+	if !strings.Contains(defaultSystemPromptBody, SystemPromptPlaceholderSrcTag) ||
+		!strings.Contains(defaultSystemPromptBody, SystemPromptPlaceholderTgtTag) {
+		t.Errorf("встроенный дефолт потерял плейсхолдеры языков")
+	}
+
+	rendered := tpl.Render("en", "ru")
+	firstLine := strings.SplitN(rendered, "\n", 2)[0]
+	if !strings.Contains(firstLine, "SIMPLE ENGLISH") {
+		t.Errorf("правило простого английского должно идти первым, первая строка: %q", firstLine)
 	}
 }
 

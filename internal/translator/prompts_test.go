@@ -35,8 +35,8 @@ func TestBuildSystemPromptParameterizedTarget(t *testing.T) {
 	if !strings.Contains(enDe, "| DE:") {
 		t.Errorf("BuildSystemPrompt(en,de) must contain | DE: separator, got:\n%s", enDe)
 	}
-	if strings.Contains(enDe, "RU") {
-		t.Errorf("BuildSystemPrompt(en,de) must NOT contain RU, got:\n%s", enDe)
+	if strings.Contains(enDe, "RU:") {
+		t.Errorf("BuildSystemPrompt(en,de) must NOT contain the RU label, got:\n%s", enDe)
 	}
 
 	// Parameterized source label as well.
@@ -81,28 +81,29 @@ func TestBuildSystemPromptEmptyLangsDefault(t *testing.T) {
 // TestBuildSystemPromptStackScopingSnapshot фиксирует M9.5: промпт требует
 // использовать только факты, относящиеся к технологии вопроса, и не приписывать
 // опыт одного стека другому.
+//
+// Текст правил живёт в файле SYSTEM_PROMPT_FILE / встроенном дефолте, поэтому
+// здесь нет копии промпта: проверяется, что Render отдаёт ровно тело шаблона с
+// подставленными тегами (никаких обёрток и ведущих переводов строк) и что
+// правило про стек на месте.
 func TestBuildSystemPromptStackScopingSnapshot(t *testing.T) {
 	tpl := mustTestSystemPromptTemplate(t)
 	prompt := tpl.Render("en", "ru")
-	// Ведущего "\n" больше нет: шаблон вынесен в файл
-	// (candidate_context/system_prompt.md) и Render нормализует края (см.
-	// normalizeSystemPromptText). Остальной текст — прежний.
-	want := "Answer from the candidate's perspective, in first person.\n" +
-		"The interviewer's sentence may not end with a question mark; treat it as a question and answer anyway.\n" +
-		"Use only information available in the provided candidate context.\n" +
-		"Use only the facts that belong to the technology the question is about; " +
-		"never attribute experience with one stack to another.\n" +
-		"Do not invent experience, projects, technologies, responsibilities, or years.\n" +
-		"Keep answers brief, natural, conversational, and suitable for speaking aloud.\n" +
-		"Use IT terminology in English in both languages.\n" +
-		"Response format:\n" +
-		"- EN: <answer in the source language> | RU: <translated into the target language>\n" +
-		"Do not include explanations, instructions, reminders, or meta-comments.\n"
+
+	want := normalizeSystemPromptText(strings.NewReplacer(
+		SystemPromptPlaceholderSrcTag, "EN",
+		SystemPromptPlaceholderTgtTag, "RU",
+	).Replace(testSystemPromptBody))
 	if prompt != want {
-		t.Errorf("BuildSystemPrompt(en,ru) mismatch:\n--- got ---\n%q\n--- want ---\n%q", prompt, want)
+		t.Errorf("BuildSystemPrompt(en,ru) должен быть телом шаблона с подстановкой тегов:\n--- got ---\n%q\n--- want ---\n%q", prompt, want)
+	}
+
+	const stackRule = "never attribute experience with one stack to another"
+	if !strings.Contains(prompt, stackRule) {
+		t.Errorf("правило о стеке отсутствует, got:\n%s", prompt)
 	}
 	// Инструкция не зависит от языковой пары.
-	if got := tpl.Render("en", "de"); !strings.Contains(got, "one stack to another") {
+	if got := tpl.Render("en", "de"); !strings.Contains(got, stackRule) {
 		t.Errorf("инструкция о стеке должна присутствовать при любой паре языков, got:\n%s", got)
 	}
 }
