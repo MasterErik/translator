@@ -14,6 +14,11 @@
 | `docs/candidate-context-format.md` | Формат candidate context: manifest.json, index.json, markers |
 | `.env.example` / `config.yaml` | Шаблон окружения / несекретные параметры |
 
+## Размещение md-файлов (конвенция)
+
+- **Проектные доки** ( относится: ARCHITECTURE, TESTING, UI, gladia-flow, qa, candidate-context, format) — в `docs/`, коммитятся.
+- **Личные/рабочие md** (планы фаз, заметки, черновики, личные базы фактов/знаний под F6, fix-plan и т.п.) — только в `candidate_context/` (gitignored, не коммитятся). New personal md files MUST go there.
+
 ## Ключевые пакеты
 
 ```
