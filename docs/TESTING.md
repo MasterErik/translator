@@ -16,7 +16,7 @@ generate_test_wav.py   генерация тестового WAV-файла (Edg
 1. WebSocket-подключение к Gladia API v2 (двухфазный коннект: POST `/v2/live` → dial)
 2. Отправка PCM-аудио фреймами по 80ms (2560 байт, 16kHz mono)
 3. Получение и разбор событий: `transcript` (interim/final), `translation`
-4. Генерацию подсказок через LLM (GLM-4.7-Flash, синхронный `GenerateAnswers`)
+4. Генерацию подсказок через LLM (`openai/gpt-oss-20b` на Groq, синхронный `GenerateAnswers`)
 
 **Запуск:**
 ```bash
@@ -157,7 +157,7 @@ go test -tags e2e -v ./internal/ui/ -run TestWindowStarts
 
 | Параметр | Значение |
 |---|---|
-| Модель | `glm-4.7-flash` (Z.AI) |
+| Модель | `openai/gpt-oss-20b` (Groq) |
 | Time-To-First-Token (TTFT) | MAX ≤ 1200ms |
 | Полная генерация (1 подсказка EN\|RU) | MAX ≤ 2500ms |
 | Таймаут ответа (`AnswerTimeout`) | 10s (background context) |

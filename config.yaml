@@ -53,10 +53,12 @@ SYSTEM_PROMPT_FILE: "candidate_context/system_prompt.md"
 candidate_context:
   dir: "candidate_context"
   max_tokens: 2000
-  max_profile_tokens: 150
+  max_profile_tokens: 400
   # max_matrix_tokens — бюджет technical_matrix (отдельное поле manifest, не часть
   # profile): при 0 матрица рендерилась бы бюджетом профиля и теряла хвост.
-  max_matrix_tokens: 100
+  # 512 (F0, plan fix-plan-2026-11): матрица больше не режется хвостом;
+  # постоянное решение — перевод строк матрицы в факты (F6).
+  max_matrix_tokens: 512
   min_score: 0
   top_k: 5
 
@@ -67,12 +69,17 @@ candidate_context:
 hints:
   dir: "hints"
   # Строгий порог: score ниже — подсказка не выводится вообще.
-  # Подобран smoke-тестом: свои вопросы >= 62, посторонние <= 36.5.
-  min_score: 50
-  top_k: 1
+  # Калибровка: свои вопросы >= 62, посторонние <= 36.5. 58 — консервативный,
+  # более строгий порог между ними: снижает число ложных «use as is»-подсказок.
+  # Финальная калибровка — eval-прогон context_eval (docs/fix-plan-2026-11.md, F0).
+  min_score: 58
+  # 2 (F0): до двух подсказок на вопрос; подсказка — «candidate-provided
+  # suggestion» и не отменяет факты (правило — в candidate_context/system_prompt.md).
+  top_k: 2
 
 # Conversation context — ограничение истории интервью.
 conversation:
-  recent_turns: 6
+  # 10 (F0) — расширенная история разговорного контекста (с учётом SpeechLog из F1).
+  recent_turns: 10
   max_context_tokens: 4000
   # auto_answer: false  # вопросы только копятся как метки, ответ по F1

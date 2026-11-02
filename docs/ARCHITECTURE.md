@@ -6,7 +6,7 @@
 
 - **STT: Gladia Solaria-1** — turn-aware стриминг через WebSocket
 - **Перевод: Gladia Translation** — встроенный в тот же WebSocket, модель `enhanced`, без отдельного LLM-перевода
-- **LLM: только подсказки** — синхронный `GenerateAnswers` (GLM-4.7-Flash)
+- **LLM: только подсказки** — синхронный `GenerateAnswers` (`openai/gpt-oss-20b` на Groq)
 - **Двухфазный коннект** — POST `/v2/live` → `{id, url}` → WebSocket dial
 - **Reconnect** — supervisor внутри провайдера: exponential backoff, 5 попыток, далее EventError
 
@@ -56,8 +56,8 @@
 │                         │ последовательно                          │
 │                   ┌─────┴──────┐                                   │
 │                   │   LLM      │                                   │
-│                   │ GLM-4.7    │                                   │
-│                   │ Flash      │                                   │
+│                   │ gpt-oss-20b│                                   │
+│                   │ (Groq)     │                                   │
 │                   │ синхронный │                                   │
 │                   └────────────┘                                   │
 └────────────────────────────────────────────────────────────────────┘
@@ -152,7 +152,7 @@ conversation:
 
 ## LLM
 
-OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`). Правила ответа (system-промпт) вынесены из кода в текстовый файл `SYSTEM_PROMPT_FILE` (по умолчанию `candidate_context/system_prompt.md`): он читается на старте `translator.LoadSystemPromptTemplate`, плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` подставляются языковой парой; если файла нет — он создаётся из встроенного дефолта (go:embed) и работа продолжается; пустой путь, нечитаемый файл или неизвестный плейсхолдер валят старт (fail-fast). Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
+OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Запланирована fallback-цепочка — `qwen/qwen3.6-27b` и `Z.AI glm-4.7-flash` (см. `docs/fix-plan-2026-11.md`, §4/F7). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`). Правила ответа (system-промпт) вынесены из кода в текстовый файл `SYSTEM_PROMPT_FILE` (по умолчанию `candidate_context/system_prompt.md`): он читается на старте `translator.LoadSystemPromptTemplate`, плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` подставляются языковой парой; если файла нет — он создаётся из встроенного дефолта (go:embed) и работа продолжается; пустой путь, нечитаемый файл или неизвестный плейсхолдер валят старт (fail-fast). Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
 
 **Подробнее:** `docs/qa-architecture.md`
 
@@ -384,7 +384,7 @@ pipeline.runSTT: select { src | manualCh | ctx.Done }
 | Audio Capture | `malgo` (CGo) | WASAPI Loopback + Mic, 48k→16k ресемплинг |
 | STT + Перевод | Gladia Solaria-1 `/v2/live` | Turn-aware streaming + встроенный перевод `enhanced` |
 | WebSocket | `gorilla/websocket` | Gladia WS клиент + exponential backoff reconnect |
-| LLM | `go-openai` → GLM-4.7-Flash | Синхронная генерация подсказок |
+| LLM | `go-openai` → `openai/gpt-oss-20b` (Groq) | Синхронная генерация подсказок |
 | UI | `gioui.org` v0.10.1 | Прозрачный четырёхзонный overlay |
 | Win32 | `golang.org/x/sys/windows` | WS_EX_NOACTIVATE |
 | Config | `joho/godotenv` + `gopkg.in/yaml.v3` | .env + config.yaml |
