@@ -119,6 +119,25 @@ func (h *ConversationHistory) RecordAnswer(question, answer string) {
 	}
 }
 
+// LastQuestion возвращает вопрос последнего записанного turn'а истории
+// (ok=false — история пуста и заменять нечего).
+//
+// Диспетчер использует метод перед записью результата генерации-модификатора
+// (CommandMoreContext/CommandSimplerEnglish): вывод должен заменить ответ
+// последнего turn'а, только пока это тот же вопрос. Если хвост истории уже
+// ушёл на новый вопрос (во время долгой генерации интервьюер продолжил
+// говорить), результат модификатора старого вопроса в историю не пишется —
+// иначе после уже отвеченного вопроса появился бы новый хвостовой turn и
+// хронология conversation context сломалась.
+func (h *ConversationHistory) LastQuestion() (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.turns) == 0 {
+		return "", false
+	}
+	return h.turns[len(h.turns)-1].Question, true
+}
+
 // Recent возвращает копию последних turns истории (для тестов и инспекции).
 func (h *ConversationHistory) Recent() []ConversationTurn {
 	h.mu.Lock()

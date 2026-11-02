@@ -126,6 +126,28 @@ func TestConversationHistoryRegenerationDoesNotAddTurn(t *testing.T) {
 	}
 }
 
+// LastQuestion возвращает вопрос последнего turn (ok=false — история пуста).
+func TestConversationHistoryLastQuestion(t *testing.T) {
+	h := NewConversationHistory(6, 4000)
+	if _, ok := h.LastQuestion(); ok {
+		t.Errorf("пустая история не должна возвращать вопрос")
+	}
+
+	h.RecordAnswer("Tell me about Project X.", "first")
+	h.RecordAnswer("Why did you choose PostgreSQL?", "second")
+
+	q, ok := h.LastQuestion()
+	if !ok || q != "Why did you choose PostgreSQL?" {
+		t.Errorf("LastQuestion() = %q,%v, ожидалось %q,true", q, ok, "Why did you choose PostgreSQL?")
+	}
+
+	// Регенерация не меняет вопрос последнего turn — LastQuestion стабилен.
+	h.RecordAnswer("Why did you choose PostgreSQL?", "simpler")
+	if q, _ := h.LastQuestion(); q != "Why did you choose PostgreSQL?" {
+		t.Errorf("после регенерации LastQuestion() = %q", q)
+	}
+}
+
 // GenerationCommand.String покрывает все команды F1–F4.
 func TestGenerationCommandString(t *testing.T) {
 	cases := map[GenerationCommand]string{

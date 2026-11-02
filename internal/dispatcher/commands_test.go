@@ -523,10 +523,13 @@ func TestHotkeysEmptyTimelineNoPanic(t *testing.T) {
 	}
 }
 
-// ── RecordAnswer только для хвоста ──────────────────────────────────────
+// ── RecordAnswer (план F2 / A3) ─────────────────────────────────────────
 
-// TestRecordAnswerOnlyOnTail — RecordAnswer пишется только для хвостовой метки.
-func TestRecordAnswerOnlyOnTail(t *testing.T) {
+// TestRecordAnswerOnNonTail — CommandAnswer пишется в историю всегда,
+// независимо от OnTail: во время долгой генерации хвост может уйти на новый
+// вопрос (или пользователь ушёл с Prev), но пары «вопрос-ответ» выполненного
+// вопроса не должны теряться из conversation context.
+func TestRecordAnswerOnNonTail(t *testing.T) {
 	auto := false
 	cfg := DefaultConfig()
 	cfg.AutoAnswer = &auto
@@ -548,22 +551,198 @@ func TestRecordAnswerOnlyOnTail(t *testing.T) {
 
 	waitFor(t, func() bool { return snapshotOf(d)[1].State == QReady }, 2*time.Second)
 
-	// Ответ на не-хвостовую метку НЕ должен попасть в историю.
-	if recent := d.history.Recent(); len(recent) != 0 {
-		t.Errorf("ответ на не-хвостовую метку записан в историю: %+v", recent)
+	// Ответ на не-хвостовую метку должен попасть в историю.
+	recent := d.history.Recent()
+	if len(recent) != 1 {
+		t.Fatalf("ответ на не-хвостовую метку не записан: %d turns, ожидался 1", len(recent))
+	}
+	if recent[0].Question != "Q2?" {
+		t.Errorf("в историю записан неверный вопрос: %q, ожидался Q2?", recent[0].Question)
 	}
 
-	// Возвращаемся на хвост (Q3) и отвечаем — вот теперь история пишется.
+	// Возвращаемся на хвост (Q3) и отвечаем — история пополняется в хронологии.
 	d.HandleNext()
 	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 2 }, 2*time.Second)
 	callsBefore := len(engine.Calls())
 	d.HandleDemand()
 	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
-	waitFor(t, func() bool { return len(d.history.Recent()) == 1 }, 2*time.Second)
+	waitFor(t, func() bool { return len(d.history.Recent()) == 2 }, 2*time.Second)
+
+	recent = d.history.Recent()
+	if recent[0].Question != "Q2?" || recent[1].Question != "Q3?" {
+		t.Errorf("хронология истории сломана: %q, %q, ожидалось Q2?, Q3?", recent[0].Question, recent[1].Question)
+	}
+}
+
+// TestDelayedAnswerRecordsNonTail — гоночная потеря turn'а (A3): пользователь
+// ушёл с хвоста на Q1 и запустил генерацию; пока она идёт (задержанный движок),
+// интервьюер продолжает говорить — приходят Q2/Q3/Q4, активная позиция не
+// двигается (tail-follow работает только с хвоста). Отложенный CommandAnswer
+// по не-хвостовой метке записывается despite OnTail=false.
+func TestDelayedAnswerRecordsNonTail(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{
+		answers: []string{"EN: old-answer | RU: старый ответ"},
+		delay:   250 * time.Millisecond,
+	}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	// Q1, Q2, Q3; активная метка — Q3 (хвост).
+	for _, q := range []string{"Q1?", "Q2?", "Q3?"} {
+		textStream <- question(q)
+	}
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 3 }, 2*time.Second)
+
+	// Уходим на Q1 (дважды Prev) и отвечаем с задержанной генерацией.
+	d.HandlePrev()
+	d.HandlePrev()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
+
+	// Во время генерации интервьюер продолжает говорить: новая метка НЕ
+	// сдвигает активную позицию (пользователь не на хвосте), OnTail() = false.
+	textStream <- question("Q4?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 4 }, 2*time.Second)
+	waitFor(t, func() bool { return snapshotOf(d)[0].State == QReady }, 5*time.Second)
+
+	// Отложенный ответ на не-хвостовую метку в истории: старое поведение
+	// (проверка OnTail) теряло turn молча — следующий вопрос оставался без контекста.
+	recent := d.history.Recent()
+	if len(recent) != 1 {
+		t.Fatalf("отложенный ответ не записан в историю: %d turns, ожидался 1", len(recent))
+	}
+	if recent[0].Question != "Q1?" {
+		t.Errorf("в историю записан неверный вопрос: %q, ожидался Q1?", recent[0].Question)
+	}
+
+	// Переходим на хвост (Q4) и отвечаем — новый turn добавляется за Q1.
+	for i := 0; i < 3; i++ {
+		d.HandleNext()
+	}
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 3 }, 2*time.Second)
+	callsBefore := len(engine.Calls())
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
+	waitFor(t, func() bool { return len(d.history.Recent()) == 2 }, 2*time.Second)
+
+	recent = d.history.Recent()
+	if recent[0].Question != "Q1?" || recent[1].Question != "Q4?" {
+		t.Errorf("хронология истории сломана: %q, %q, ожидалось Q1?, Q4?", recent[0].Question, recent[1].Question)
+	}
+}
+
+// TestModifierOldQuestionNotRecorded — модификатор (MoreContext) для старого
+// вопроса (хвост уже на новом) НЕ добавляет turn в историю и не заменяет
+// записанный ответ: вывод по устаревшей метке не должен стать новым хвостовым
+// turn после уже отвеченного вопроса.
+func TestModifierOldQuestionNotRecorded(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: v1 | RU: v1"}}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Q1?")
+	textStream <- question("Q2?")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 2 }, 2*time.Second)
+
+	// Отвечаем на Q1 (не хвост: хвост — Q2), затем на хвостовую Q2 —
+	// история: [Q1?, Q2?].
+	d.HandlePrev()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) == 1 }, 2*time.Second)
+	d.HandleNext()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 1 }, 2*time.Second)
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) == 2 }, 2*time.Second)
+	waitFor(t, func() bool { return len(d.history.Recent()) == 2 }, 2*time.Second)
+
+	// Третьей генерации подсовываем другой ответ: если модификатор ошибочно
+	// запишется (новым turn или заменой чужого ответа) — это станет видно по v2.
+	engine.mu.Lock()
+	engine.answers[0] = "EN: v2 | RU: v2"
+	engine.mu.Unlock()
+
+	// Возвращаемся на старый Q1 (QReady, шаг цикла 1) и жмём F1 — его
+	// NextStep даёт CommandMoreContext. Хвост истории уже Q2 → пропуск записи.
+	d.HandlePrev()
+	waitFor(t, func() bool { idx, _, _ := d.timeline.Active(); return idx == 0 }, 2*time.Second)
+	callsBefore := len(engine.Calls())
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
+	waitIdle(t, d)
 
 	recent := d.history.Recent()
-	if recent[0].Question != "Q3?" {
-		t.Errorf("в историю записан неверный вопрос: %q, ожидался Q3?", recent[0].Question)
+	if len(recent) != 2 {
+		t.Fatalf("модификатор старого вопроса записан: %d turns, ожидалось 2", len(recent))
+	}
+	if recent[0].Question != "Q1?" || recent[0].Answer != "EN: v1" {
+		t.Errorf("записанный ответ Q1 изменён модификатором: %+v, ожидался {Q1? EN: v1}", recent[0])
+	}
+
+	if recent[1].Question != "Q2?" || recent[1].Answer != "EN: v1" {
+		t.Errorf("ответ Q2 искажён: %+v, ожидалось {Q2? EN: v1}", recent[1])
+	}
+}
+
+// TestModifierTailReplacesAnswer — модификатор (MoreContext) для текущей
+// хвостовой метки заменяет её ответ в последнем turn, не создавая нового.
+func TestModifierTailReplacesAnswer(t *testing.T) {
+	auto := false
+	cfg := DefaultConfig()
+	cfg.AutoAnswer = &auto
+
+	engine := &mockEngine{answers: []string{"EN: v1 | RU: v1"}}
+	d, _, textStream, cancel := startDispatcherWithOverlay(t, engine, cfg)
+	defer cancel()
+
+	textStream <- question("Tell me about Project X.")
+	waitFor(t, func() bool { return len(snapshotOf(d)) == 1 }, 2*time.Second)
+
+	d.HandleDemand() // CommandAnswer
+	waitFor(t, func() bool { return len(d.history.Recent()) == 1 }, 2*time.Second)
+
+	engine.mu.Lock()
+	engine.answers[0] = "EN: v2 | RU: v2"
+	engine.mu.Unlock()
+
+	// Повторный F1 по хвосту → CommandMoreContext; turn остаётся один.
+	callsBefore := len(engine.Calls())
+	d.HandleDemand()
+	waitFor(t, func() bool { return len(engine.Calls()) > callsBefore }, 2*time.Second)
+	waitIdle(t, d)
+
+	recent := d.history.Recent()
+	if len(recent) != 1 {
+		t.Fatalf("модификатор создал новый turn: %d turns, ожидался 1", len(recent))
+	}
+	if recent[0].Question != "Tell me about Project X." || recent[0].Answer != "EN: v2" {
+		t.Errorf("ответ хвостовой метки не заменён: %+v, ожидалось {Tell me about Project X. EN: v2}", recent[0])
+	}
+}
+
+// TestModifierOnEmptyHistoryNotRecorded — результат модификатора при пустой
+// истории (CommandAnswer ещё не было — заменять нечего) не добавляет turn.
+func TestModifierOnEmptyHistoryNotRecorded(t *testing.T) {
+	engine := &mockEngine{answers: []string{"EN: v1 | RU: v1"}}
+	d, _, _, cancel := startDispatcherWithOverlay(t, engine, DefaultConfig())
+	defer cancel()
+
+	idx := d.timeline.Add("orphan question?")
+	waitIdle(t, d)
+	d.generateAnswers("orphan question?", translator.CommandMoreContext, idx)
+	waitIdle(t, d)
+
+	if recent := d.history.Recent(); len(recent) != 0 {
+		t.Errorf("модификатор при пустой истории записал turn: %+v", recent)
 	}
 }
 

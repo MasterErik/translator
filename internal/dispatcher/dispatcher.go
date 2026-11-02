@@ -829,8 +829,8 @@ func (d *Dispatcher) Cancel() {
 //
 // Результат кладётся в таймлайн (SetAnswer/SetState) и в overlay — но только
 // если метка idx всё ещё активна (иначе ответ устаревший: пользователь ушёл на
-// другую метку, и перезаписывать её шапку нельзя). RecordAnswer выполняется
-// только для хвостовой метки, иначе хронология истории интервью ломается.
+// другую метку, и перезаписывать её шапку нельзя). Правило записи ответа в
+// ConversationHistory — в комментарии перед RecordAnswer ниже.
 func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationCommand, idx int) {
 	if d.engine == nil {
 		if d.sessLog != nil {
@@ -918,10 +918,23 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		d.pushHeader(idx, parsed)
 	}
 
-	// Сохраняем финальный ответ в историю только для хвостовой метки, иначе
-	// хронология turns в conversation context ломается (ответ на старый вопрос
-	// не должен стать последним turn'ом интервью).
-	if d.timeline.OnTail() {
+	// Запись ответа в ConversationHistory (хронология истории = время вопросов).
+	//   - CommandAnswer — первый ответ метки: пишется ВСЕГДА после успешной
+	//     генерации, независимо от OnTail. Во время долгой LLM-генерации
+	//     интервьюер может продолжать говорить (новый вопрос стал хвостом) или
+	//     пользователь уйти с Prev — пары «вопрос-ответ» выполненного вопроса
+	//     не должны теряться: иначе conversation context следующих вопросов
+	//     теряет этот turn. RecordAnswer сам заменяет последний turn при
+	//     совпадении текста вопроса, иначе добавляет новый в конец истории.
+	//   - Модификаторы (CommandMoreContext/CommandSimplerEnglish) — пишутся
+	//     только пока последний записанный turn всё ещё этот же вопрос:
+	//     вывод заменяет его ответ, сохраняя хронологию. Результат модификатора
+	//     старого вопроса НЕ пишется — иначе он стал бы новым хвостовым turn
+	//     после уже отвеченного вопроса. Пустая история означает «ответа,
+	//     который можно заменить, не было» — тоже пропускаем.
+	if cmd == translator.CommandAnswer {
+		d.history.RecordAnswer(question, parsed[0].Source)
+	} else if last, ok := d.history.LastQuestion(); ok && last == question {
 		d.history.RecordAnswer(question, parsed[0].Source)
 	}
 }
