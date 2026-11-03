@@ -1162,37 +1162,37 @@ func entryByIdx(snap []QEntry, idx int) QEntry {
 
 // TestClarifyRestoresLastFinalOnEvictedLabel — регресс C2. Если AddClarification
 // не удался (активная метка вытеснена из окна кольца между Active() и правкой),
-// потреблённый из lastFinal текст возвращается обратно: реплика интервьюера не
-// теряется безвозвратно и «оживёт» при следующем Shift+F2 на валидной метке.
+// потреблённая из SpeechLog реплика возвращается как новая unconsumed: уточнение
+// интервьюера не теряется безвозвратно и «оживает» при следующем Shift+F2.
 //
 // Настоящую гонку вытеснения детерминированно не воспроизвести, поэтому тест
-// проверяет контракт restoreLastFinal напрямую (публичный/тестовый доступ к
-// полям пакета): после takeLastFinal текст уходит в локальную переменную и, если
-// AddClarification по вытесненному idx возвращает false, restoreLastFinal
-// кладёт текст назад.
+// проверяет контракт SpeechLog-части handleClarify напрямую: после
+// TakeLatestUnconsumed реплика уходит в локальную переменную, SnapshotAfter её
+// больше не видит; при провале AddClarification текст возвращается через
+// Restore и снова доступен.
 func TestClarifyRestoresLastFinalOnEvictedLabel(t *testing.T) {
 	d := New(&mockOverlay{}, &mockEngine{}, &mockLogger{}, DefaultConfig())
 
 	const text = "I mean horizontally."
-	d.setLastFinal(text)
+	d.speechLog.Add(text, time.Now())
 
 	// Имитируем путь handleClarify: потребляем кандидат…
-	got, ok := d.takeLastFinal()
+	got, ok := d.speechLog.TakeLatestUnconsumed()
 	if !ok || got != text {
-		t.Fatalf("takeLastFinal: (%q, %v), ожидалось (%q, true)", got, ok, text)
+		t.Fatalf("TakeLatestUnconsumed: (%q, %v), ожидалось (%q, true)", got, ok, text)
 	}
 	if v := lastFinalOf(d); v != "" {
-		t.Fatalf("lastFinal после потребления = %q, ожидалось пусто", v)
+		t.Fatalf("после потребления unconsumed = %q, ожидалось пусто", v)
 	}
 	// …и убеждаемся, что правка по пустому таймлайну невозможна.
 	if d.timeline.AddClarification(0, got) {
 		t.Fatal("предусловие: AddClarification по пустому таймлайну вернул true")
 	}
-	// Провал правки → текст возвращается в lastFinal (как в handleClarify).
-	d.restoreLastFinal(got)
+	// Провал правки → текст возвращается в SpeechLog (как в handleClarify).
+	d.speechLog.Restore(got)
 
 	if v := lastFinalOf(d); v != text {
-		t.Errorf("lastFinal после restoreLastFinal = %q, ожидалось %q (текст потерян)", v, text)
+		t.Errorf("после Restore unconsumed = %q, ожидалось %q (текст потерян)", v, text)
 	}
 
 	// Восстановленный текст применяется обычным путём к существующей метке.
@@ -1221,7 +1221,7 @@ func TestHeaderTotalIsAbsoluteAcrossEviction(t *testing.T) {
 
 	// Все вопросы уникальны: иначе воркер дедуплицирует подряд идущие fresh-задания.
 	for i := 0; i < total; i++ {
-		d.enqueueQuestion(fmt.Sprintf("Q%d?", i))
+		d.enqueueQuestion(fmt.Sprintf("Q%d?", i), time.Now())
 	}
 
 	want := total
@@ -1272,7 +1272,7 @@ func TestHeaderTotalGrowsMonotonicallyAcrossEviction(t *testing.T) {
 
 	prev := 0
 	for i := 0; i < questionTimelineCapacity+10; i++ {
-		d.enqueueQuestion(fmt.Sprintf("Q%d?", i))
+		d.enqueueQuestion(fmt.Sprintf("Q%d?", i), time.Now())
 		idx := d.timeline.TotalAsked() - 1
 		d.pushHeader(idx, nil)
 
@@ -1445,11 +1445,14 @@ func TestGenerateAnswersAddsLabelAndAnswers(t *testing.T) {
 	}
 }
 
-// lastFinalOf читает кандидат уточнения под мьютексом (тестовый доступ).
+// lastFinalOf читает последнюю unconsumed-реплику SpeechLog (тестовый доступ,
+// потребления не выполняет) — замена старой single-slot lastFinal-инспекции.
 func lastFinalOf(d *Dispatcher) string {
-	d.lastFinalMu.Lock()
-	defer d.lastFinalMu.Unlock()
-	return d.lastFinal
+	snap := d.speechLog.SnapshotAfter(time.Time{})
+	if len(snap) == 0 {
+		return ""
+	}
+	return snap[len(snap)-1].Text
 }
 
 // waitLastFinal ожидает, пока lastFinal станет равным want (иначе — таймаут).

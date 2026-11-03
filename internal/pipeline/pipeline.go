@@ -108,6 +108,8 @@ type Config struct {
 	Interview            common.InterviewConfig        // целевой стек интервью (D2; используется retrieval с M7b)
 	RecentTurns          int                           // максимум turns в context
 	MaxContextTokens     int                           // лимит размера context
+	RemarksCount         int                           // сколько реплик интервьюера (SpeechLog) в prompt
+	RemarksTokens        int                           // токен-бюджет блока реплик интервьюера
 
 	// Overlay
 	OverlayCfg ui.OverlayConfig
@@ -150,6 +152,10 @@ func New(cfg Config) (*Pipeline, error) {
 	}
 	if cfg.AnswerTimeout <= 0 {
 		cfg.AnswerTimeout = 10 * time.Second
+	}
+	if cfg.RemarksCount < 0 || cfg.RemarksTokens < 0 {
+		return nil, fmt.Errorf("pipeline: количество реплик интервьюера не может быть отрицательным (remarks_count=%d, remarks_tokens=%d)",
+			cfg.RemarksCount, cfg.RemarksTokens)
 	}
 
 	// Логгер сессии — создаётся первым, чтобы все компоненты могли писать в него.
@@ -301,6 +307,8 @@ func New(cfg Config) (*Pipeline, error) {
 				CandidateContextFn: candidateContextFn,
 				RecentTurns:        cfg.RecentTurns,
 				MaxContextTokens:   cfg.MaxContextTokens,
+				RemarksCount:       cfg.RemarksCount,
+				RemarksTokens:      cfg.RemarksTokens,
 				SourceLang:         cfg.SourceLang,
 				TargetLang:         cfg.TargetLang,
 			},

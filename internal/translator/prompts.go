@@ -209,6 +209,20 @@ func formatClarifications(clarifications []string) string {
 	return sb.String()
 }
 
+// JoinConversationContext объединяет непустые блоки conversational-контекста
+// (история Q/A, реплики интервьюера и т.п.) двойным переводом строки "\n\n".
+// Пустые части отбрасываются: пустой результат означает «блок не добавляется
+// в промпт вовсе» — часть ответа не размывается пустыми разделителями.
+func JoinConversationContext(parts ...string) string {
+	nonEmpty := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			nonEmpty = append(nonEmpty, p)
+		}
+	}
+	return strings.Join(nonEmpty, "\n\n")
+}
+
 // commandInstruction возвращает дополнительную инструкцию для команды
 // управления генерацией (F2–F4). Для F1 (CommandAnswer) — пустая строка.
 func commandInstruction(cmd GenerationCommand) string {

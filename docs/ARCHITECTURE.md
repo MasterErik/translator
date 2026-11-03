@@ -152,7 +152,7 @@ conversation:
 
 ## LLM
 
-OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Запланирована fallback-цепочка — `qwen/qwen3.6-27b` и `Z.AI glm-4.7-flash` (см. `docs/fix-plan-2026-11.md`, §4/F7). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`). Правила ответа (system-промпт) вынесены из кода в текстовый файл `SYSTEM_PROMPT_FILE` (по умолчанию `candidate_context/system_prompt.md`): он читается на старте `translator.LoadSystemPromptTemplate`, плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` подставляются языковой парой; если файла нет — он создаётся из встроенного дефолта (go:embed) и работа продолжается; пустой путь, нечитаемый файл или неизвестный плейсхолдер валят старт (fail-fast). Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
+OpenAI-совместимый API (Groq free tier, `openai/gpt-oss-20b`). Запланирована fallback-цепочка — `qwen/qwen3.6-27b` и `Z.AI glm-4.7-flash` (см. `.hermes/plans/fix-plan-2026-11.md`, §4/F7). Синхронный `GenerateAnswers(ctx, AnswerRequest)`. Промпт: 1 подсказка в формате `<SRC>: <...> | <TGT>: <...>` — теги из пары языков (`SOURCE_LANG`/`TARGET_LANG`, дефолт `EN`/`RU`). Правила ответа (system-промпт) вынесены из кода в текстовый файл `SYSTEM_PROMPT_FILE` (по умолчанию `candidate_context/system_prompt.md`): он читается на старте `translator.LoadSystemPromptTemplate`, плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` подставляются языковой парой; если файла нет — он создаётся из встроенного дефолта (go:embed) и работа продолжается; пустой путь, нечитаемый файл или неизвестный плейсхолдер валят старт (fail-fast). Разбор ответа — `ParseAnswer`. Контекст: Candidate Context (база CV, system) + Conversation Context (история интервью, user). Детекция вопроса: `IsQuestion()` — `?` или вопросительные слова в начале. Управление генерацией: F1–F3 + Esc через dispatcher, F4 — тумблер зоны 4 (полная таблица — docs/UI.md). Ошибка генерации уходит в UI как `UIMessage{Type: Error}`.
 
 **Подробнее:** `docs/qa-architecture.md`
 
@@ -248,8 +248,9 @@ event.Event == EventUpdate
 
 event.Event == EventEndOfTurn && ChannelID != "translation"
     → UI TranscriptionHistory (зона 4, оригинал)
+    → speechLog.Add(event.Text, event.Timestamp)   [кольцо реплик интервьюера, F1]
     → IsQuestion(event.Text)?
-         да → enqueueQuestion(question)
+         да → enqueueQuestion(question, event.Timestamp)
          нет → ничего
 ```
 
@@ -270,6 +271,12 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 - Последовательные запросы (FIFO) — сервер не перегружается
 - Неблокирующая отправка: если очередь переполнена — дроп с debug-логом
 - Graceful shutdown: worker дренирует оставшиеся вопросы перед выходом
+
+**SpeechLog (кольцо реплик интервьюера, F1):**
+
+- Каждый EndOfTurn реплики интервьюера записывается в `translator.SpeechLog` (кольцевой буфер, ёмкость 20 / бюджет 1500 токенов; потреблённые реплики продолжают отображаться в RecentContext).
+- Три потребителя: блок «Interviewer remarks» в user-промпте (`RecentContext(remarks, remarks_tokens)`, объединяется с историей через `JoinConversationContext`); туннель уточнений Shift+F2 (`TakeLatestUnconsumed`/`Restore`); автоуточнения после вопроса (`SnapshotAfter` по окну от времени прибытия вопроса, `labelTimestamps` — одноразовое).
+- Автоуточнения: после успешной генерации CommandAnswer (`autoClarify`) реплики-не-вопросы, озвученные после вопроса метки, прикрепляются ей уточнениями (дедуп с существующими, потребление прикреплённых, шапка — `pushHeaderForState`). Только для хвостовой метки (`OnTail`).
 
 **Управление генерацией (механизм):**
 

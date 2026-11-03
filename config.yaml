@@ -71,7 +71,7 @@ hints:
   # Строгий порог: score ниже — подсказка не выводится вообще.
   # Калибровка: свои вопросы >= 62, посторонние <= 36.5. 58 — консервативный,
   # более строгий порог между ними: снижает число ложных «use as is»-подсказок.
-  # Финальная калибровка — eval-прогон context_eval (docs/fix-plan-2026-11.md, F0).
+  # Финальная калибровка — eval-прогон context_eval (.hermes/plans/fix-plan-2026-11.md, F0).
   min_score: 58
   # 2 (F0): до двух подсказок на вопрос; подсказка — «candidate-provided
   # suggestion» и не отменяет факты (правило — в candidate_context/system_prompt.md).
@@ -82,4 +82,9 @@ conversation:
   # 10 (F0) — расширенная история разговорного контекста (с учётом SpeechLog из F1).
   recent_turns: 10
   max_context_tokens: 4000
+  # Реплики интервьюера (SpeechLog, F1): последние 8 финальных фраз уходят в
+  # prompt блоком "Interviewer remarks" (бюджет 1500 токенов); также питают
+  # Shift+F2-уточнения и автоуточнения после вопроса.
+  remarks: 8
+  remarks_tokens: 1500
   # auto_answer: false  # вопросы только копятся как метки, ответ по F1

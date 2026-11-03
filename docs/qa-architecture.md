@@ -151,7 +151,7 @@ AutoAnswer *bool // nil→true: вопрос сразу ставит задан�
 |---|---|---|---|
 | **Candidate Context** | Постоянные факты кандидата: опыт, проекты, технологии, обязанности, достижения | system prompt | каталог `candidate_context/` (`CANDIDATE_CONTEXT_DIR`) или legacy-файл `candidate_context_file` |
 | **System Prompt (правила)** | Правила генерации ответа: формат `SRC: … | TGT: …`, запрет выдумывать факты, краткость | system prompt (первым блоком) | файл `SYSTEM_PROMPT_FILE` (`candidate_context/system_prompt.md`), плейсхолдеры `{{SRC_TAG}}`/`{{TGT_TAG}}` |
-| **Conversation Context** | Уже обсуждавшееся в текущем интервью (Q/A пары) | user prompt | `ConversationHistory` в памяти |
+| **Conversation Context** | Уже обсуждавшееся в текущем интервью: Q/A пары (история) + реплики интервьюера («Interviewer remarks» из SpeechLog, F1) | user prompt | `ConversationHistory` + `translator.SpeechLog` в памяти (объединение — `JoinConversationContext`) |
 
 Правила:
 
@@ -186,8 +186,10 @@ AutoAnswer *bool // nil→true: вопрос сразу ставит задан�
 
 ```
 conversation:
-  recent_turns: 6          # максимум turns в context
+  recent_turns: 10         # максимум turns в context (F0)
   max_context_tokens: 4000 # лимит размера (основной критерий)
+  remarks: 8               # реплик интервьюера (SpeechLog) в prompt (F1)
+  remarks_tokens: 1500     # токен-бюджет блока реплик (F1)
   auto_answer: true        # авто-генерация при обнаружении вопроса (отсутствует → true)
 ```
 
@@ -303,25 +305,28 @@ F2/F3 вообще не запускают генерацию, только дв
 жмёт **Shift+F2** — реплика прикрепляется к активной метке как уточнение
 (`Clarifications []string` в `QEntry`), **не** создавая новой метки.
 
-- **`lastFinal`** (`Dispatcher`, собственный мьютекс `lastFinalMu`): каждая
-  непустая **финальная реплика интервьюера** (EndOfTurn, вопрос ИЛИ не-вопрос)
-  сохраняется как кандидат уточнения. Это осознанный дизайн: `lastFinal` — не
-  «последний вопрос», а «последняя реплика собеседника». Пустой текст
-  игнорируется (уточнение из пустой строки бессмысленно).
-- **`HandleClarify` (Shift+F2)**: пустой таймлайн или нет `lastFinal` → no-op.
-  Иначе сначала `AbsorbLast(lastFinal)` — **слияние однозначно определено
+- **`SpeechLog`** (F1, `internal/translator/speechlog.go`): каждая непустая
+  **финальная реплика интервьюера** (EndOfTurn, вопрос ИЛИ не-вопрос)
+  записывается в кольцевой буфер (ёмкость 20 / бюджет 1500 токенов —
+  дефолты пакета). Реплика — кандидат уточнения: `HandleClarify` читает её
+  через `TakeLatestUnconsumed` (потребление) и при неудаче возвращает через
+  `Restore`. Пустой текст игнорируется самим `Add`.
+- **`HandleClarify` (Shift+F2)**: пустой таймлайн или пустая очередь
+  unconsumed-реплик → no-op. Иначе сначала `AbsorbLast(text)` — **слияние
+  однозначно определено
   равенством текста**: последняя метка окна удаляется, а её текст идёт
   уточнением в предыдущую метку, если и только если
-  `strings.TrimSpace(Question последней метки) == strings.TrimSpace(lastFinal)`
+  `strings.TrimSpace(Question последней метки) == strings.TrimSpace(text)`
   (точно, после нормализации краевых пробелов), при условии `len(окна) ≥ 2`.
   `IsQuestion`
   или LLM в решении о слиянии **не участвуют** — фильтра «только вопросы» нет:
-  поскольку `lastFinal` пишется на каждую непустую EndOfTurn-реплику (вопрос и
+  поскольку SpeechLog пишет на каждую непустую EndOfTurn-реплику (вопрос и
   не-вопрос), любая реплика, точно совпадающая по тексту с последней меткой,
   уйдёт в merge. Это ожидаемое поведение (случай «уточнение распознано как
-  вопрос»); если слияние не выполнено — `AddClarification(activeIdx, lastFinal)`.
-  Затем шапка активной метки обновляется (`pushHeaderForState`). `lastFinal`
-  **потребляется** (очищается) — повторный Shift+F2 без новой фразы = no-op.
+  вопрос»); если слияние не выполнено — `AddClarification(activeIdx, text)`.
+  Затем шапка активной метки обновляется (`pushHeaderForState`). Реплика
+  **потреблена** — повторный Shift+F2 расходует следующую по свежести
+  unconsumed-реплику, а когда очередь пуста, является no-op.
 - **`HandleUnclarify` (Shift+F3)**: `RemoveLastClarification(activeIdx)` +
   обновление шапки; no-op, если уточнений нет.
 - **Генерация**: `AnswerRequest.Clarifications` заполняется из
@@ -332,6 +337,38 @@ F2/F3 вообще не запускают генерацию, только дв
   `cloneEntry`).
 - **UI**: шапка активной метки несёт стек уточнений (`ui.Answer.Clarifications`)
   — в зоне 3 виден тот же состав, что уходит в LLM (рендер — `docs/UI.md`).
+
+### SpeechLog и автоуточнения (F1)
+
+Помимо ручного Shift+F2 уточнения накапливаются **автоматически**
+(`internal/dispatcher/dispatcher.go`, `autoClarify`):
+
+- **SpeechLog**: кольцевой буфер финальных реплик интервьюера
+  (`internal/translator/speechlog.go`); питается из `route` (каждый EndOfTurn,
+  вопрос и не-вопрос, с меткой времени события; нулевая метка заменяется на
+  `time.Now`). Три потребителя: (1) блок «Interviewer remarks» в user-промпте —
+  `speechLog.RecentContext(remarks, remarks_tokens)`, объединяется с историей
+  Q/A через `translator.JoinConversationContext`; (2) Shift+F2 (см. выше);
+  (3) автоуточнения (ниже). Потреблённые реплики продолжают отображаться в
+  RecentContext — consumption влияет только на очередь уточнений.
+- **Окно автоуточнений**: время прибытия вопроса каждой метки фиксируется в
+  `labelTimestamps` (`enqueueQuestion`, одноразовое — читается с удалением).
+  После успешной генерации CommandAnswer реплики с `Timestamp >= времени
+  вопроса` (`SnapshotAfter(window)`) становятся кандидатами уточнений этой
+  метки: они не могли повлиять на только что сгенерированный ответ и актуальны
+  для следующего вопроса.
+- **Правила автоуточнения**: только хвостовая метка (`OnTail`); только
+  реплики-не-вопросы (вопросы сами создают метки в route); только тексты,
+  которых ещё нет в `Clarifications` метки (дедуп, включая дважды
+  произнесённую реплику); потребление прикреплённых/дубликатных реплик;
+  прикрепление — через `AddClarification` + обновление шапки
+  (`pushHeaderForState`). Если `AddClarification` не удался (метка вытеснена
+  из кольца) — реплика остаётся unconsumed: её заберут Shift+F2 или
+  RecentContext.
+- **Конфиг** (`config.yaml` / `internal/common/config.go`):
+  `conversation.remarks` (по умолчанию 8) — сколько последних реплик идёт в
+  prompt; `conversation.remarks_tokens` (по умолчанию 1500) — токен-бюджет
+  блока. Env: `CONVERSATION_REMARKS`, `CONVERSATION_REMARKS_TOKENS`.
 
 ### Esc
 

@@ -55,6 +55,13 @@ type Config struct {
 	// HotkeyBufferSize — буфер канала hotkey-действий F1–F3 (default 16).
 	HotkeyBufferSize int
 
+	// RemarksCount — сколько последних реплик интервьюера (SpeechLog) уходит
+	// в prompt блоком "Interviewer remarks" (default 8).
+	RemarksCount int
+
+	// RemarksTokens — токен-бюджет блока реплик интервьюера (default 1500).
+	RemarksTokens int
+
 	// AutoAnswer включает авто-генерацию ответа сразу при обнаружении вопроса.
 	// nil трактуется как true (сохранение прежнего поведения: вопрос →
 	// немедленная генерация). false — вопрос лишь создаёт метку в таймлайне,
@@ -71,6 +78,8 @@ func DefaultConfig() Config {
 		RecentTurns:      6,
 		MaxContextTokens: 4000,
 		HotkeyBufferSize: 16,
+		RemarksCount:     8,
+		RemarksTokens:    1500,
 	}
 }
 
@@ -98,6 +107,21 @@ type Dispatcher struct {
 	candidateContext   string
 	candidateContextFn func(string) string
 
+	// speechLog — кольцевой буфер финальных реплик интервьюера (F1, plan
+	// fix-plan: SpeechLog). Питается из route (каждый EndOfTurn) и:
+	//   - блок "Interviewer remarks" в AnswerRequest.ConversationContext;
+	//   - Shift+F2 (TakeLatestUnconsumed/Restore — семантика старого lastFinal);
+	//   - автоуточнения в generateAnswers (SnapshotAfter по окну после вопроса).
+	// Owned by New; методы потоко-безопасны (внутренний мьютекс).
+	speechLog *translator.SpeechLog
+
+	// labelTimestamps — время прибытия вопроса соответствующей метки таймлайна:
+	// окно автоуточнений = реплики интервьюера ПОСЛЕ вопроса этой метки.
+	// Записывается в enqueueQuestion (горутина route), читается в
+	// generateAnswers (горутина answerWorker) — доступ только под мьютексом.
+	labelTimestamps   map[int]time.Time
+	labelTimestampsMu sync.Mutex
+
 	// Пара языков подсказок (ISO 639-1) — для формата промпта и разбора ответа.
 	srcLang string
 	tgtLang string
@@ -105,22 +129,11 @@ type Dispatcher struct {
 	// timeline — таймлайн обнаруженных вопросов (метки + ответы + навигация).
 	timeline *QuestionTimeline
 
-	// lastFinal — текст последней финальной (EndOfTurn) реплики интервьюера —
-	// кандидат уточнения для Shift+F2 (план: «каждая EndOfTurn-фраза
-	// записывается как кандидат уточнения», вопрос ИЛИ не-вопрос). Поле —
-	// потребляемый ресурс: HandleClarify читает его и сбрасывает, поэтому
-	// повторный Shift+F2 без новой фразы — no-op. Пишется из route (горутина
-	// Run → route) и читается/сбрасывается в worker'е (handleHotkeyAction) —
-	// доступ под lastFinalMu.
-	lastFinal   string
-	lastFinalMu sync.Mutex
-
 	// lastQuestion — текст последнего зарегистрированного вопроса (нормализован
 	// TrimSpace). Повторный ввод того же вопроса не создаёт новую метку таймлайна
 	// (дубликат отбрасывается в route до enqueueQuestion). Пишется только из
 	// route (горутина Run → route, единственный consumer textStream).
 	lastQuestion string
-
 	// autoAnswer — авто-генерация ответа при обнаружении вопроса (default true).
 	autoAnswer bool
 
@@ -156,6 +169,12 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 	if cfg.HotkeyBufferSize <= 0 {
 		cfg.HotkeyBufferSize = 16
 	}
+	if cfg.RemarksCount <= 0 {
+		cfg.RemarksCount = 8
+	}
+	if cfg.RemarksTokens <= 0 {
+		cfg.RemarksTokens = 1500
+	}
 	if cfg.SourceLang == "" {
 		cfg.SourceLang = translator.DefaultSourceLang
 	}
@@ -184,6 +203,8 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 		tgtLang:            cfg.TargetLang,
 		timeline:           NewQuestionTimeline(),
 		autoAnswer:         autoAnswer,
+		speechLog:          translator.NewSpeechLog(0, 0), // package defaults (20 / 1500)
+		labelTimestamps:    make(map[int]time.Time),
 	}
 }
 
@@ -312,10 +333,12 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			Timestamp: event.Timestamp,
 		})
 
-		// Каждая финальная фраза интервьюера — кандидат уточнения для Shift+F2
-		// (вопрос ИЛИ не-вопрос: план «каждая EndOfTurn-фраза записывается как
-		// кандидат уточнения»). Хранится до потребления в HandleClarify.
-		d.setLastFinal(event.Text)
+		// Каждая финальная реплика интервьюера (вопрос ИЛИ не-вопрос)
+		// накапливается в SpeechLog (F1):
+		//   - блок "Interviewer remarks" в user-промпте (разговорный контекст);
+		//   - тюннель уточнений Shift+F2 (TakeLatestUnconsumed);
+		//   - окно автоуточнений после вопроса (SnapshotAfter/LABEL timestamp).
+		d.speechLog.Add(event.Text, event.Timestamp)
 
 		if translator.IsQuestion(event.Text) {
 			q := strings.TrimSpace(event.Text)
@@ -330,58 +353,40 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			if d.sessLog != nil {
 				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: обнаружен вопрос, запуск генерации: text=%v", event.Text))
 			}
-			d.enqueueQuestion(event.Text)
+			d.enqueueQuestion(event.Text, event.Timestamp)
 		}
 	}
 }
 
-// setLastFinal запоминает текст последней финальной реплики интервьюера как
-// кандидат уточнения (Shift+F2). Пустой текст игнорируется — уточнение из пустой
-// строки бессмысленно (timeline.AddClarification её всё равно отбросит).
-func (d *Dispatcher) setLastFinal(text string) {
-	if text == "" {
-		return
-	}
-	d.lastFinalMu.Lock()
-	d.lastFinal = text
-	d.lastFinalMu.Unlock()
+// Тюrn.labelTimestamps — окно автоуточнений (реплики интервьюера ПОСЛЕ вопроса
+// соответствующей метки). Пишется в enqueueQuestion, читается/сбрасывается в
+// autoClarify (generateAnswers, горутина answerWorker) — доступ под мьютексом.
+func (d *Dispatcher) setLabelTimestamp(idx int, ts time.Time) {
+	d.labelTimestampsMu.Lock()
+	d.labelTimestamps[idx] = ts
+	d.labelTimestampsMu.Unlock()
 }
 
-// takeLastFinal читает и СБРАСЫВАЕТ кандидат уточнения (потребление): повторный
-// Shift+F2 без новой фразы ничего не добавит. Возвращает false для пустого.
-func (d *Dispatcher) takeLastFinal() (string, bool) {
-	d.lastFinalMu.Lock()
-	defer d.lastFinalMu.Unlock()
-
-	if d.lastFinal == "" {
-		return "", false
+func (d *Dispatcher) labelTimestamp(idx int) (time.Time, bool) {
+	d.labelTimestampsMu.Lock()
+	defer d.labelTimestampsMu.Unlock()
+	ts, ok := d.labelTimestamps[idx]
+	if !ok {
+		return ts, false
 	}
-	text := d.lastFinal
-	d.lastFinal = ""
-	return text, true
-}
-
-// restoreLastFinal возвращает потреблённый текст обратно в lastFinal (C2):
-// вызывается, когда уточнение применить не удалось (метка вытеснена из окна
-// между Active() и правкой) — иначе реплика интервьюера теряется безвозвратно.
-// Пустой текст игнорируется, как в setLastFinal.
-func (d *Dispatcher) restoreLastFinal(text string) {
-	if text == "" {
-		return
-	}
-	d.lastFinalMu.Lock()
-	d.lastFinal = text
-	d.lastFinalMu.Unlock()
+	delete(d.labelTimestamps, idx) // окно одноразовое: после генерации не нужно
+	return ts, true
 }
 
 // enqueueQuestion регистрирует вопрос в таймлайне и, при включённом
 // AutoAnswer, ставит задание на генерацию (неблокирующе). Возвращает индекс
 // метки. Если AutoAnswer выключен, метка остаётся в QIdle — ответ по F1.
-func (d *Dispatcher) enqueueQuestion(question string) int {
+func (d *Dispatcher) enqueueQuestion(question string, arrivedAt time.Time) int {
 	// Новый вопрос сбрасывает отмену Esc — очередь снова активна.
 	d.cancelled.Store(false)
 
 	idx := d.timeline.Add(question)
+	d.setLabelTimestamp(idx, arrivedAt)
 
 	// Task 1: шапка метки уходит в overlay сразу, ДО генерации — иначе метка
 	// невидима, пока LLM молчит. Пуш идёт ПОСЛЕ перевода метки в очередь, чтобы
@@ -516,11 +521,13 @@ func (d *Dispatcher) handleHotkeyAction(act HotkeyAction) {
 // оказалась репликой-дублем того же вопроса, она удаляется, а её текст уходит
 // уточнением предыдущей метки (активность пересчитывается таймлайном). Иначе
 // текст добавляется к активной метке (AddClarification). После операции
-// lastFinal ПОТРЕБЛЁН (takeLastFinal) — повторный Shift+F2 без новой фразы
-// ничего не делает.
+// реплика ПОТРЕБЛЕНА (SpeechLog.TakeLatestUnconsumed) — повторный Shift+F2 без
+// новой фразы расходует следующую по свежести unconsumed-реплику, а когда
+// очередь пуста, действует как no-op.
 //
-// No-op (без ошибки) при пустом таймлайне/отсутствии lastFinal; конкурирующее
-// действие не выполняется, пока идёт генерация (busy-guard, как у F1–F3).
+// No-op (без ошибки) при пустом таймлайне/пустой очереди уточнений;
+// конкурирующее действие не выполняется, пока идёт генерация (busy-guard,
+// как у F1–F3).
 func (d *Dispatcher) handleClarify() {
 	if d.busy.Load() {
 		if d.sessLog != nil {
@@ -537,7 +544,7 @@ func (d *Dispatcher) handleClarify() {
 		return
 	}
 
-	text, ok := d.takeLastFinal()
+	text, ok := d.speechLog.TakeLatestUnconsumed()
 	if !ok {
 		if d.sessLog != nil {
 			d.sessLog.LogDebug("dispatcher: Shift+F2 без новой финальной фразы пропущен")
@@ -553,11 +560,11 @@ func (d *Dispatcher) handleClarify() {
 		absorbedTail = true
 	} else if !d.timeline.AddClarification(idx, text) {
 		// Метка вытеснена между Active() и правкой — правка невозможна.
-		// Текст уже потреблён из lastFinal (takeLastFinal) — возвращаем его,
-		// иначе реплика интервьюера теряется безвозвратно (C2).
-		d.restoreLastFinal(text)
+		// Текст уже потреблён из SpeechLog — возвращаем его как новую
+		// unconsumed-реплику, иначе уточнение теряется безвозвратно (C2).
+		d.speechLog.Restore(text)
 		if d.sessLog != nil {
-			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: Shift+F2 уточнение потеряно (метка %d вне окна), текст восстановлен в lastFinal", idx))
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: Shift+F2 уточнение потеряно (метка %d вне окна), текст восстановлен в SpeechLog", idx))
 		}
 		return
 	}
@@ -727,6 +734,7 @@ func (d *Dispatcher) dropQueue() {
 // вопрос ставится в очередь через enqueueQuestion/answerWorker.
 func (d *Dispatcher) GenerateAnswers(question string) {
 	idx := d.timeline.Add(question)
+	d.setLabelTimestamp(idx, time.Now())
 	d.timeline.SetState(idx, QGenerating)
 	d.generateAnswers(question, translator.CommandAnswer, idx)
 }
@@ -845,11 +853,18 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		cc = d.candidateContextFn(question)
 	}
 
+	// Разговорный контекст (F1): история Q/A + блок реплик интервьюера
+	// (SpeechLog) — «Recent conversation» и «Interviewer remarks» в user-промпте.
+	conversationContext := translator.JoinConversationContext(
+		d.history.BuildContext(),
+		d.speechLog.RecentContext(d.cfg.RemarksCount, d.cfg.RemarksTokens),
+	)
+
 	req := translator.AnswerRequest{
 		Question:            question,
 		Clarifications:      d.timeline.Clarifications(idx),
 		CandidateContext:    cc,
-		ConversationContext: d.history.BuildContext(),
+		ConversationContext: conversationContext,
 		Command:             cmd,
 		SourceLang:          d.srcLang,
 		TargetLang:          d.tgtLang,
@@ -934,8 +949,68 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 	//     который можно заменить, не было» — тоже пропускаем.
 	if cmd == translator.CommandAnswer {
 		d.history.RecordAnswer(question, parsed[0].Source)
+		// Автоуточнения (F1): реплики интервьюера, озвученные ПОСЛЕ вопроса
+		// этой метки и до завершения генерации, становятся её уточнениями.
+		// Они не могли повлиять на только что сгенерированный ответ — актуальны
+		// для следующего вопроса (через Remarks-блок и явные Clarifications).
+		d.autoClarify(idx)
 	} else if last, ok := d.history.LastQuestion(); ok && last == question {
 		d.history.RecordAnswer(question, parsed[0].Source)
+	}
+}
+
+// autoClarify прикрепляет помеченные как уточнения реплики интервьюера из
+// SpeechLog к метке idx (после её успешной генерации CommandAnswer):
+//   - окно — реплики ПОСЛЕ прибытия вопроса метки (labelTimestamps, одноразовое);
+//   - только не-вопросы (вопросы сами создают новые метки в route);
+//   - дедуп с уже существующими Clarifications метки, чей текст затем консумен;
+//   - реплики, просто совпавшие текстом с уточнением, помечаются consumed
+//     (не плодим дубли — их смысл в контексте уже учтён);
+//   - если AddClarification не удался (метка вытеснена из кольца) — реплика
+//     остаётся unconsumed: её успешно заберёт Shift+F2 или следующий вопрос.
+//
+// Вызывается только из generateAnswers (CommandAnswer), горутина answerWorker.
+func (d *Dispatcher) autoClarify(idx int) {
+	// Прикрепляем только к хвостовой метке: уточнение задержавшейся реплики
+	// «прошлого» вопроса вводит частичный context будущих ответов в заблуждение.
+	if !d.timeline.OnTail() {
+		return
+	}
+	window, ok := d.labelTimestamp(idx)
+	if !ok {
+		return
+	}
+
+	existing := d.timeline.Clarifications(idx)
+	attached := false
+	for _, r := range d.speechLog.SnapshotAfter(window) {
+		if translator.IsQuestion(r.Text) {
+			continue
+		}
+		isDup := false
+		for _, c := range existing {
+			if strings.TrimSpace(c) == r.Text {
+				isDup = true
+				break
+			}
+		}
+		if isDup {
+			// Уже учтено — консумен, чтобы реплика не копилась в очереди уточнений.
+			_ = d.speechLog.Consume(r.Seq) // невозможен false из свежего снапшота
+			continue
+		}
+		if d.timeline.AddClarification(idx, r.Text) {
+			_ = d.speechLog.Consume(r.Seq)
+			existing = append(existing, r.Text)
+			attached = true
+			if d.sessLog != nil {
+				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: автоуточнение прикреплено: idx=%v, seq=%v, text=%v", idx, r.Seq, r.Text))
+			}
+		}
+	}
+
+	if attached {
+		d.pushHeaderForState(idx)
 	}
 }
 

@@ -76,6 +76,13 @@ type ConversationConfig struct {
 	RecentTurns      int `yaml:"recent_turns"`       // максимум turns в context
 	MaxContextTokens int `yaml:"max_context_tokens"` // лимит размера context
 
+	// Remarks — сколько последних реплик интервьюера (SpeechLog, F1) идёт в
+	// prompt блоком "Interviewer remarks". 0/отсутствует → дефолт 8.
+	Remarks int `yaml:"remarks"`
+	// RemarksTokens — токен-бюджет блока реплик (оценка EstimateTokens).
+	// 0/отсутствует → дефолт 1500; отрицательное значение — ошибка старта.
+	RemarksTokens int `yaml:"remarks_tokens"`
+
 	// AutoAnswer — авто-генерация ответа сразу при обнаружении вопроса.
 	// nil/отсутствует → true (режим по умолчанию: вопрос → немедленная генерация).
 	// false — вопрос только создаёт метку в таймлайне, ответ генерируется по F1.
@@ -174,6 +181,8 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.LogLevel, "info")
 	setDefault(&c.Conversation.RecentTurns, 6)
 	setDefault(&c.Conversation.MaxContextTokens, 4000)
+	setDefault(&c.Conversation.Remarks, 8)
+	setDefault(&c.Conversation.RemarksTokens, 1500)
 	setDefault(&c.CandidateContext.MaxTokens, 2000)
 	setDefault(&c.CandidateContext.MaxProfileTokens, 150)
 	setDefault(&c.CandidateContext.MinScore, 0.0)
@@ -211,6 +220,16 @@ func (c *Config) loadFromEnv() error {
 	if v := os.Getenv("CONVERSATION_MAX_CONTEXT_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Conversation.MaxContextTokens = n
+		}
+	}
+	if v := os.Getenv("CONVERSATION_REMARKS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Conversation.Remarks = n
+		}
+	}
+	if v := os.Getenv("CONVERSATION_REMARKS_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Conversation.RemarksTokens = n
 		}
 	}
 	// CONVERSATION_AUTO_ANSWER=false — вопросы только копятся как метки,

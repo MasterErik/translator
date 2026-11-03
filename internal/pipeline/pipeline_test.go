@@ -1461,7 +1461,9 @@ func TestPipelineHotkeyShiftF2Prev(t *testing.T) {
 }
 
 // TestPipelineHotkeyF2DoesNotClarify — чистая F2 (HandlePrev) НЕ добавляет
-// уточнение: маршруты Shift+F2 и F2 различны.
+// уточнение: маршруты Shift+F2 и F2 различны. Реплика интервьюера идёт ДО
+// вопроса — она вне окна автоуточнений (SnapshotAfter по времени вопроса),
+// поэтому единственный источник уточнения был бы ошибочный маршрут F2.
 func TestPipelineHotkeyF2DoesNotClarify(t *testing.T) {
 	stt := newMockSTT()
 	capt := newMockCapturer()
@@ -1471,8 +1473,14 @@ func TestPipelineHotkeyF2DoesNotClarify(t *testing.T) {
 	cancel := startPipelineWithDispatch(t, p)
 	defer cancel()
 
+	// Метка времени реплики — на секунду В ПРОШЛОМ: подряд идущие time.Now()
+	// на Windows дают одинаковые значения (granularity ~0.5 мс), а окно
+	// автоуточнений включает границу (>=) — реплика «до вопроса» ошибочно
+	// попала бы в окно. Явный сдвиг делает тест детерминированным.
+	before := endOfTurn("Имею в виду распределённые системы.")
+	before.Timestamp = time.Now().Add(-time.Second)
+	p.textStream <- before
 	p.textStream <- endOfTurn("Какой у вас опыт с Go?")
-	p.textStream <- endOfTurn("Имею в виду распределённые системы.")
 
 	waitForCond(t, func() bool {
 		for _, m := range ovl.GetMessages() {
@@ -1483,7 +1491,8 @@ func TestPipelineHotkeyF2DoesNotClarify(t *testing.T) {
 		return false
 	}, 2*time.Second)
 
-	// F2 (не Shift+F2) → HandlePrev: уточнение не создаётся.
+	// F2 (не Shift+F2) → HandlePrev: уточнение не создаётся (автоуточнения
+	// здесь тоже никقا не прикрепят: не-вопрос пришёл до вопроса).
 	p.handleHotkey(hotkey.KeyF2)
 	time.Sleep(100 * time.Millisecond)
 	if got := lastAnswerClarifications(ovl); len(got) != 0 {
