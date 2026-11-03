@@ -72,9 +72,9 @@ func TestAutoClarifyDeduplicatesAndIsOneShot(t *testing.T) {
 		t.Fatalf("дубликаты остались unconsumed: %+v", snap)
 	}
 
-	// Одноразовость окна: перегенерация той же метки (CommandAnswer вновь)
-	// не находит window (labelTimestamp удалён первым вызовом) — уточнения
-	// не растут и существующие не ломаются.
+	// Окно НЕ одноразовое (F4: постоянное свойство метки — коалесинг и
+	// повторные перегенерации), но уточнения не растут: реплики из окна уже
+	// потреблены и скрыты из SnapshotAfter — перегенерации нечего прикреплять.
 	d.generateAnswers("How do you scale?", translator.CommandAnswer, idx)
 	if got := d.timeline.Clarifications(idx); len(got) != 1 {
 		t.Errorf("после перегенерации Clarifications = %v, ожидалось то же одно вхождение", got)

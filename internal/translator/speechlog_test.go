@@ -133,6 +133,49 @@ func TestSpeechLogRestore(t *testing.T) {
 	}
 }
 
+// TestSpeechLogConsumeText — ConsumeText помечает consumed САМУЮ СВЕЖУЮ
+// unconsumed-реплику с совпадающим текстом (коалесинг фрагментов F4).
+func TestSpeechLogConsumeText(t *testing.T) {
+	log := NewSpeechLog(5, 100)
+
+	if log.ConsumeText("") || log.ConsumeText("   ") {
+		t.Fatal("ConsumeText пустого текста должен быть no-op")
+	}
+
+	log.Add("Fragment one.", speechAt(1)) // Seq 0
+	log.Add("Fragment two.", speechAt(2)) // Seq 1
+	log.Add("Fragment one.", speechAt(3)) // Seq 2
+
+	if !log.ConsumeText("  Fragment one.  ") { // текст нормализуется TrimSpace
+		t.Fatal("ConsumeText: ожидалось true для совпадающего текста")
+	}
+	// Потреблена самая СВЕЖАЯ из совпадающих (Seq 2), не ранняя: ранний экземпляр
+	// (Seq 0) остаётся unconsumed.
+	snap := log.SnapshotAfter(time.Time{})
+	if len(snap) != 2 {
+		t.Fatalf("SnapshotAfter = %d записей, ожидалось 2 (потреблён Seq 2)", len(snap))
+	}
+	for _, r := range snap {
+		if r.Seq == 2 {
+			t.Fatalf("Seq 2 должен быть потреблён: %+v", r)
+		}
+	}
+
+	if !log.ConsumeText("Fragment two.") {
+		t.Fatal("ConsumeText: ожидалось true для второй реплики")
+	}
+	if log.ConsumeText("Fragment two.") {
+		t.Fatal("повторный ConsumeText того же текста = no-op (уже consumed)")
+	}
+	// Оставшийся Seq 0 добирается, дальше — false.
+	if !log.ConsumeText("Fragment one.") {
+		t.Fatal("ConsumeText: ожидалось true для оставшейся Seq 0")
+	}
+	if log.ConsumeText("Fragment one.") {
+		t.Fatal("ConsumeText: после опустошения ожидалось false")
+	}
+}
+
 // TestSpeechLogConsume — потребление по Seq: true на первой попытке,
 // false при повторе и для неизвестных Seq.
 func TestSpeechLogConsume(t *testing.T) {

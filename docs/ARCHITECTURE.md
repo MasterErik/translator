@@ -250,7 +250,10 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
     → UI TranscriptionHistory (зона 4, оригинал)
     → speechLog.Add(event.Text, event.Timestamp)   [кольцо реплик интервьюера, F1]
     → IsQuestion(event.Text)?
-         да → enqueueQuestion(question, event.Timestamp)
+         да → handleQuestion(question, event.Timestamp)   [дедуп A6 + коалесинг A7]
+              точный повтор / фаззи-дубликат (Jaccard>=0.75) → дроп
+              фрагмент в пределах 6s после вопроса хвостовой метки → склейка/уточнение
+              иначе → enqueueQuestion(question, event.Timestamp)
          нет → ничего
 ```
 

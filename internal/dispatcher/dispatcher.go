@@ -115,10 +115,16 @@ type Dispatcher struct {
 	// Owned by New; методы потоко-безопасны (внутренний мьютекс).
 	speechLog *translator.SpeechLog
 
-	// labelTimestamps — время прибытия вопроса соответствующей метки таймлайна:
-	// окно автоуточнений = реплики интервьюера ПОСЛЕ вопроса этой метки.
-	// Записывается в enqueueQuestion (горутина route), читается в
-	// generateAnswers (горутина answerWorker) — доступ только под мьютексом.
+	// labelTimestamps — время прибытия вопроса соответствующей метки таймлайна.
+	// Потребители: окно автоуточнений autoClarify (реплики ПОСЛЕ вопроса метки)
+	// и окно коалесинга фрагментов (F4: новые вопросы в пределах coalesceWindow
+	// после вопроса хвостовой метки). Окно — постоянное свойство метки: не
+	// удаляется при чтении (перегенерация той же метки применяет то же окно;
+	// повторное прикрепление исключено дедупом по тексту и потреблением реплик).
+	// На вытеснение метки из кольца записи чистятся лениво при чтении — размер
+	// пропорционален числу вопросов, отдельная ревизия не нужна.
+	// Пишется в enqueueQuestion (горутина route), читается в
+	// generateAnswers/answerWorker и в handleQuestion (route) — под мьютексом.
 	labelTimestamps   map[int]time.Time
 	labelTimestampsMu sync.Mutex
 
@@ -341,41 +347,218 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 		d.speechLog.Add(event.Text, event.Timestamp)
 
 		if translator.IsQuestion(event.Text) {
-			q := strings.TrimSpace(event.Text)
-			// Повторный вопрос (точный повтор последнего) не создаёт новую метку.
-			if q != "" && q == d.lastQuestion {
-				if d.sessLog != nil {
-					d.sessLog.LogDebug(fmt.Sprintf("dispatcher: повторный вопрос проигнорирован (метка не создаётся): text=%v", q))
-				}
-				return
-			}
-			d.lastQuestion = q
-			if d.sessLog != nil {
-				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: обнаружен вопрос, запуск генерации: text=%v", event.Text))
-			}
-			d.enqueueQuestion(event.Text, event.Timestamp)
+			d.handleQuestion(event.Text, event.Timestamp)
 		}
 	}
 }
 
-// Тюrn.labelTimestamps — окно автоуточнений (реплики интервьюера ПОСЛЕ вопроса
-// соответствующей метки). Пишется в enqueueQuestion, читается/сбрасывается в
-// autoClarify (generateAnswers, горутина answerWorker) — доступ под мьютексом.
+// coalesceWindow — окно мультичастного вопроса (F4/A7): вопрос, пришедший в
+// пределах этого интервала после вопроса хвостовой метки, трактуется как её
+// фрагмент (склейка/уточнение), а не как новая метка.
+const coalesceWindow = 6 * time.Second
+
+// handleQuestion — единая точка маршрутизации обнаруженных вопросов (F4).
+// Порядок проверок, от дешёвых к структурным:
+//  1. точный повтор последнего вопроса — дроп (существовавшее поведение);
+//  2. фаззи-дедуп (A6, token-Jaccard >= questionDupThreshold) против
+//     последних 3 меток — STT часто переиздаёт вопрос уточнённой версией;
+//     дроп без создания метки;
+//  3. коалесинг фрагмента (A7, coalesceFragment): фрагмент в пределах окна
+//     после вопроса хвостовой метки дописывается к её вопросу (QQueued/
+//     QGenerating — с перегенерацией задания; QIdle — просто дописывается;
+//     QReady/QFailed — поздний фрагмент остаётся уточнением метки);
+//  4. иначе — обычная новая метка (enqueueQuestion).
+//
+// Вызывается только из route (единственный consumer textStream);
+// lastQuestion защищать мьютексом не нужно.
+func (d *Dispatcher) handleQuestion(raw string, arrivedAt time.Time) {
+	q := strings.TrimSpace(raw)
+	if q == "" {
+		return
+	}
+
+	// 1) Точный повтор последнего вопроса — метка не создаётся.
+	if q == d.lastQuestion {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: повторный вопрос проигнорирован (метка не создаётся): text=%v", q))
+		}
+		return
+	}
+
+	// 2) Фаззи-дедуп против последних 3 меток (A6).
+	if d.isDuplicateOfRecentLabels(q) {
+		return
+	}
+
+	// 3) Коалесинг фрагмента мультичастного вопроса (A7).
+	if d.coalesceFragment(q, raw, arrivedAt) {
+		d.lastQuestion = q
+		return
+	}
+
+	// 4) Обычный путь: новая метка.
+	d.lastQuestion = q
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: обнаружен вопрос, запуск генерации: text=%v", raw))
+	}
+	d.enqueueQuestion(raw, arrivedAt)
+}
+
+// isDuplicateOfRecentLabels — фаззи-дедуп (A6) против последних 3 меток
+// таймлайна. Лог дропа пишется здесь (из handleQuestion журналирование
+// дубликата неудобно — нужен само же индекс метки).
+func (d *Dispatcher) isDuplicateOfRecentLabels(q string) bool {
+	snap := d.timeline.Snapshot()
+	if len(snap) > 3 {
+		snap = snap[len(snap)-3:]
+	}
+	for _, e := range snap {
+		if !fuzzyDuplicateQuestion(q, e.Question) {
+			continue
+		}
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: фаззи-дубликат вопроса проигнорирован (метка %d): text=%v", e.Idx, q))
+		}
+		return true
+	}
+	return false
+}
+
+// coalesceFragment — склейка фрагмента мультичастного вопроса (F4/A7) с
+// хвостовой меткой, если её вопрос прозвучал не позже coalesceWindow И фрагмент
+// похож на дополнение (followUpFragment: фраза-дополнение «and/or/but/also/
+// what about/how about» либо заметное пересечение токенов с хвостовым
+// вопросом). Guard обязателен для ВСЕХ состояний: иначе следом идущий через
+// пару секунд самостоятельный вопрос («What is your work?» сразу после
+// «What is your experience?») ошибочно склеился бы с предыдущим. Отклонение от
+// буквального прочтения плана (безусловная склейка при in-flight) в пользу
+// fail-safe: пропущенная склейка даёт лишнюю метку — дешёвый сбой; неверная
+// склейка теряет самостоятельный вопрос.
+//
+// Поведение по состоянию метки:
+//   - QQueued/QGenerating: фрагмент дописывается к вопросу и ставится
+//     ПОВТОРНОЕ задание (CommandAnswer, fresh=false): отменить задание,
+//     уже стоящее в очереди, нельзя — полное задание прогоняется следом и
+//     вытесняет черновой ответ того же idx;
+//   - QIdle: фрагмент дописывается к вопросу до нажатия F1 (заданий нет);
+//   - QReady/QFailed: фрагмент поздний — он становится уточнением метки;
+//     иначе (не похож на дополнение) → false;
+//   - прочие состояния / нет метки / вне окна → false (новая метка).
+//
+// При склейке реплика-фрагмент поглощается из SpeechLog (ConsumeText): текст
+// уже вошёл в вопрос — иначе он бы дублировался в «Interviewer remarks» и мог
+// быть прикреплён уточнением вторично.
+// Возвращает true, если фрагмент обработан (метка не создаётся).
+func (d *Dispatcher) coalesceFragment(q, raw string, arrivedAt time.Time) bool {
+	snap := d.timeline.Snapshot()
+	if len(snap) == 0 {
+		return false
+	}
+	tail := snap[len(snap)-1]
+
+	arrived, ok := d.labelTimestamp(tail.Idx)
+	if !ok || arrived.IsZero() || time.Since(arrived) > coalesceWindow {
+		return false
+	}
+
+	if !followUpFragment(q, tail.Question) {
+		return false
+	}
+
+	switch tail.State {
+	case QQueued, QGenerating:
+		full, ok := d.timeline.AppendQuestion(tail.Idx, raw)
+		if !ok {
+			return false
+		}
+		d.speechLog.ConsumeText(raw)
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: фрагмент дописан к вопросу метки %d, задание перегенерируется: full=%v", tail.Idx, full))
+		}
+		// Перегенерация: полное задание после текущего. Если метка QQueued,
+		// оба задания относятся к одному idx — привлекательный ответ даст
+		// второе (полное) задание.
+		d.enqueueAnswer(answerTask{idx: tail.Idx, cmd: translator.CommandAnswer, question: full})
+		d.pushHeaderForState(tail.Idx)
+		return true
+
+	case QIdle:
+		full, ok := d.timeline.AppendQuestion(tail.Idx, raw)
+		if !ok {
+			return false
+		}
+		d.speechLog.ConsumeText(raw)
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: фрагмент дописан к вопросу метки %d (F1 ещё не нажат): full=%v", tail.Idx, full))
+		}
+		d.pushHeaderForState(tail.Idx)
+		return true
+
+	case QReady, QFailed:
+		if !followUpFragment(q, tail.Question) {
+			return false
+		}
+		if !d.timeline.AddClarification(tail.Idx, raw) {
+			return false // метка исчезла из кольца — пусть будет новой меткой
+		}
+		d.speechLog.ConsumeText(raw)
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: поздний фрагмент прикреплён уточнением метки %d: text=%v", tail.Idx, raw))
+		}
+		d.pushHeaderForState(tail.Idx)
+		return true
+
+	default:
+		return false
+	}
+}
+
+// followUpStarters — начала фраз-фрагментов мультичастного вопроса (A7):
+// «or only since 2019?», «and what about latency?».
+var followUpStarters = []string{"and", "or", "but", "also", "what about", "how about"}
+
+// followUpOverlapMin — минимальный token-Jaccard фрагмента против хвостового
+// вопроса, при котором фрагмент считается продолжением того же вопроса.
+// fail-safe порог (см. coalesceFragment): чем выше — тем реже ложные склейки
+// разных быстрых вопросов; всё, что не склеилось, становится нормальной меткой.
+// 0.65 отсекает «What is your work?» против «What is your experience?» (0.60),
+// сохраняя явные расширения («Do you have experience with Go in prod?» = 0.67).
+const followUpOverlapMin = 0.65
+
+// followUpFragment решает, является ли вопрос-фрагмент продолжением
+// предыдущего (хвостового) вопроса: либо начинается с фразы-дополнения
+// (followUpStarters), либо имеет заметное пересечение токенов с ним
+// (>= followUpOverlapMin и < questionDupThreshold — дубликаты отсеяны ранее).
+// Защищает от ложной склейки ПРОСТО быстрых независимых вопросов:
+// «How do you scale?» → «What is your experience?» — нулевое пересечение.
+func followUpFragment(fragment, prevQuestion string) bool {
+	lower := strings.ToLower(fragment)
+	for _, starter := range followUpStarters {
+		if strings.HasPrefix(lower, starter) {
+			return true
+		}
+	}
+	return tokenJaccard(questionTokens(fragment), questionTokens(prevQuestion)) >= followUpOverlapMin
+}
+
+// setLabelTimestamp фиксирует время прибытия вопроса метки idx (окно
+// автоуточнений и окно коалесинга F4 — см. labelTimestamps).
 func (d *Dispatcher) setLabelTimestamp(idx int, ts time.Time) {
 	d.labelTimestampsMu.Lock()
 	d.labelTimestamps[idx] = ts
 	d.labelTimestampsMu.Unlock()
 }
 
+// labelTimestamp возвращает время прибытия вопроса метки idx. Записи не
+// удаляются при чтении: окно остаётся свойством метки (перегенерация той же
+// метки применяет то же окно — повторное прикрепление исключено дедупом по
+// тексту и потреблением реплик). ok=false — у метки нет вопроса (новая метка,
+// созданная не через enqueueQuestion) или истёкших записей нет.
 func (d *Dispatcher) labelTimestamp(idx int) (time.Time, bool) {
 	d.labelTimestampsMu.Lock()
 	defer d.labelTimestampsMu.Unlock()
 	ts, ok := d.labelTimestamps[idx]
-	if !ok {
-		return ts, false
-	}
-	delete(d.labelTimestamps, idx) // окно одноразовое: после генерации не нужно
-	return ts, true
+	return ts, ok
 }
 
 // enqueueQuestion регистрирует вопрос в таймлайне и, при включённом

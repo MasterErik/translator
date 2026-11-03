@@ -182,6 +182,30 @@ func (s *SpeechLog) Restore(text string) {
 	s.Add(text, time.Now())
 }
 
+// ConsumeText помечает consumed САМУЮ СВЕЖУЮ unconsumed-реплику, текст которой
+// совпадает с text (после TrimSpace). Используется коалесингом фрагментов
+// (F4): фрагмент уходит в текст вопроса метки, и чтобы он не вернулся позже
+// уточнением (автоуточнение/Shift+F2) и не дублировался в «Interviewer
+// remarks» лишний раз, его реплика потребляется сразу.
+// Нет такой реплики → false (no-op).
+func (s *SpeechLog) ConsumeText(text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	want := strings.TrimSpace(text)
+	if want == "" {
+		return false
+	}
+	for i := len(s.remarks) - 1; i >= 0; i-- {
+		if s.remarks[i].consumed || s.remarks[i].remark.Text != want {
+			continue
+		}
+		s.remarks[i].consumed = true
+		return true
+	}
+	return false
+}
+
 // SnapshotAfter возвращает КОПИИ всех unconsumed-реплик с Timestamp >= ts
 // (старые первыми). Consumed-реплики в срез не попадают: поток уточнений
 // берёт только ещё не обработанные фрагменты речи.

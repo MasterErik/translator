@@ -195,6 +195,32 @@ func (t *QuestionTimeline) Clarifications(idx int) []string {
 	return cloneClarifications(e.Clarifications)
 }
 
+// AppendQuestion дописывает фрагмент к тексту вопроса метки idx (коалесинг
+// мультичастных вопросов, F4/A7): «How do you scale?» + «Or only in regions?»
+// → «How do you scale? Or only in regions?». Фрагмент отделяется пробелом, его
+// краевые пробелы нормализуются. Возвращает ФИНАЛЬНОЕ текстовое содержимое
+// вопроса метки (для перегенерации задания) и ok=false для no-op: метка вне
+// окна либо фрагмент пуст.
+//
+// Состояние метки не меняется: вызывающий код (коалесинг) сам решает, нужно ли
+// перегенерировать задание (QQueued/QGenerating) — очередь не может отменить
+// уже поставленное задание, поэтому перегенерация идёт вторым заданием.
+func (t *QuestionTimeline) AppendQuestion(idx int, fragment string) (string, bool) {
+	trimmed := strings.TrimSpace(fragment)
+	if trimmed == "" {
+		return "", false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e := t.lookupLocked(idx)
+	if e == nil {
+		return "", false
+	}
+	e.Question = strings.TrimSpace(e.Question) + " " + trimmed
+	return e.Question, true
+}
+
 // AbsorbLast — слияние реплики-дубля вопроса. Если ПОСЛЕДНЯЯ метка окна — дубль
 // вопроса q (её Question == q), она удаляется, а её текст добавляется уточнением
 // к предыдущей метке (idx-1). Активность и индикатор свежести пересчитываются:
