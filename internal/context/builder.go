@@ -226,9 +226,12 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer, families *familyIndex) (
 		// нормализуется к Family.Name (M6b): "kotlin" → "java", "mssql" →
 		// "microsoft sql server" → "mssql". Это гарантирует, что стек факта и
 		// стек вопроса сравнимы по одному и тому же ключу.
+		// Стек — unstemmed (ProcessNoStem, F5): сопоставление с Family.Name/
+		// Members идёт по точным каноническим формам; стемминг разъехал бы с
+		// манифестом (kubernet, hibern, symfoni, redis→redi).
 		stack := make([]string, 0, len(fm.Stack))
 		for _, s := range fm.Stack {
-			stack = append(stack, tokenizer.Process(s)...)
+			stack = append(stack, tokenizer.ProcessNoStem(s)...)
 		}
 		contentTokens := tokenizer.Process(string(body))
 
@@ -246,8 +249,13 @@ func parseFactMarkers(raw []byte, tokenizer *Tokenizer, families *familyIndex) (
 			Weight:        strings.TrimSpace(fm.Weight),
 		}
 
-		titleTokens := tokenizer.Process(fm.Title)
-		normalized, warn, err := families.validateFact(fact, fm.LintIgnore, titleTokens)
+		// Lint-проверка (пустой stack vs токены семей в тексте) работает на
+		// unstemmed-токенах: members семей — точные канонические формы
+		// (hibernate, symfony, liquibase...), стеммированные hibern/symfoni/
+		// liquibas с ними не совпали бы и lint молчал бы ложно.
+		titleTokensRaw := tokenizer.ProcessNoStem(fm.Title)
+		contentTokensRaw := tokenizer.ProcessNoStem(string(body))
+		normalized, warn, err := families.validateFact(fact, fm.LintIgnore, titleTokensRaw, contentTokensRaw)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -40,6 +40,19 @@ type Retriever struct {
 	contentSet     []map[string]struct{}
 	sectionTags    map[string]map[string]struct{}
 	sectionSummary map[string]map[string]struct{}
+
+	// BM25F-статистика полей (F5): tf/dl на факт + средняя длина поля.
+	// Считаются в NewRetriever из уже токенизированных полей индекса
+	// (title — из f.Title текущим токенизатором); semantics эквивалентна
+	// хранению в index.json, но не раздувает файл.
+	kwIdx        []fieldIndex
+	titleIdx     []fieldIndex
+	aliasIdx     []fieldIndex
+	contentIdx   []fieldIndex
+	kwAvgDL      float64
+	titleAvgDL   float64
+	aliasAvgDL   float64
+	contentAvgDL float64
 }
 
 // RetrieverOptions — настройки Retriever. Нулевые пороги означают defaults
@@ -119,6 +132,10 @@ func NewRetrieverWithOptions(manifest *Manifest, index *Index, root string, opts
 		keywordSet:        make([]map[string]struct{}, n),
 		aliasSet:          make([]map[string]struct{}, n),
 		contentSet:        make([]map[string]struct{}, n),
+		kwIdx:             make([]fieldIndex, n),
+		titleIdx:          make([]fieldIndex, n),
+		aliasIdx:          make([]fieldIndex, n),
+		contentIdx:        make([]fieldIndex, n),
 		sectionTags:       make(map[string]map[string]struct{}, len(manifest.Sections)),
 		sectionSummary:    make(map[string]map[string]struct{}, len(manifest.Sections)),
 	}
@@ -130,13 +147,23 @@ func NewRetrieverWithOptions(manifest *Manifest, index *Index, root string, opts
 	}
 
 	// Fact metadata + document frequency (каждый факт учитывается максимум
-	// один раз на термин).
+	// один раз на термин) + BM25F-статистика полей.
+	var kwSumDL, titleSumDL, aliasSumDL, contentSumDL int
 	for i, f := range index.Facts {
 		r.titleTokens[i] = tokenizer.Process(f.Title)
 		r.titleSet[i] = toSet(r.titleTokens[i])
 		r.keywordSet[i] = toSet(f.Keywords)
 		r.aliasSet[i] = toSet(f.Aliases)
 		r.contentSet[i] = toSet(f.ContentTokens)
+
+		r.kwIdx[i] = newFieldIndex(f.Keywords)
+		r.titleIdx[i] = newFieldIndex(r.titleTokens[i])
+		r.aliasIdx[i] = newFieldIndex(f.Aliases)
+		r.contentIdx[i] = newFieldIndex(f.ContentTokens)
+		kwSumDL += r.kwIdx[i].dl
+		titleSumDL += r.titleIdx[i].dl
+		aliasSumDL += r.aliasIdx[i].dl
+		contentSumDL += r.contentIdx[i].dl
 
 		union := make(map[string]struct{})
 		for t := range r.keywordSet[i] {
@@ -156,7 +183,23 @@ func NewRetrieverWithOptions(manifest *Manifest, index *Index, root string, opts
 		}
 	}
 
+	if n > 0 {
+		r.kwAvgDL = float64(kwSumDL) / float64(n)
+		r.titleAvgDL = float64(titleSumDL) / float64(n)
+		r.aliasAvgDL = float64(aliasSumDL) / float64(n)
+		r.contentAvgDL = float64(contentSumDL) / float64(n)
+	}
+
 	return r, nil
+}
+
+// newFieldIndex считает tf и длину поля из готового списка токенов.
+func newFieldIndex(tokens []string) fieldIndex {
+	idx := fieldIndex{tf: make(map[string]int, len(tokens)), dl: len(tokens)}
+	for _, t := range tokens {
+		idx.tf[t]++
+	}
+	return idx
 }
 
 // flattenTags объединяет Process(tag) по всем Tags секции в множество терминов.
@@ -272,6 +315,11 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 	}
 	qSet := toSet(qTokens)
 
+	// Стек-детекция — на unstemmed-токенах (F5): Family.Name/Members — точные
+	// канонические формы, стеммированные (kubernet, symfoni) с ними разъехались
+	// бы. Скоринг и phrase-бонус — на stemmed.
+	qTokensRaw := r.tokenizer.ProcessNoStem(trimmed)
+
 	n := len(r.index.Facts)
 	var questionIDF float64
 	for term := range qSet {
@@ -281,7 +329,7 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 
 	// Стек-множества считаются один раз на запрос: сессия (TargetStack) плюс
 	// однозначные упоминания в самом вопросе.
-	sets := stackdet.Detect(qTokens, opts.Session.TargetStack, r.families)
+	sets := stackdet.Detect(qTokensRaw, opts.Session.TargetStack, r.families)
 
 	cands := make([]scoredCandidate, 0, n)
 	for i, f := range r.index.Facts {
@@ -293,7 +341,10 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 		}
 		var ratio float64
 		if questionIDF > 0 {
-			ratio = parts.Content / contentWeight / questionIDF
+			// Доля IDF вопроса, покрытая телом факта (per-term once) —
+			// семантика прежнего ratio (parts.Content/contentWeight/questionIDF),
+			// но независимая от BM25-нормализации tf.
+			ratio = parts.ContentMatchedIDF / questionIDF
 		}
 		gateReason := contentGateReason(parts, ratio, r.contentGateTau)
 		switch {
@@ -319,10 +370,10 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 	return cands
 }
 
-// factParts считает разложение score факта:
+// factParts считает разложение score факта (F5: поля — BM25F):
 //
-//	field      = keywords*Σ idf(kw) + title*Σ idf(title) + aliases*Σ idf(alias)
-//	           + content*Σ idf(content)
+//	field      = kwWeight·BM25(kw) + titleWeight·BM25(title)
+//	           + aliasWeight·BM25(aliases) + contentWeight·BM25(content)
 //	section    = sectionScore * sectionWeight
 //	phrase     = phrase bonus (биграммы title/content)
 //	core       = (field + phrase) * mult        — сопоставимая часть
@@ -331,12 +382,15 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 func (r *Retriever) factParts(i int, sectionScore float64, qSet map[string]struct{}, qTokens []string, sets stackdet.Sets, opts RetrieveOptions) scoreParts {
 	n := len(r.index.Facts)
 	parts := scoreParts{
-		Keywords: keywordsWeight * sumIDF(qSet, r.keywordSet[i], r.dfMap, n),
-		Title:    titleWeight * sumIDF(qSet, r.titleSet[i], r.dfMap, n),
-		Aliases:  aliasesWeight * sumIDF(qSet, r.aliasSet[i], r.dfMap, n),
-		Content:  contentWeight * sumIDF(qSet, r.contentSet[i], r.dfMap, n),
-		Section:  sectionScore * sectionWeight,
-		Phrase:   phraseBonusValue(r.titleTokens[i], r.index.Facts[i].ContentTokens, qTokens),
+		Keywords: keywordsWeight * bm25FieldScore(r.kwIdx[i], r.kwAvgDL, qSet, r.dfMap, n),
+		Title:    titleWeight * bm25FieldScore(r.titleIdx[i], r.titleAvgDL, qSet, r.dfMap, n),
+		Aliases:  aliasesWeight * bm25FieldScore(r.aliasIdx[i], r.aliasAvgDL, qSet, r.dfMap, n),
+		Content:  contentWeight * bm25FieldScore(r.contentIdx[i], r.contentAvgDL, qSet, r.dfMap, n),
+		// MatchedIDF — без насыщения tf: доля IDF вопроса, покрытая телом
+		// факта (для content-only gate; per-term once).
+		ContentMatchedIDF: sumIDF(qSet, r.contentSet[i], r.dfMap, n),
+		Section:           sectionScore * sectionWeight,
+		Phrase:            phraseBonusValue(r.titleTokens[i], r.index.Facts[i].ContentTokens, qTokens),
 	}
 	parts.Mult, parts.MultReason = r.stackMultiplier(i, sets)
 	parts.OutOfTarget = stackdet.IsOutOfTarget(r.index.Facts[i].Stack, sets)
@@ -435,10 +489,15 @@ func (r *Retriever) breakdown(c scoredCandidate) ScoreBreakdown {
 // и без Explain (стоимость — те же вычисления, что и раньше), чтобы gate и
 // пороги сравнивали именно те величины, которые видит explain.
 type scoreParts struct {
-	Keywords float64 // keywordsWeight × Σ idf(совпавшие keywords)
-	Title    float64 // titleWeight × Σ idf(совпавшие title-термины)
-	Aliases  float64 // aliasesWeight × Σ idf(совпавшие aliases)
-	Content  float64 // contentWeight × Σ idf(совпавшие content-термины)
+	Keywords float64 // keywordsWeight × BM25(keywords)
+	Title    float64 // titleWeight × BM25(title)
+	Aliases  float64 // aliasesWeight × BM25(aliases)
+	Content  float64 // contentWeight × BM25(content)
+
+	// ContentMatchedIDF — Σ idf совпавших content-терминов без насыщения tf
+	// (per-term once): устойчивая к BM25-нормализации доля покрытия вопроса
+	// телом факта; на ней работает content-only gate.
+	ContentMatchedIDF float64
 
 	Section float64 // sectionScore × sectionWeight
 	Phrase  float64 // phrase bonus (title/content биграммы)

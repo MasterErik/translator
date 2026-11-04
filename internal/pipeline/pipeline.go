@@ -251,9 +251,10 @@ func New(cfg Config) (*Pipeline, error) {
 	}
 	// Диспетчер получает только prompt-ready строку: целевой стек сессии
 	// (cfg.Interview.TargetStack) попадает в retrieval начиная с M7b.
+	// Query собирает диспетчер (expandedQuery, F5/B2).
 	session := candidatecontext.SessionContext{TargetStack: cfg.Interview.TargetStack}
-	candidateContextFn := func(question string) string {
-		return contextFn(question, session).Text
+	candidateContextFn := func(q candidatecontext.Query) string {
+		return contextFn(q, session).Text
 	}
 
 	// Overlay.
@@ -335,11 +336,11 @@ const hintsProbeQuestion = "hints status probe"
 // строку, если подсказки работают либо не сконфигурированы вовсе. Сбой hints
 // не валит старт — он только помечается: причина, зафиксированная в логе
 // сессии функцией BuildContextFn, определяет смысл индикатора.
-func detectHintsDisabled(cfg Config, fn func(string, candidatecontext.SessionContext) candidatecontext.ContextResult) string {
+func detectHintsDisabled(cfg Config, fn func(candidatecontext.Query, candidatecontext.SessionContext) candidatecontext.ContextResult) string {
 	if cfg.Hints.Dir == "" {
 		return ""
 	}
-	if !fn(hintsProbeQuestion, candidatecontext.SessionContext{}).HintsDisabled {
+	if !fn(candidatecontext.Query{Question: hintsProbeQuestion}, candidatecontext.SessionContext{}).HintsDisabled {
 		return ""
 	}
 	if cfg.CandidateContext.Dir == "" && cfg.CandidateContextFile != "" {

@@ -21,6 +21,14 @@ const (
 	phraseBonusCap     = 6.0
 )
 
+// Параметры BM25 (F5): канонические значения Okapi BM25. Действуют одинаково
+// на все поля (keywords/title/aliases/content); различие полей — в весах выше
+// и в собственной tf/длине каждого поля.
+const (
+	bm25K1 = 1.2
+	bm25B  = 0.75
+)
+
 // Пороги M7a (defaults; переопределяются через RetrieverOptions).
 //
 // Оба значения калиброваны на датасетах (legacy train/holdout как gate + v2
@@ -69,6 +77,37 @@ func sumIDF(qSet, field map[string]struct{}, dfMap map[string]int, n int) float6
 		if _, ok := field[term]; ok {
 			s += idfValue(dfMap, n, term)
 		}
+	}
+	return s
+}
+
+// fieldIndex — BM25F-статистика одного поля факта: частоты терминов (tf) и
+// длина поля в токенах (dl). Заполняется один раз в NewRetriever из уже
+// токенизированных полей индекса.
+type fieldIndex struct {
+	tf map[string]int
+	dl int
+}
+
+// bm25FieldScore — BM25-вклад одного поля факта (F5):
+//
+//	Σ_{t ∈ qSet ∩ tf} idf(t) · tf(t) · (k1+1) / (tf(t) + k1·(1−b+b·dl/avgdl))
+//
+// Термин учитывается максимум один раз (qSet — множество); saturating tf
+// ограничивает вклад длинных полей и повторов — этим BM25F отличается от
+// простого Σ idf. avgdl <= 0 (пустое поле во всех фактах) — вклад 0.
+func bm25FieldScore(idx fieldIndex, avgdl float64, qSet map[string]struct{}, dfMap map[string]int, n int) float64 {
+	if len(idx.tf) == 0 || avgdl <= 0 {
+		return 0
+	}
+	norm := bm25K1 * (1 - bm25B + bm25B*float64(idx.dl)/avgdl)
+	var s float64
+	for term := range qSet {
+		tf, ok := idx.tf[term]
+		if !ok {
+			continue
+		}
+		s += idfValue(dfMap, n, term) * float64(tf) * (bm25K1 + 1) / (float64(tf) + norm)
 	}
 	return s
 }

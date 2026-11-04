@@ -34,7 +34,7 @@ func TestGenerateCCFNGolden(t *testing.T) {
 	var buf bytes.Buffer
 	for i, q := range questions {
 		fmt.Fprintf(&buf, "## Q%02d: %s\n", i+1, q)
-		buf.WriteString(fn(q, SessionContext{}).Text)
+		buf.WriteString(fn(Query{Question: q}, SessionContext{}).Text)
 		buf.WriteString("\n--\n")
 	}
 

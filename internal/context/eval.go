@@ -8,10 +8,11 @@ import (
 	"sort"
 )
 
-// ContextFn — контракт сборки контекста: вопрос и состояние сессии на входе,
-// готовый к отправке контекст на выходе. Именно такую функцию возвращает
-// BuildContextFn; eval, probe и прод используют один и тот же вход (M0/M1).
-type ContextFn func(question string, s SessionContext) ContextResult
+// ContextFn — контракт сборки контекста: запрос (вопрос + диалоговый контекст,
+// F5/B2) и состояние сессии на входе, готовый к отправке контекст на выходе.
+// Именно такую функцию возвращает BuildContextFn; eval, probe и прод
+// используют один и тот же вход (M0/M1).
+type ContextFn func(q Query, s SessionContext) ContextResult
 
 // EvalQuery is a single evaluation case: a question, the session state it is
 // asked in, and the ground-truth markup (relevant / must_not FactIDs).
@@ -192,7 +193,7 @@ func EvaluateContextFn(fn ContextFn, ds *EvalDataset) EvalReport {
 	bySlice := map[string]*evalAccumulator{}
 
 	for _, q := range ds.Queries {
-		res := fn(q.Question, SessionContext{TargetStack: q.SessionTargetStack})
+		res := fn(Query{Question: q.Question}, SessionContext{TargetStack: q.SessionTargetStack})
 		ranked := make([]string, 0, len(res.FactIDs)+len(res.HintIDs))
 		ranked = append(ranked, res.FactIDs...)
 		ranked = append(ranked, res.HintIDs...)

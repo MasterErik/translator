@@ -32,9 +32,9 @@ section-aware бонус к score, не является hard-фильтром.
 |---|---|
 | `types.go` | `FileMeta`, `Section`, `Fact`, `Manifest`, `Index`, `RetrievalResult`, `CandidateContext.Render()` |
 | `load.go` | `LoadManifest`, `LoadIndex`, `CheckIndexFresh`, `LoadCandidateContext` |
-| `tokenize.go` | `Tokenizer`: Normalize→Substitute→Tokenize→RemoveStopWords→Canonicalize; `TokenizerVersion` (входит в freshness) |
+| `tokenize.go` | `Tokenizer`: Normalize→Substitute→Tokenize→RemoveStopWords→Canonicalize→Stem (s-флексии, F5); `TokenizerVersion` (входит в freshness) |
 | `builder.go` | `BuildIndex` (markers→facts, offsets, SHA256), `SaveIndex` (temp+rename) |
-| `score.go` | Веса полей, IDF, phrase/bigram matching |
+| `score.go` | Веса полей, IDF, BM25F-скоринг полей, phrase/bigram matching |
 | `retrieval.go` | `Retriever`: dfMap, title/section tokens, ranking, точечное чтение тел |
 | `budget.go` | `Budgeter`: раздельные бюджеты profile/matrix/facts, UTF-8 safe обрезка |
 | `contextfn.go` | `BuildContextFn` — единый вход сборки контекста (retrieval→budget→render→hints) |
@@ -68,17 +68,18 @@ Source-файлы не меняются в runtime — file watcher/locking не
 ## Поток retrieval (на каждый вопрос)
 
 ```text
-вопрос
-  → Tokenizer.Process(question)                       # canonical tokens, без stop words
+запрос (F5/B2): вопрос + уточнения метки + последние реплики интервьюера
+  → Tokenizer.Process(query)                         # canonical tokens, без stop words, s-стемминг (см. ниже)
   → section score (tags 3 × IDF + summary 2 × IDF) × sectionWeight(0.3)
-  → fact score = keywords(5) + title(4) + aliases(3) + content(2)   [× IDF]
+  → fact score = keywords(5)·BM25(kw) + title(4)·BM25(title)
+               + aliases(3)·BM25(alias) + content(2)·BM25(content)   # BM25F, F5
   → fact score == 0 → отброс                         # section metadata не создаёт результат
   → content-only gate                                # M7a: нет попаданий в keywords/title/aliases
-                                                     #  → matched_content_IDF / question_IDF < τ (0.15) → отброс
+                                                      #  → matched_content_IDF / question_IDF < τ (0.15) → отброс
   → + section bonus + phrase bonus                   # только при fact score > 0; phrase: title +3 / content +1, cap +6
   → стек-множитель (M7b)                             # Core = (field + phrase) × mult
   → relative threshold (M7a)                         # Core < top1.Core × 0.6 → отброс
-                                                     # top1 — среди неоштрафованных, БЕЗ section-бонуса
+                                                      # top1 — среди неоштрафованных, БЕЗ section-бонуса
   → score < minScore → отброс                        # сравнение по Raw (без множителя, D7)
   → сортировка Rank DESC, tie-break по FactID ASC
   → topK → точечное чтение тел через io.NewSectionReader
@@ -105,8 +106,29 @@ Source-файлы не меняются в runtime — file watcher/locking не
 Инструменты: `test/context_explain` (разложение по вопросу/тегу).
 
 `IDF(term) = log((N+1)/(df+1)) + 1`; `df` считается по фактам (каждый факт
-максимум один раз на термин), TF не учитывается. Raw source файлы НЕ читаются
-для ranking — только после ranking, для отобранных фактов.
+максимум один раз на термин). **BM25F (F5)**: каждый словарный вклад поля —
+Okapi BM25 с насыщением tf (`tf·(k1+1)/(tf + k1·(1−b+b·dl/avgdl))`, k1=1.2,
+b=0.75): повторы термина и длинные поля дают убывающий прирост, а не линейный.
+tf/dl/avgdl считаются в `NewRetriever` из уже токенизированных полей индекса
+(в index.json не хранятся). Content-only gate работает на отдельной величине
+`ContentMatchedIDF` — Σ idf совпавших content-терминов без насыщения tf
+(per-term once), доля которой от IDF вопроса не зависит от BM25-нормализации.
+Raw source файлы НЕ читаются для ranking — только после ranking, для
+отобранных фактов.
+
+**Стемминг (F5)**: `Tokenizer.Process` завершается лёгким s-стеммером — только
+флексии числа («ies»→«y», «es»/«s»→strip, токены <4 не трогаются),
+`TokenizerVersion` "4". Полный снегбол был отбракован eval-гейтом (агрессивные
+склейки основ migrate/engineer/develop давали ложные пересечения с
+must_not-фактами). **Стек-домен не стеммируется**: `Fact.Stack` и query-токены
+для `stackdet.Detect` строятся через `ProcessNoStem` — сопоставление с
+`Family.Name`/`Members` (валидация M6b, lint) идёт в точных канонических
+формах.
+
+**Расширение запроса (F5/B2)**: retrieval идёт по `candidatecontext.Query`
+(вопрос + уточнения метки + последние 2 реплики интервьюера), hints — по
+чистому вопросу. См. `docs/qa-architecture.md` (раздел «Scoring и
+ранжирование»).
 
 ## Определение стека
 

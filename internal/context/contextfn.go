@@ -15,6 +15,49 @@ type SessionContext struct {
 	TargetStack []string
 }
 
+// Query — вход retrieval (F5/B2): вопрос интервьюера с диалоговым контекстом.
+//
+// Расширение запроса (query expansion) учитывает, что вопросы-ссылки
+// («What are you working on now?», «Tell me about it») не содержат терминов
+// релевантных фактов — термины лежат в соседних репликах диалога:
+//
+//   - Question — сам вопрос (обязателен; пустой вопрос даёт пустой контекст);
+//   - Clarifications — уточнения текущей метки таймлайна (AddClarification);
+//   - Remarks — последние реплики интервьюера (SpeechLog, хронологический
+//     порядок, вызывающий код ограничивает глубину).
+//
+// Clarifications/Remarks участвуют ТОЛЬКО в fact-level retrieval; hints
+// ретривятся по чистому Question (готовые ответы размечены на вопросы, а не
+// на контекст диалога). Пустые поля допустимы — эквивалент старого вызова
+// с одной строкой вопроса.
+type Query struct {
+	Question       string
+	Clarifications []string
+	Remarks        []string
+}
+
+// expandQuestion собирает расширенный текст запроса для fact-level retrieval:
+// вопрос + уточнения + реплики интервьюера, все непустые части через пробел.
+// Пустой вопрос при непустых частях — валиден (вопрос-ссылка отсутствует,
+// контекст диалога сам несёт термины).
+func expandQuery(q Query) string {
+	parts := make([]string, 0, 1+len(q.Clarifications)+len(q.Remarks))
+	if s := strings.TrimSpace(q.Question); s != "" {
+		parts = append(parts, s)
+	}
+	for _, c := range q.Clarifications {
+		if s := strings.TrimSpace(c); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	for _, r := range q.Remarks {
+		if s := strings.TrimSpace(r); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // ContextResult — результат сборки контекста для одного вопроса: строка,
 // которая уходит в prompt (Text), и ID фактов, реально попавших в неё.
 // FactIDs/HintIDs нужны eval-контуру (LeakRate считается по итоговой выдаче).
@@ -109,7 +152,7 @@ func degradedNotice(cause error) string {
 //     контекст без фактов с явной пометкой (Degraded=true) и ERROR в лог;
 //   - сбой hints нефатален: WARN/ERROR в лог, подсказки выключены на сессию
 //     (ContextResult.HintsDisabled=true), факты кандидата продолжают работать.
-func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext) ContextResult, error) {
+func BuildContextFn(cfg ContextFnConfig) (func(q Query, s SessionContext) ContextResult, error) {
 	logf := cfg.Logf
 	if logf == nil {
 		logf = func(string) {}
@@ -125,13 +168,13 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 	}
 
 	// failOrDegraded решает судьбу сбоя загрузки контекста по OnLoadError.
-	failOrDegraded := func(cause error) (func(string, SessionContext) ContextResult, error) {
+	failOrDegraded := func(cause error) (func(Query, SessionContext) ContextResult, error) {
 		if onLoadError != OnLoadErrorDegraded {
 			return nil, cause
 		}
 		logf(fmt.Sprintf("ERROR: candidate context недоступен (%v) — режим on_load_error=degraded, сессия без фактов кандидата", cause))
 		text := degradedNotice(cause)
-		return func(string, SessionContext) ContextResult {
+		return func(Query, SessionContext) ContextResult {
 			return ContextResult{Text: text, Degraded: true}
 		}, nil
 	}
@@ -164,7 +207,7 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 	if cfg.Dir == "" {
 		if cfg.LegacyFile == "" {
 			// Источник не сконфигурирован вовсе: пустой контекст.
-			return func(string, SessionContext) ContextResult {
+			return func(Query, SessionContext) ContextResult {
 				return ContextResult{HintsDisabled: hintsDisabled}
 			}, nil
 		}
@@ -179,7 +222,7 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 			hintsDisabled = true
 		}
 		disabled := hintsDisabled
-		return func(string, SessionContext) ContextResult {
+		return func(Query, SessionContext) ContextResult {
 			return ContextResult{Text: text, HintsDisabled: disabled}
 		}, nil
 	}
@@ -219,7 +262,7 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 					hintsDisabled = true
 				}
 				disabled := hintsDisabled
-				return func(string, SessionContext) ContextResult {
+				return func(Query, SessionContext) ContextResult {
 					return ContextResult{Text: text, HintsDisabled: disabled}
 				}, nil
 			}
@@ -238,18 +281,21 @@ func BuildContextFn(cfg ContextFnConfig) (func(question string, s SessionContext
 		}
 	}
 
-	return func(question string, s SessionContext) ContextResult {
+	return func(q Query, s SessionContext) ContextResult {
 		// s (SessionContext) участвует в ранжировании начиная с M7b
 		// (стек-множители) — здесь он уже проброшен в retrieval.
+		// Fact-level retrieval идёт по РАСШИРЕННОМУ запросу (F5/B2):
+		// вопрос + уточнения метки + последние реплики интервьюера; hints —
+		// по чистому вопросу (готовые ответы размечены на вопросы).
 		budgeted := budgeter.BudgetWithMatrix(manifest.Profile, manifest.TechnicalMatrix,
-			retriever.RetrieveWith(question, RetrieveOptions{Session: s}))
+			retriever.RetrieveWith(expandQuery(q), RetrieveOptions{Session: s}))
 		out := ContextResult{
 			Text:          budgeted.Render(),
 			FactIDs:       factIDsOf(budgeted),
 			HintsDisabled: hintsDisabled,
 		}
 		if hints != nil {
-			results := hints.Retrieve(question, s)
+			results := hints.Retrieve(q.Question, s)
 			hintText := joinHintBodies(results)
 			if hintText != "" {
 				out.Text = AppendHint(out.Text, hintText)

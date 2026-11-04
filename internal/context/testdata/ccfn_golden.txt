@@ -97,7 +97,9 @@ consumes market events and reprices orders within 50 ms.
 Candidate profile:
 Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 
-No relevant facts found — rely on the candidate profile and Technical Matrix; do not invent projects.
+[2018–2024 · secondary]
+PostgreSQL (preferred), Oracle (legacy systems), MS SQL Server, ClickHouse.
+Strong preference for plain SQL over ORM abstractions.
 --
 ## Q13: Do you have experience with ClickHouse?
 Candidate profile:
@@ -152,6 +154,10 @@ Synthetic Candidate — backend engineer with Java, PHP and Go experience.
 [Java · 2018–2024 · primary]
 Designed an alarm processing platform on Java 21 and Spring Boot: PostgreSQL for
 state, Kafka for ingestion, Kubernetes for deployment.
+
+[PHP · 2018–2021 · primary]
+Maintained a PHP/Laravel billing service and then migrated it to Java and Spring
+Boot without downtime; the PHP version handled 200 rps at peak.
 --
 ## Q20: Do you have experience with RabbitMQ?
 Candidate profile:

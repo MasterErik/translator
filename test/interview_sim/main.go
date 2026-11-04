@@ -157,7 +157,7 @@ func main() {
 
 		// Промпт: единый контракт отдаёт готовый блок контекста
 		// (факты по бюджету + подсказка через AppendHint внутри BuildContextFn).
-		res := contextFn(q, candidatecontext.SessionContext{})
+		res := contextFn(candidatecontext.Query{Question: q}, candidatecontext.SessionContext{})
 		cc := res.Text
 		if res.Degraded {
 			fmt.Fprintln(os.Stderr, "WARN: candidate context в degraded-режиме — факты не подключены")

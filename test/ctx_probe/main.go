@@ -107,7 +107,7 @@ func main() {
 			continue
 		}
 
-		res := contextFn(q, candidatecontext.SessionContext{})
+		res := contextFn(candidatecontext.Query{Question: q}, candidatecontext.SessionContext{})
 
 		fmt.Printf("\n=== %q ===\n", q)
 		fmt.Printf("  FactIDs:       %s\n", idsString(res.FactIDs))

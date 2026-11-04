@@ -129,8 +129,9 @@ func TestRetrieveIDFDocumentFrequency(t *testing.T) {
 	}
 }
 
-func TestRetrieveNoTermFrequencyEffect(t *testing.T) {
-	// f1: "widget" 1 раз, f2: "widget" 3 раза → одинаковый content-вклад.
+func TestRetrieveTermFrequencySaturation(t *testing.T) {
+	// BM25F (F5): tf влияет на score, но с насыщением. f1: "widget" 1 раз,
+	// f2: "widget" 3 раза → f2 выше, но выигрыш меньше линейного (3x).
 	files := map[string]string{
 		"experience.md": factJSON(testFact{ID: "f1", Section: "experience"}) + "widget\n" +
 			factJSON(testFact{ID: "f2", Section: "experience"}) + "widget widget widget\n",
@@ -141,21 +142,28 @@ func TestRetrieveNoTermFrequencyEffect(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d results, want 2", len(got))
 	}
-	if got[0].Score != got[1].Score {
-		t.Errorf("TF не должен влиять на score: %v vs %v", got[0].Score, got[1].Score)
+	if got[0].FactID != "f2" || got[1].FactID != "f1" {
+		t.Errorf("tf 3 должен ранжироваться выше tf 1: got %q,%q", got[0].FactID, got[1].FactID)
 	}
-	if got[0].FactID != "f1" || got[1].FactID != "f2" {
-		t.Errorf("tie order: got %q,%q want f1,f2", got[0].FactID, got[1].FactID)
+	if got[0].Score <= got[1].Score {
+		t.Errorf("tf должен влиять на score: %v <= %v", got[0].Score, got[1].Score)
+	}
+	// Насыщение: отношение вкладов tf=3/tf=1 заметно меньше 3 (и > 1).
+	ratio := got[0].Score / got[1].Score
+	if ratio >= 3 || ratio <= 1 {
+		t.Errorf("насыщение BM25: отношение %v вне (1, 3)", ratio)
 	}
 }
 
 func TestRetrieveFieldWeights(t *testing.T) {
 	// keyword(5) > title(4) > alias(3) > content(2) при одинаковом idf (df=4, N=4 → idf=1).
+	// Все поля всех фактов одной длины (dl == avgdl) — BM25-нормализация длины
+	// нейтральна (tf-part = 1), порядок определяется чистыми весами полей.
 	files := map[string]string{
-		"experience.md": factJSON(testFact{ID: "fkw", Section: "experience", Keywords: []string{"term"}}) + "kw body\n" +
-			factJSON(testFact{ID: "ftitle", Section: "experience", Title: "term"}) + "title body\n" +
-			factJSON(testFact{ID: "falias", Section: "experience", Aliases: []string{"term"}}) + "alias body\n" +
-			factJSON(testFact{ID: "fcontent", Section: "experience"}) + "term content body\n",
+		"experience.md": factJSON(testFact{ID: "fkw", Section: "experience", Keywords: []string{"ka term"}, Title: "t1 t2", Aliases: []string{"a1 a2"}}) + "c1 c2 c3\n" +
+			factJSON(testFact{ID: "ftitle", Section: "experience", Keywords: []string{"ka", "kb"}, Title: "t1 term", Aliases: []string{"a1 a2"}}) + "c1 c2 c3\n" +
+			factJSON(testFact{ID: "falias", Section: "experience", Keywords: []string{"ka", "kb"}, Title: "t1 t2", Aliases: []string{"a1 term"}}) + "c1 c2 c3\n" +
+			factJSON(testFact{ID: "fcontent", Section: "experience", Keywords: []string{"ka", "kb"}, Title: "t1 t2", Aliases: []string{"a1 a2"}}) + "c1 term c3\n",
 	}
 	r := newRetriever(t, manifestOneSection, files, 0, 0)
 
@@ -371,18 +379,24 @@ func TestRetrievePhraseBonusFieldScope(t *testing.T) {
 	})
 	t.Run("cap", func(t *testing.T) {
 		// f1: 2 title-биграммы (raw bonus = 6); f2: 3 title-биграммы (raw = 9).
-		// С cap оба ограничиваются до 6 → score равны. Без cap f2 был бы выше.
+		// С cap phrase-компонента обоих фактов ограничивается до 6. BM25F (F5)
+		// делает tf-вклады title разными (f2: tf=2, f1: tf=1), поэтому cap
+		// проверяется по Breakdown.Phrase, а не по итоговому Score.
 		files := map[string]string{
 			"experience.md": factJSON(testFact{ID: "f1", Section: "experience", Title: "x y"}) + "zzz\n" +
 				factJSON(testFact{ID: "f2", Section: "experience", Title: "x y x y"}) + "zzz\n",
 		}
 		r := newRetriever(t, manifestOneSection, files, 0, 0)
-		got := r.Retrieve("x y x y")
+		got := r.RetrieveWith("x y x y", RetrieveOptions{Explain: true})
 		if len(got) != 2 {
 			t.Fatalf("got %d results, want 2", len(got))
 		}
-		if got[0].Score != got[1].Score {
-			t.Errorf("cap должен выравнивать bonus сверх 6: %v vs %v", got[0].Score, got[1].Score)
+		if got[0].Breakdown == nil || got[1].Breakdown == nil {
+			t.Fatalf("Breakdown не заполнен: %v, %v", got[0].Breakdown, got[1].Breakdown)
+		}
+		if got[0].Breakdown.Phrase != phraseBonusCap || got[1].Breakdown.Phrase != phraseBonusCap {
+			t.Errorf("cap должен ограничивать phrase-компоненту до %v: %v и %v",
+				phraseBonusCap, got[0].Breakdown.Phrase, got[1].Breakdown.Phrase)
 		}
 	})
 	t.Run("lexical_without_phrase", func(t *testing.T) {

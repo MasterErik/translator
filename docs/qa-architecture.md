@@ -182,6 +182,34 @@ AutoAnswer *bool // nil→true: вопрос сразу ставит задан�
 - `docs/candidate-context-architecture.md` — архитектура (индекс, scoring, отбор).
 - `docs/candidate-context-format.md` — формат базы фактов.
 
+### Scoring и ранжирование (F5)
+
+Fact-level retrieval (пакет `internal/context`) использует:
+
+- **BM25F** (`internal/context/score.go`): Okapi BM25 по четырём словарным
+  полям факта (keywords/title/aliases/content, веса 5/4/3/2) с весовой
+  суммацией полей; k1=1.2, b=0.75. tf/dl/avgdl считаются в
+  `NewRetriever` из уже токенизированных полей индекса (не хранятся в
+  index.json). Phrase-бонус (биграммы title/content), section-бонус,
+  стек-множитель (M7b) и пороги (content-only gate tau, relative
+  threshold) сохранены структурно.
+- **s-стемминг** (`Tokenizer.Stem`, TokenizerVersion "4"): только флексии
+  числа («ies»→«y», «es»/«s»→…), применяется финальным шагом `Process` к
+  словарным полям и запросу. Полный снегбол был отбракован eval-гейтом
+  (агрессивные склейки основ migrate/engineer/develop давали ложные
+  пересечения с must_not-фактами: v2-train R@1 0.500 → 0.452, Leak
+  0.116 → 0.186). **Стек-домен не стеммируется**: `Fact.Stack` и
+  query-токены для `stackdet.Detect` строятся через `ProcessNoStem`
+  (members семей — точные канонические формы).
+- **Query expansion (B2)**: retrieval идёт по расширенному запросу
+  `candidatecontext.Query{Question, Clarifications, Remarks}` — вопрос +
+  уточнения метки + последние 2 реплики интервьюера
+  (`expandRemarksCount`, `SpeechLog.RecentRemarks`). Это вопросы-ссылки
+  («What are you working on now?»), чьи термины лежат в контексте
+  диалога. Hints ретривятся по чистому `Question`.
+  `dispatcher.candidateContextFn` теперь принимает `Query`
+  (`expandedQuery` в `generateAnswers`).
+
 ## Ограничение контекста
 
 ```

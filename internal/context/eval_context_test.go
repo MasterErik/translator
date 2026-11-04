@@ -12,8 +12,8 @@ import (
 // stubContextFn возвращает заранее заданный ContextResult по вопросу; вопросы,
 // которых нет в карте, дают пустой результат.
 func stubContextFn(byQuestion map[string]ContextResult) ContextFn {
-	return func(question string, _ SessionContext) ContextResult {
-		return byQuestion[question]
+	return func(q Query, _ SessionContext) ContextResult {
+		return byQuestion[q.Question]
 	}
 }
 
@@ -147,7 +147,7 @@ func TestEvaluateContextFnSessionState(t *testing.T) {
 		{ID: "q1", Question: "stack", SessionTargetStack: []string{"java"}, RelevantFactIDs: []string{"r1"}},
 	}}
 	var got []string
-	fn := func(_ string, s SessionContext) ContextResult {
+	fn := func(_ Query, s SessionContext) ContextResult {
 		got = append([]string{}, s.TargetStack...)
 		return ContextResult{FactIDs: []string{"r1"}}
 	}

@@ -289,14 +289,16 @@ func TestProcess(t *testing.T) {
 		want []string
 	}{
 		{
+			// F5: финальный шаг Process — s-стемминг (kubernetes → kubernete,
+			// только флексии числа; postgresql/service не меняются).
 			"full pipeline en",
 			"K8s and PostgreSQL, cluster.",
-			[]string{"kubernetes", "postgresql", "cluster"},
+			[]string{"kubernete", "postgresql", "cluster"},
 		},
 		{
 			"full pipeline ru",
 			"Я работал с k8s и это pg",
-			[]string{"работал", "kubernetes", "postgresql"},
+			[]string{"работал", "kubernete", "postgresql"},
 		},
 		{
 			"empty string",
@@ -492,14 +494,14 @@ var tokenGolden = []struct {
 	// Go-контекст → golang (не стоп-слово). Предметные слова фразы
 	// сохраняются: "go microservices" даёт и golang, и microservices —
 	// иначе вопрос про microservices architecture переставал находить факт.
-	{"go microservices", "Go microservices", []string{"golang", "microservices"}},
+	{"go microservices", "Go microservices", []string{"golang", "microservice"}},
 	{"go language", "go language", []string{"golang"}},
 	{"go developer", "go developer", []string{"golang"}},
 	{"in go language", "In go language", []string{"golang"}},
-	{"with go microservices", "with go microservices", []string{"golang", "microservices"}},
+	{"with go microservices", "with go microservices", []string{"golang", "microservice"}},
 	{"golang", "Golang", []string{"golang"}},
 
-	// Дефис: целое и части (ASR даёт "high load").
+	// Дефис: целое и части (ASR даёт "high load"); каждая часть проходит s-стемминг (F5).
 	{"high load", "high load", []string{"high", "load"}},
 	{"high-load", "high-load", []string{"high-load", "high", "load"}},
 	{"service-level", "service-level agreement", []string{"service-level", "service", "level", "agreement"}},
@@ -514,7 +516,9 @@ var tokenGolden = []struct {
 
 	// Спецтермины НЕ затрагивают составные имена.
 	{"asp.net", "asp.net", []string{"asp.net"}},
-	{"node.js", "node.js", []string{"node.js"}},
+	// F5: s-стемминг — только флексии числа; "node.js" оканчивается на "s",
+	// сворачивается согласованно на обеих сторонах (индекс и запрос).
+	{"node.js", "node.js", []string{"node.j"}},
 	{"c++20", "c++20", []string{"c++20"}},
 
 	// Стоп-слова удаляются, в т.ч. "go" без go-контекста.

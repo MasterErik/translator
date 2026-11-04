@@ -138,7 +138,7 @@ func TestBuildContextFnLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := fn("any question", SessionContext{})
+	got := fn(Query{Question: "any question"}, SessionContext{})
 	if got.Text != content {
 		t.Errorf("legacy context: got %q, want %q", got.Text, content)
 	}
@@ -153,7 +153,7 @@ func TestBuildContextFnNoSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := fn("question", SessionContext{})
+	got := fn(Query{Question: "question"}, SessionContext{})
 	if got.Text != "" {
 		t.Errorf("Text: got %q, want empty", got.Text)
 	}
@@ -171,7 +171,7 @@ func TestBuildContextFnFactLevel(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := fn("pricing engine kafka", SessionContext{})
+	got := fn(Query{Question: "pricing engine kafka"}, SessionContext{})
 	if !strings.Contains(got.Text, "Erik Ivanov") {
 		t.Errorf("rendered context должен содержать профиль, got %q", got.Text)
 	}
@@ -194,7 +194,7 @@ func TestBuildContextFnDirPriorityOverLegacyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := fn("pricing engine kafka", SessionContext{})
+	got := fn(Query{Question: "pricing engine kafka"}, SessionContext{})
 	if strings.Contains(got.Text, "legacy candidate context") {
 		t.Errorf("legacy-файл не должен использоваться при рабочем Dir, got %q", got.Text)
 	}
@@ -223,7 +223,7 @@ func TestBuildContextFnFallbackRequiresOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := fn("q", SessionContext{}); got.Text != content {
+	if got := fn(Query{Question: "q"}, SessionContext{}); got.Text != content {
 		t.Errorf("fallback: got %q, want %q", got.Text, content)
 	}
 }
@@ -258,7 +258,7 @@ func TestBuildContextFnDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("degraded-режим не должен возвращать ошибку: %v", err)
 	}
-	got := fn("pricing engine kafka", SessionContext{})
+	got := fn(Query{Question: "pricing engine kafka"}, SessionContext{})
 	if !got.Degraded {
 		t.Error("Degraded должен быть выставлен")
 	}
@@ -300,7 +300,7 @@ func TestBuildContextFnHintsDisabledOnBrokenDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("сбой hints не должен быть фатальным: %v", err)
 	}
-	got := fn("pricing engine kafka", SessionContext{})
+	got := fn(Query{Question: "pricing engine kafka"}, SessionContext{})
 	if !got.HintsDisabled {
 		t.Error("HintsDisabled должен быть выставлен")
 	}
@@ -334,7 +334,7 @@ func TestBuildContextFnHintsMatchAndMiss(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := fn(tc.question, SessionContext{})
+			got := fn(Query{Question: tc.question}, SessionContext{})
 			if tc.wantEmpty {
 				if len(got.HintIDs) != 0 {
 					t.Errorf("HintIDs: got %v, want empty", got.HintIDs)
@@ -408,7 +408,7 @@ func TestBuildContextFnZeroBudgetsFallBackToDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := fn("pricing engine kafka", SessionContext{})
+	got := fn(Query{Question: "pricing engine kafka"}, SessionContext{})
 	if len(got.FactIDs) == 0 || got.FactIDs[0] != "pricing-engine" {
 		t.Errorf("FactIDs: got %v, want [pricing-engine]", got.FactIDs)
 	}
@@ -487,7 +487,7 @@ func TestBuildContextFnTruncatedMatrixWarns(t *testing.T) {
 		t.Errorf("ожидался WARN об обрезке technical_matrix, got %v", logs)
 	}
 
-	got := fn("привет, как дела", SessionContext{})
+	got := fn(Query{Question: "привет, как дела"}, SessionContext{})
 	if !strings.Contains(got.Text, "Technical matrix:") {
 		t.Errorf("матрица должна рендериться всегда, got %q", got.Text)
 	}
@@ -513,7 +513,7 @@ func TestBuildContextFnTruncatedMatrixWarns(t *testing.T) {
 	if containsLog(shortLogs, "technical_matrix") {
 		t.Errorf("короткая матрица не должна давать WARN: %v", shortLogs)
 	}
-	if out := shortFn("привет", SessionContext{}).Text; !strings.Contains(out, "golang | 2021-2024") {
+	if out := shortFn(Query{Question: "привет"}, SessionContext{}).Text; !strings.Contains(out, "golang | 2021-2024") {
 		t.Errorf("короткая матрица должна попасть в контекст целиком: %q", out)
 	}
 }
@@ -540,7 +540,7 @@ func TestBuildContextFnGolden(t *testing.T) {
 	var buf bytes.Buffer
 	for i, q := range questions {
 		fmt.Fprintf(&buf, "## Q%02d: %s\n", i+1, q)
-		buf.WriteString(fn(q, SessionContext{}).Text)
+		buf.WriteString(fn(Query{Question: q}, SessionContext{}).Text)
 		buf.WriteString("\n--\n")
 	}
 

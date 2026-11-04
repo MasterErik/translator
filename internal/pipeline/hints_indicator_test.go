@@ -163,7 +163,7 @@ const dummyLLMKey = "not-a-real-key-for-tests"
 
 // buildContextFnForTest повторяет вход BuildContextFn из New (те же поля и
 // nil-safe Logf), но без создания STT/LLM/overlay.
-func buildContextFnForTest(t *testing.T, cfg Config) func(string, candidatecontext.SessionContext) candidatecontext.ContextResult {
+func buildContextFnForTest(t *testing.T, cfg Config) func(candidatecontext.Query, candidatecontext.SessionContext) candidatecontext.ContextResult {
 	t.Helper()
 	fn, err := candidatecontext.BuildContextFn(candidatecontext.ContextFnConfig{
 		Dir:                 cfg.CandidateContext.Dir,
@@ -259,7 +259,7 @@ func TestDetectHintsDisabled(t *testing.T) {
 				t.Fatalf("причина = %q, ожидалась подстрока %q", got, tt.wantReason)
 			}
 			// Индикатор обязан согласовываться с флагом ContextResult.
-			if !fn("weaknesses", candidatecontext.SessionContext{}).HintsDisabled {
+			if !fn(candidatecontext.Query{Question: "weaknesses"}, candidatecontext.SessionContext{}).HintsDisabled {
 				t.Fatal("ContextResult.HintsDisabled должно быть true при выставленном индикаторе")
 			}
 		})

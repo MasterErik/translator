@@ -280,7 +280,7 @@ func TestBuildContextFnRendersLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildContextFn: %v", err)
 	}
-	out := fn("java alarm platform", SessionContext{}).Text
+	out := fn(Query{Question: "java alarm platform"}, SessionContext{}).Text
 	want := "[Java · 2018\u20132024 · primary]\nDesigned an alarm processing platform on Java 21."
 	if !strings.Contains(out, want) {
 		t.Errorf("контекст без метки факта: %q", out)
@@ -341,7 +341,7 @@ func TestBuildContextFnOutOfTargetNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildContextFn: %v", err)
 	}
-	out := fn("billing service", SessionContext{TargetStack: []string{"java"}}).Text
+	out := fn(Query{Question: "billing service"}, SessionContext{TargetStack: []string{"java"}}).Text
 	if !strings.Contains(out, OutOfTargetNotice+"\nMaintained the billing service in PHP and Laravel.") {
 		t.Errorf("PHP-факт без пометки out-of-target: %q", out)
 	}
@@ -358,7 +358,7 @@ func TestBuildContextFnEmptyRetrievalNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildContextFn: %v", err)
 	}
-	out := fn("quantum chromodynamics lattice", SessionContext{}).Text
+	out := fn(Query{Question: "quantum chromodynamics lattice"}, SessionContext{}).Text
 	if !strings.Contains(out, EmptyRetrievalNotice) {
 		t.Errorf("нет строки пустой выдачи: %q", out)
 	}
@@ -379,7 +379,7 @@ func TestRenderLabelsFileSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildContextFn: %v", err)
 	}
-	got := fn("billing service", SessionContext{TargetStack: []string{"java"}}).Text
+	got := fn(Query{Question: "billing service"}, SessionContext{TargetStack: []string{"java"}}).Text
 
 	path := filepath.Join("testdata", "render_labels_snapshot.txt")
 	if os.Getenv("RENDER_LABELS_UPDATE") == "1" {

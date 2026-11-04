@@ -173,7 +173,11 @@ func (fi *familyIndex) lintStacklessToken(tokens []string) string {
 // пустой stack, но в тексте есть токены семей-языков/платформ (whitelist D4),
 // и lint_ignore не выставлен. Токены БД/инструментов предупреждения не дают:
 // по D4 они в stack не входят.
-func (fi *familyIndex) validateFact(f Fact, lintIgnore string, titleTokens []string) ([]string, *LintWarning, error) {
+//
+// titleTokens и contentTokensRaw — UNSTEMMED токены title и тела факта
+// (F5): members семей — точные канонические формы, стеммированные варианты
+// (hibern, symfoni) дали бы ложные пропуски lint'а.
+func (fi *familyIndex) validateFact(f Fact, lintIgnore string, titleTokens, contentTokensRaw []string) ([]string, *LintWarning, error) {
 	if f.Weight != "" {
 		if _, ok := validWeights[f.Weight]; !ok {
 			return nil, nil, fmt.Errorf("факт %s: weight %q не входит в enum (%s|%s|%s)",
@@ -199,9 +203,9 @@ func (fi *familyIndex) validateFact(f Fact, lintIgnore string, titleTokens []str
 	}
 
 	if len(stack) == 0 && strings.TrimSpace(lintIgnore) == "" {
-		tokens := make([]string, 0, len(titleTokens)+len(f.ContentTokens))
+		tokens := make([]string, 0, len(titleTokens)+len(contentTokensRaw))
 		tokens = append(tokens, titleTokens...)
-		tokens = append(tokens, f.ContentTokens...)
+		tokens = append(tokens, contentTokensRaw...)
 		if hit := fi.lintStacklessToken(tokens); hit != "" {
 			return stack, &LintWarning{
 				FactID: f.ID,

@@ -70,15 +70,21 @@ func NewTokenizer(aliases map[string][]string) (*Tokenizer, error) {
 
 // TokenizerVersion — версия ПОВЕДЕНИЯ токенизатора: Normalize, Substitute
 // (фразовые подстановки), Tokenize (сплит по "/", "\\", дефисам, edge-trim),
-// RemoveStopWords, Canonicalize. Хранится в index.json и входит в проверку
-// freshness: индекс без версии или с другой версией считается stale и
-// пересобирается (см. CheckIndexFresh).
+// RemoveStopWords, Canonicalize и Stem (F5): лёгкий s-stemmer (флексии числа).
+// Хранится в index.json и входит в проверку freshness: индекс без версии или
+// с другой версией считается stale и пересобирается (см. CheckIndexFresh).
 //
 // Любое изменение ожиданий golden-теста (tokenize_test.go) — включая правку
 // словаря стоп-слов или таблиц подстановок — ТРЕБУЕТ bump этой константы,
 // иначе старые индексы останутся «свежими» с токенами, посчитанными по
 // старой семантике.
-const TokenizerVersion = "3"
+//
+// v4 (F5): добавлен s-stemmинг финальным шагом Process. Полный снегбол был
+// отбракован eval'ом (см. Stem). Стек-домен стеммингом не затрагивается:
+// Fact.Stack строится через ProcessNoStem — сопоставление стека с
+// Family.Name/Members (валидация M6b, stackdet) остаётся в точных
+// канонических токенах.
+const TokenizerVersion = "4"
 
 // substituteTargets — точные (не фразовые) подстановки спецтерминов.
 // Ключ сравнивается с полем целиком после Normalize, поэтому "asp.net",
@@ -516,14 +522,68 @@ func (t *Tokenizer) Canonicalize(tokens []string) []string {
 }
 
 // Process — полный pipeline:
-// Normalize → Substitute → Tokenize → RemoveStopWords → Canonicalize.
+// Normalize → Substitute → Tokenize → RemoveStopWords → Canonicalize → Stem.
 //
 // Порядок обязателен: Substitute работает на нормализованной сырой строке
-// (токенов ещё нет), поэтому подстановки видят границы слов до edge-trim.
+// (токенов ещё нет), поэтому подстановки видят границы слов до edge-trim;
+// стемминг идёт последним (F5) — канонические aliases маппятся до стема.
 func (t *Tokenizer) Process(s string) []string {
+	return t.Stem(t.ProcessNoStem(s))
+}
+
+// ProcessNoStem — pipeline Process без финального стемминга. Используется для
+// стек-домена (Fact.Stack, title-токены lint-проверки, query-токены для
+// stackdet.Detect): сопоставление стека с Family.Name/Members требует точных
+// канонических форм (F5: обычные family-члены при стемминге бы разъехались).
+func (t *Tokenizer) ProcessNoStem(s string) []string {
 	normalized := t.Normalize(s)
 	substituted := t.Substitute(normalized)
 	return t.Canonicalize(t.RemoveStopWords(t.Tokenize(substituted)))
+}
+
+// Stem — лёгкий s-stemmer (флексии числа, подход Harman/Martin, F5).
+//
+// Полный портовый стеммер (snowball english) на этом корпусе НЕ проходит
+// гейт: он агрессивно схлопывает основы (migrate/migration, engineer/
+// engineering, develop/development), и во «взрослых» вопросах интервью
+// появляется ложное пересечение с must_not-фактами (v2-train: R@1 0.500 →
+// 0.452, Leak 0.116 → 0.186). Оставляем только флексии числа:
+//
+//	"ies" → "y"   (queries→query, technologies→technology)
+//	"sses"→ "ss"  (classes→class)
+//	"es"  → ""    (services→service, databases→database)
+//	"s"   → ""    (queues→queue, transactions→transaction)
+//
+// с защитой коротких токенов (<4) и групп "ss"/"us"/"is". Токены без флексий
+// (kubernetes, docker, redis) не меняются — стек-домен не задет.
+func (t *Tokenizer) Stem(tokens []string) []string {
+	out := make([]string, len(tokens))
+	for i, tok := range tokens {
+		out[i] = stemPlural(tok)
+	}
+	return out
+}
+
+// stemPlural сворачивает флексию числа одного токена (см. Stem).
+func stemPlural(tok string) string {
+	if len(tok) < 4 {
+		return tok
+	}
+	switch {
+	case strings.HasSuffix(tok, "ies") && len(tok) >= 5:
+		return tok[:len(tok)-3] + "y"
+	case strings.HasSuffix(tok, "sses"):
+		return tok[:len(tok)-2]
+	case strings.HasSuffix(tok, "es"):
+		// "es" после s/x/z/ch/sh сворачивается целиком (boxes→box); иначе
+		// это обычное множественное с немой e (services→service).
+		return tok[:len(tok)-1]
+	case strings.HasSuffix(tok, "s") && !strings.HasSuffix(tok, "ss") &&
+		!strings.HasSuffix(tok, "us") && !strings.HasSuffix(tok, "is"):
+		return tok[:len(tok)-1]
+	default:
+		return tok
+	}
 }
 
 // defaultStopWords возвращает множество стоп-слов на английском и русском:

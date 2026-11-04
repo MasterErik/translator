@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	candidatecontext "github.com/mastererik/translator/internal/context"
 	"github.com/mastererik/translator/internal/translator"
 	"github.com/mastererik/translator/internal/ui"
 )
@@ -43,8 +44,9 @@ type Config struct {
 	CandidateContext string
 
 	// CandidateContextFn — функция точечного retrieval candidate context по
-	// вопросу (fact-level). Если задана, используется вместо CandidateContext.
-	CandidateContextFn func(question string) string
+	// запросу (fact-level, F5/B2: Query = вопрос + уточнения + реплики).
+	// Если задана, используется вместо CandidateContext.
+	CandidateContextFn func(candidatecontext.Query) string
 
 	// RecentTurns — максимум turns в conversation context (default 6).
 	RecentTurns int
@@ -103,9 +105,11 @@ type Dispatcher struct {
 	cancelCh chan struct{}
 
 	// История текущего интервью и база CV.
-	history            *translator.ConversationHistory
-	candidateContext   string
-	candidateContextFn func(string) string
+	history          *translator.ConversationHistory
+	candidateContext string
+	// candidateContextFn — fact-level retrieval по Query (F5/B2): вопрос +
+	// уточнения метки + последние реплики интервьюера (см. generateAnswers).
+	candidateContextFn func(candidatecontext.Query) string
 
 	// speechLog — кольцевой буфер финальных реплик интервьюера (F1, plan
 	// fix-plan: SpeechLog). Питается из route (каждый EndOfTurn) и:
@@ -1014,6 +1018,25 @@ func (d *Dispatcher) Cancel() {
 	}
 }
 
+// expandRemarksCount — сколько последних реплик интервьюера идёт в расширение
+// запроса retrieval (F5/B2, решение 2026-11-02: вопрос + уточнения + последние
+// 2 реплики). Больше — шум в lexical retrieval: реплики соседних тем начинают
+// перетягивать факты.
+const expandRemarksCount = 2
+
+// expandedQuery собирает Query для fact-level retrieval (F5/B2): сам вопрос,
+// уточнения текущей метки и последние реплики интервьюера (expandRemarksCount).
+// Реплики нужны вопросам-ссылкам («What are you working on now?») — их термины
+// лежат в контексте диалога, не в самом вопросе. d.timeline/speechLog —
+// потокобезопасны; вызывается из answerWorker (generateAnswers).
+func (d *Dispatcher) expandedQuery(question string, idx int) candidatecontext.Query {
+	return candidatecontext.Query{
+		Question:       question,
+		Clarifications: d.timeline.Clarifications(idx),
+		Remarks:        d.speechLog.RecentRemarks(expandRemarksCount),
+	}
+}
+
 // generateAnswers собирает AnswerRequest (candidate context + conversation
 // context + команда) и выполняет синхронную генерацию для метки idx.
 // Активная генерация может быть отменена через Cancel() (Esc).
@@ -1033,7 +1056,7 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 
 	cc := d.candidateContext
 	if d.candidateContextFn != nil {
-		cc = d.candidateContextFn(question)
+		cc = d.candidateContextFn(d.expandedQuery(question, idx))
 	}
 
 	// Разговорный контекст (F1): история Q/A + блок реплик интервьюера

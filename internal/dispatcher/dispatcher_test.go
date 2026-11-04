@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mastererik/translator/internal/common"
+	candidatecontext "github.com/mastererik/translator/internal/context"
 	"github.com/mastererik/translator/internal/translator"
 	"github.com/mastererik/translator/internal/ui"
 )
@@ -1203,8 +1204,8 @@ func TestDispatcherCandidateContextFn(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AnswerQueueSize = -1
 	cfg.CandidateContext = "legacy should be ignored"
-	cfg.CandidateContextFn = func(question string) string {
-		return "FN:" + question
+	cfg.CandidateContextFn = func(q candidatecontext.Query) string {
+		return "FN:" + q.Question
 	}
 	d := New(overlay, engine, logger, cfg)
 

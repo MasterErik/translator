@@ -98,6 +98,28 @@ func (s *SpeechLog) Add(text string, ts time.Time) {
 	}
 }
 
+// RecentRemarks возвращает последние n реплик интервьюера В ХРОНОЛОГИЧЕСКОМ
+// порядке (старые сверху), независимо от consumed-флага: expansion запроса
+// (F5/B2) использует их как термины контекста диалога — потреблённая в
+// уточнении реплика всё ещё описывает, о чём шла речь. n<=0 — размер кольца.
+// Копия; порядок реплик не меняется.
+func (s *SpeechLog) RecentRemarks(n int) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.remarks) == 0 {
+		return nil
+	}
+	if n <= 0 || n > len(s.remarks) {
+		n = len(s.remarks)
+	}
+	out := make([]string, 0, n)
+	for i := len(s.remarks) - n; i < len(s.remarks); i++ {
+		out = append(out, s.remarks[i].remark.Text)
+	}
+	return out
+}
+
 // RecentContext рендерит блок реплик интервьюера для user-промпта.
 //
 // Формат:

@@ -108,6 +108,7 @@ second body
 	if f1.Title != "Pricing Engine & Market Intelligence" {
 		t.Errorf("Title: got %q", f1.Title)
 	}
+	// s-стемминг (F5): только флексии числа — pricing/engine/kafka не меняются.
 	if !reflect.DeepEqual(f1.Keywords, []string{"pricing", "kafka"}) {
 		t.Errorf("Keywords: got %v", f1.Keywords)
 	}
@@ -199,16 +200,16 @@ we run k8s for kubernetes
 		t.Fatalf("BuildIndex: %v", err)
 	}
 	f := idx.Facts[0]
-	// alias "k8s" → canonical "kubernetes" in keywords.
-	if !reflect.DeepEqual(f.Keywords, []string{"kubernetes", "docker"}) {
+	// s-стемминг (F5): kubernetes → kubernete на словарных полях скоринга.
+	if !reflect.DeepEqual(f.Keywords, []string{"kubernete", "docker"}) {
 		t.Errorf("Keywords: got %v", f.Keywords)
 	}
-	// alias "k8s cluster" → ["kubernetes", "cluster"].
-	if !reflect.DeepEqual(f.Aliases, []string{"kubernetes", "cluster"}) {
+	// alias "k8s cluster" → ["kubernete", "cluster"].
+	if !reflect.DeepEqual(f.Aliases, []string{"kubernete", "cluster"}) {
 		t.Errorf("Aliases: got %v", f.Aliases)
 	}
-	// body: "we"(stopword) "for"(stopword) removed; k8s → kubernetes.
-	wantTokens := []string{"run", "kubernetes", "kubernetes"}
+	// body: "we"(stopword) "for"(stopword) removed; k8s → kubernete.
+	wantTokens := []string{"run", "kubernete", "kubernete"}
 	if !reflect.DeepEqual(f.ContentTokens, wantTokens) {
 		t.Errorf("ContentTokens: got %v, want %v", f.ContentTokens, wantTokens)
 	}
