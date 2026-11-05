@@ -97,6 +97,16 @@ type Config struct {
 	LLMModel   string
 	MaxTokens  int
 
+	// LLMReasoningEffort — effort reasoning-модели (F7): low|medium|high,
+	// пусто — параметр не отправляется.
+	LLMReasoningEffort string
+	// LLMFallbackModels — fallback-цепочка моделей (F7): при исчерпании
+	// ретраев основной модели запрос повторяется на следующей.
+	LLMFallbackModels []string
+	// LLMJSONMode — режим JSON-вывода (F7): prompt (default) |
+	// response_format | off.
+	LLMJSONMode string
+
 	// SystemPromptFile — путь к шаблону system-промпта (правила ответа).
 	// Пусто → встроенный дефолт; нечитаемый файл валит старт (fail-fast).
 	SystemPromptFile string
@@ -120,7 +130,7 @@ type Config struct {
 
 	// Каналы и таймауты (избавляемся от магических чисел)
 	TextStreamBuffer int           // default: 64
-	AnswerTimeout    time.Duration // default: 10s
+	AnswerTimeout    time.Duration // default: 12s (common.DefaultAnswerTimeout)
 
 	// AutoAnswer — авто-генерация ответа при обнаружении вопроса (nil → true).
 	// false — вопросы только создают метки в таймлайне, ответ — по F1.
@@ -151,7 +161,7 @@ func New(cfg Config) (*Pipeline, error) {
 		cfg.TextStreamBuffer = 64
 	}
 	if cfg.AnswerTimeout <= 0 {
-		cfg.AnswerTimeout = 10 * time.Second
+		cfg.AnswerTimeout = common.DefaultAnswerTimeout
 	}
 	if cfg.RemarksCount < 0 || cfg.RemarksTokens < 0 {
 		return nil, fmt.Errorf("pipeline: количество реплик интервьюера не может быть отрицательным (remarks_count=%d, remarks_tokens=%d)",
@@ -205,6 +215,20 @@ func New(cfg Config) (*Pipeline, error) {
 
 	llmProv := translator.NewChatProvider(llmBaseURL, llmAPIKey, llmModel)
 	llmProv.SetMaxTokens(cfg.MaxTokens)
+
+	// F7: reasoning_effort, JSON-режим и fallback-цепочка — с валидацией
+	// (fail-fast на старте, иначе опечатка в конфиге живёт до первого 400).
+	if err := translator.ValidateReasoningEffort(cfg.LLMReasoningEffort); err != nil {
+		newErr = fmt.Errorf("pipeline: %w", err)
+		return nil, newErr
+	}
+	if err := translator.ValidateJSONMode(cfg.LLMJSONMode); err != nil {
+		newErr = fmt.Errorf("pipeline: %w", err)
+		return nil, newErr
+	}
+	llmProv.SetReasoningEffort(cfg.LLMReasoningEffort)
+	llmProv.SetJSONMode(cfg.LLMJSONMode)
+	llmProv.SetFallbackModels(cfg.LLMFallbackModels)
 
 	// Шаблон system-промпта: файл из SYSTEM_PROMPT_FILE, иначе встроенный
 	// дефолт. Ошибка чтения/парсинга валит старт — иначе правка файла

@@ -22,6 +22,10 @@ type OverlayUI interface {
 // AnswerGenerator — генератор подсказок (LLM).
 type AnswerGenerator interface {
 	GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error)
+	// GenerateAnswersStream — потоковая генерация (F7/C6): токены сырого
+	// ответа по одному; для провайдеров без стрима — готовые подсказки
+	// одним элементом (fallback в engine.GenerateAnswersStream).
+	GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error)
 }
 
 // SessionLogger — логирование событий диспетчера.
@@ -75,7 +79,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		AnswerTimeout:    10 * time.Second,
+		AnswerTimeout:    12 * time.Second,
 		AnswerQueueSize:  16,
 		RecentTurns:      6,
 		MaxContextTokens: 4000,
@@ -165,7 +169,7 @@ type Dispatcher struct {
 
 func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg Config) *Dispatcher {
 	if cfg.AnswerTimeout <= 0 {
-		cfg.AnswerTimeout = 10 * time.Second
+		cfg.AnswerTimeout = 12 * time.Second
 	}
 	if cfg.AnswerQueueSize <= 0 {
 		cfg.AnswerQueueSize = 16
@@ -1037,6 +1041,52 @@ func (d *Dispatcher) expandedQuery(question string, idx int) candidatecontext.Qu
 	}
 }
 
+// handleAnswerError — общая обработка сбоя генерации (F7): отмена через
+// Esc/таймаут — тихо (QIdle + ResetStep), прочие сбои — QFailed + сообщение
+// в overlay. Вызывается только из generateAnswers.
+func (d *Dispatcher) handleAnswerError(ansCtx context.Context, idx int, question string, err error) {
+	// Отменено через Esc / истёк таймаут — тихо, без ошибки в UI.
+	if ansCtx.Err() != nil {
+		if d.sessLog != nil {
+			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация отменена (Esc): question=%v", question))
+		}
+		d.timeline.SetState(idx, QIdle)
+		d.timeline.ResetStep(idx)
+		return
+	}
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация подсказок не удалась: question=%v, error=%v", question, err))
+	}
+	d.timeline.SetState(idx, QFailed)
+	if d.overlay != nil {
+		d.overlay.AddMessage(ui.UIMessage{
+			Type:      ui.Error,
+			Text:      fmt.Sprintf("%v", err),
+			Timestamp: time.Now(),
+		})
+	}
+}
+
+// pushPartialAnswer показывает частичный ответ растущего стрима в zone 4
+// (F7/C6). Частота ограничена вызывающим кодом (streamUIInterval);nil-safe.
+// Только для активной метки: устаревший частичный текст не перезаписывает
+// шапку другой метки.
+func (d *Dispatcher) pushPartialAnswer(idx int, question, raw string) {
+	if d.overlay == nil || !d.isActive(idx) {
+		return
+	}
+	partial := translator.PartialAnswerDisplay(raw)
+	if partial == "" {
+		return
+	}
+	d.overlay.AddMessage(ui.UIMessage{
+		Type:      ui.AnswerCandidates,
+		Text:      question,
+		Answers:   []ui.Answer{{Source: partial + "…"}},
+		Timestamp: time.Now(),
+	})
+}
+
 // generateAnswers собирает AnswerRequest (candidate context + conversation
 // context + команда) и выполняет синхронную генерацию для метки idx.
 // Активная генерация может быть отменена через Cancel() (Esc).
@@ -1088,31 +1138,43 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		d.activeMu.Unlock()
 	}()
 
-	answers, err := d.engine.GenerateAnswers(ansCtx, req)
+	// Стриминг (F7/C6): токены копятся в буфер, частичный ответ показывается
+	// в zone 4 с троттлингом streamUIInterval. Провайдеры без
+	// StreamingAnswersProvider (fallback в engine) отдают готовые подсказки
+	// одним элементом — буфер совпадает с полным текстом, финальный парсинг
+	// (ParseAnswers) одинаков для обоих путей.
+	tokenCh, err := d.engine.GenerateAnswersStream(ansCtx, req)
 	if err != nil {
-		// Отменено через Esc / истёк таймаут — тихо, без ошибки в UI.
-		if ansCtx.Err() != nil {
-			if d.sessLog != nil {
-				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация отменена (Esc): question=%v", question))
-			}
-			d.timeline.SetState(idx, QIdle)
-			d.timeline.ResetStep(idx)
-			return
-		}
-		if d.sessLog != nil {
-			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: генерация подсказок не удалась: question=%v, error=%v", question, err))
-		}
-		d.timeline.SetState(idx, QFailed)
-		if d.overlay != nil {
-			d.overlay.AddMessage(ui.UIMessage{
-				Type:      ui.Error,
-				Text:      fmt.Sprintf("%v", err),
-				Timestamp: time.Now(),
-			})
-		}
+		d.handleAnswerError(ansCtx, idx, question, err)
 		return
 	}
 
+	var buf strings.Builder
+	streamErr := ""
+	lastPush := time.Now()
+	for tok := range tokenCh {
+		if strings.HasPrefix(tok, "[ERROR:") {
+			// Маркер ошибки стрима (openai.go): после него полезных токенов
+			// не будет; частичный текст до ошибки не показываем как ответ.
+			streamErr = strings.TrimSuffix(strings.TrimPrefix(tok, "[ERROR:"), "]")
+			continue
+		}
+		buf.WriteString(tok)
+		if now := time.Now(); now.Sub(lastPush) >= translator.StreamUIInterval {
+			lastPush = now
+			d.pushPartialAnswer(idx, question, buf.String())
+		}
+	}
+
+	if streamErr != "" {
+		err = fmt.Errorf("stream: %s", streamErr)
+		d.handleAnswerError(ansCtx, idx, question, err)
+		return
+	}
+
+	// Финальный парсинг накопленного текста: JSON-first (F7), fallback —
+	// строковый формат «SRC: … | TGT: …».
+	answers := translator.ParseAnswers(buf.String(), d.srcLang, d.tgtLang)
 	if len(answers) == 0 {
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: подсказки пусты: question=%v", question))

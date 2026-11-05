@@ -702,18 +702,19 @@ func TestPipelineConcurrentStreams(t *testing.T) {
 		t.Errorf("Total шапки = %d, ожидался 3", last.Answers[0].Total)
 	}
 
-	// Verify LLM call log — each question should trigger GenerateAnswersStream.
+	// Verify LLM call log - each question should trigger GenerateAnswersStream.
 	llm.mu.Lock()
 	genCalls := 0
 	for _, c := range llm.callLog {
-		if strings.HasPrefix(c, "GenAnswers:") {
+		// F7/C6: dispatcher вызывает только стриминговый путь.
+		if strings.HasPrefix(c, "GenAnswersStream:") {
 			genCalls++
 		}
 	}
 	llm.mu.Unlock()
 
 	if genCalls != 3 {
-		t.Errorf("Expected 3 GenerateAnswers calls, got %d", genCalls)
+		t.Errorf("Expected 3 GenerateAnswersStream calls, got %d", genCalls)
 	}
 }
 

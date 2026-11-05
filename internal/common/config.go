@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,28 @@ type Config struct {
 	LLMBaseURL string `yaml:"LLM_BASE_URL"`
 	LLMModel   string `yaml:"LLM_MODEL"`
 	MaxTokens  int    `yaml:"LLM_MAX_TOKENS"`
+
+	// LLMReasoningEffort — effort reasoning-модели (Groq gpt-oss/qwen):
+	// "low" | "medium" | "high"; пусто — параметр не отправляется.
+	// Рекомендация плана F7: LLM_REASONING_EFFORT=low для gpt-oss-20b.
+	LLMReasoningEffort string `yaml:"LLM_REASONING_EFFORT"`
+
+	// LLMFallbackModels — fallback-цепочка моделей: при исчерпании ретраев
+	// основной модели (429/сбой) запрос повторяется на следующей. Пусто —
+	// только основная модель.
+	LLMFallbackModels []string `yaml:"LLM_FALLBACK_MODELS"`
+
+	// AnswerTimeout — бюджет одной генерации ответа ("12s", "1m30s").
+	// Пусто → дефолт 12s; "0" → без лимита (не рекомендуется).
+	AnswerTimeout string `yaml:"LLM_ANSWER_TIMEOUT"`
+
+	// LLMJSONMode — режим JSON-вывода ответов:
+	//   "prompt" (default)      — JSON-инструкция в system-промпте, парсинг
+	//                             JSON-first со строковым fallback;
+	//   "response_format"       — то же + response_format json_object
+	//                             (для non-reasoning моделей);
+	//   "off"                   — старый строковый формат «EN: … | RU: …».
+	LLMJSONMode string `yaml:"LLM_JSON_MODE"`
 
 	// Languages (ISO 639-1).
 	SourceLang string `yaml:"SOURCE_LANG"`
@@ -172,6 +195,31 @@ func setDefault[T comparable](v *T, def T) {
 	}
 }
 
+// DefaultAnswerTimeout — дефолтный бюджет одной генерации ответа (F7):
+// полный ответ reasoning-модели с reasoning_effort=low укладывается в 12s.
+const DefaultAnswerTimeout = 12 * time.Second
+
+// ParseAnswerTimeout разбирает строковый LLM_ANSWER_TIMEOUT:
+// "" → DefaultAnswerTimeout, "0" → 0 (без лимита), иначе time.ParseDuration
+// ("12s", "1m30s"). Невалидная строка — ошибка (fail-fast на старте).
+func (c *Config) ParseAnswerTimeout() (time.Duration, error) {
+	v := strings.TrimSpace(c.AnswerTimeout)
+	if v == "" {
+		return DefaultAnswerTimeout, nil
+	}
+	if v == "0" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("LLM_ANSWER_TIMEOUT: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("LLM_ANSWER_TIMEOUT: отрицательная длительность %q", v)
+	}
+	return d, nil
+}
+
 func (c *Config) applyDefaults() {
 	setDefault(&c.SourceLang, "en")
 	setDefault(&c.TargetLang, "ru")
@@ -195,6 +243,10 @@ func (c *Config) applyDefaults() {
 	// Interview.TargetStack по умолчанию пуст — штрафов нет (D2).
 	setDefault(&c.Hints.MinScore, 0.0)
 	setDefault(&c.Hints.TopK, 1)
+	// LLM (F7): JSON-режим по умолчанию "prompt"; reasoning_effort и
+	// fallback-цепочка по умолчанию пусты; AnswerTimeout парсится отдельно
+	// (AnswerTimeoutDuration), строковый AnswerTimeout остаётся как введён.
+	setDefault(&c.LLMJSONMode, "prompt")
 }
 
 // loadFromEnv loads .env via godotenv, then reads environment variables
@@ -300,6 +352,12 @@ func (c *Config) loadFromEnv() error {
 	// отбрасываются, значения приводятся к нижнему регистру.
 	if v := os.Getenv("INTERVIEW_TARGET_STACK"); v != "" {
 		c.Interview.TargetStack = splitList(v)
+	}
+
+	// LLM_FALLBACK_MODELS — env-override вручную (reflection не поддерживает
+	// []string). Через запятую: "qwen/qwen3.6-27b,glm-4.7-flash".
+	if v := os.Getenv("LLM_FALLBACK_MODELS"); v != "" {
+		c.LLMFallbackModels = splitList(v)
 	}
 
 	// Вложенная секция hints — env-override вручную (аналогично candidate_context).

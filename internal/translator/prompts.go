@@ -172,7 +172,7 @@ func BuildAnswerPrompt(req AnswerRequest) string {
 		sb.WriteString(clarifications)
 	}
 
-	sb.WriteString("\n\nGenerate 1 answer from the candidate's perspective (first person, ready to read aloud):")
+	sb.WriteString("\n\nGenerate up to 3 candidate answers from the candidate's perspective (best first, first person, ready to read aloud):")
 
 	if instruction := commandInstruction(req.Command); instruction != "" {
 		sb.WriteString("\n")

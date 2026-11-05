@@ -390,8 +390,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 			name:      "format rules always present regardless of cv",
 			cvContext: "Some arbitrary resume text without any format rules",
 			check: func(t *testing.T, prompt string) {
-				if !strings.Contains(prompt, "EN:") || !strings.Contains(prompt, "| RU:") {
-					t.Error("prompt must always contain EN:/| RU: format rules")
+				if !strings.Contains(prompt, `"source"`) || !strings.Contains(prompt, "translated into RU") {
+					t.Error("prompt must always contain JSON format rules (source/translated into RU)")
 				}
 			},
 		},
@@ -428,8 +428,8 @@ func TestBuildSystemPromptCandidateContext(t *testing.T) {
 
 	// Параметризованные языки доходят до правил формата.
 	deGot := buildSystemPromptWith(tpl, candidate, "en", "de")
-	if !strings.Contains(deGot, "| DE:") || strings.Contains(deGot, "RU:") {
-		t.Errorf("buildSystemPrompt(_, en, de) должен содержать | DE: и не содержать метку RU:, got:\n%s", deGot)
+	if !strings.Contains(deGot, "translated into DE") || strings.Contains(deGot, "into RU") {
+		t.Errorf("buildSystemPrompt(_, en, de) должен содержать translated into DE и не содержать метку RU, got:\n%s", deGot)
 	}
 }
 

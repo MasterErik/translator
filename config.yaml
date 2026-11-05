@@ -9,6 +9,32 @@ LLM_BASE_URL: "https://api.groq.com/openai/v1"
 # LLM model — supports any model on the configured base_url.
 LLM_MODEL: "openai/gpt-oss-20b"
 
+# Reasoning-effort reasoning-модели (gpt-oss/qwen): low | medium | high.
+# Пусто — параметр не отправляется. Для gpt-oss-20b на Groq рекомендуется low
+# (F7): быстрее полный ответ при том же качестве коротких подсказок.
+LLM_REASONING_EFFORT: "low"
+
+# Fallback-цепочка моделей: при исчерпании ретраев основной модели (429/сбой)
+# запрос повторяется на следующей из списка, затем на остальных. Пусто — только
+# основная модель. Полные имена моделей (env-вариант LLM_FALLBACK_MODELS —
+# строка через запятую):
+# LLM_FALLBACK_MODELS:
+#   - "qwen/qwen3.6-27b"
+#   - "glm-4.7-flash"
+
+# Бюджет одной генерации ответа ("12s", "1m30s"). Пусто — дефолт 12s;
+# "0" — без лимита (не рекомендуется).
+# LLM_ANSWER_TIMEOUT: "12s"
+
+# Режим JSON-вывода ответов (F7):
+#   prompt           — JSON-инструкция в system-промпте + парсинг JSON-first
+#                      со строковым fallback (дефолт; работает и для
+#                      reasoning-моделей);
+#   response_format  — то же + response_format json_object (жёсткий режим
+#                      для non-reasoning моделей);
+#   off              — старый строковый формат «EN: … | RU: …».
+# LLM_JSON_MODE: "prompt"
+
 # Target language for Gladia translation (ISO 639-1)
 TARGET_LANG: "ru"
 # Source language for Gladia (ISO 639-1)

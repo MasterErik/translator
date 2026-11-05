@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,22 @@ func (m *mockEngine) GenerateAnswers(ctx context.Context, req translator.AnswerR
 		}
 	}
 	return answers, err
+}
+
+// GenerateAnswersStream (F7/C6): мок отдаёт сырой ответ одним токеном —
+// формат совпадает с небуферизованным путём (финальный ParseAnswers одинаков).
+func (m *mockEngine) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
+	answers, err := m.GenerateAnswers(ctx, req)
+	out := make(chan string, 1)
+	if err != nil {
+		close(out)
+		return out, err
+	}
+	// Склеиваем в сырой текст «SRC: … | TGT: …» — как его вернул бы LLM.
+	raw := strings.Join(answers, "\n")
+	out <- raw
+	close(out)
+	return out, nil
 }
 
 func (m *mockEngine) Calls() []string {
@@ -466,30 +483,47 @@ func TestDispatcherParsesAnswersForConfiguredLangs(t *testing.T) {
 	}
 }
 
-// TestDispatcherParseAnswersKeepsUnparsableText — строка без целевого
-// разделителя сохраняется целиком как Source, текст не теряется.
+// TestDispatcherParseAnswersKeepsUnparsableText — F7: движок отдаёт сырой
+// текст LLM (одна строка мока = сырой ответ). Текст, не ложащийся в формат
+// подсказки «SRC: … | TGT: …» для пары языков, сохраняется целиком как
+// Source (fallback строкового парсера), текст не теряется.
 func TestDispatcherParseAnswersKeepsUnparsableText(t *testing.T) {
-	overlay := &mockOverlay{}
-	engine := &mockEngine{
-		answers: []string{"plain answer without separator", "EN: kept | RU: кэш"},
+	tests := []struct {
+		name    string
+		raw     string
+		wantSrc string
+	}{
+		{
+			name:    "строка без разделителя сохраняется целиком",
+			raw:     "plain answer without separator",
+			wantSrc: "plain answer without separator",
+		},
+		{
+			name:    "строка с чужим тегом (RU при de) сохраняется целиком",
+			raw:     "EN: kept | RU: кэш",
+			wantSrc: "EN: kept | RU: кэш",
+		},
 	}
-	cfg := DefaultConfig()
-	cfg.AnswerQueueSize = -1
-	cfg.SourceLang = "en"
-	cfg.TargetLang = "de" // строки с RU не парсятся для de
-	d := New(overlay, engine, &mockLogger{}, cfg)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overlay := &mockOverlay{}
+			engine := &mockEngine{answers: []string{tt.raw}}
+			cfg := DefaultConfig()
+			cfg.AnswerQueueSize = -1
+			cfg.SourceLang = "en"
+			cfg.TargetLang = "de" // строки с RU не парсятся для de
+			d := New(overlay, engine, &mockLogger{}, cfg)
 
-	d.GenerateAnswers("Q?")
+			d.GenerateAnswers("Q?")
 
-	msgs := overlay.GetMessages()
-	if len(msgs) != 1 || len(msgs[0].Answers) != 2 {
-		t.Fatalf("ожидалось 1 сообщение с 2 подсказками, получено %+v", msgs)
-	}
-	if got := msgs[0].Answers[0]; got.Source != "plain answer without separator" || got.Target != "" {
-		t.Errorf("непарсящаяся строка: got %+v, want Source=raw Target=\"\"", got)
-	}
-	if got := msgs[0].Answers[1]; got.Source != "EN: kept | RU: кэш" || got.Target != "" {
-		t.Errorf("строка с чужим тегом: got %+v, want Source=raw Target=\"\"", got)
+			msgs := overlay.GetMessages()
+			if len(msgs) != 1 || len(msgs[0].Answers) != 1 {
+				t.Fatalf("ожидалось 1 сообщение с 1 подсказкой, получено %+v", msgs)
+			}
+			if got := msgs[0].Answers[0]; got.Source != tt.wantSrc || got.Target != "" {
+				t.Errorf("got %+v, want Source=%q Target=\"\"", got, tt.wantSrc)
+			}
+		})
 	}
 }
 

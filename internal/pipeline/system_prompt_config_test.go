@@ -96,7 +96,7 @@ func TestPipelineNew_CreatesMissingSystemPromptFile(t *testing.T) {
 
 	select {
 	case got := <-systemCh:
-		for _, want := range []string{"first person", "EN:", "| DE:"} {
+		for _, want := range []string{"first person", "in EN", "translated into DE"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("system-сообщение должно содержать %q (правила дефолта), got:\n%s", want, got)
 			}

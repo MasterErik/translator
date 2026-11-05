@@ -13,8 +13,9 @@ func TestBuildSystemPromptDefaultFormat(t *testing.T) {
 	checks := []string{
 		"first person",
 		"candidate context",
-		"EN:",
-		"| RU:",
+		`"source"`,
+		`"answers"`,
+		"translated into RU",
 		"IT terminology in English",
 	}
 
@@ -26,28 +27,29 @@ func TestBuildSystemPromptDefaultFormat(t *testing.T) {
 }
 
 func TestBuildSystemPromptParameterizedTarget(t *testing.T) {
-	// en→de: EN label and "| DE:" separator present, RU must be absent.
+	// en→de: EN source label and "translated into DE" present, RU absent.
 	tpl := mustTestSystemPromptTemplate(t)
 	enDe := tpl.Render("en", "de")
-	if !strings.Contains(enDe, "EN:") {
-		t.Errorf("BuildSystemPrompt(en,de) must contain EN label, got:\n%s", enDe)
+	if !strings.Contains(enDe, "in EN") {
+		t.Errorf("BuildSystemPrompt(en,de) must contain EN source label, got:\n%s", enDe)
 	}
-	if !strings.Contains(enDe, "| DE:") {
-		t.Errorf("BuildSystemPrompt(en,de) must contain | DE: separator, got:\n%s", enDe)
+	if !strings.Contains(enDe, "translated into DE") {
+		t.Errorf("BuildSystemPrompt(en,de) must contain translated into DE, got:\n%s", enDe)
 	}
-	if strings.Contains(enDe, "RU:") {
+	if strings.Contains(enDe, "into RU") {
 		t.Errorf("BuildSystemPrompt(en,de) must NOT contain the RU label, got:\n%s", enDe)
 	}
 
 	// Parameterized source label as well.
 	deEn := tpl.Render("de", "en")
-	if !strings.Contains(deEn, "DE:") || !strings.Contains(deEn, "| EN:") {
-		t.Errorf("BuildSystemPrompt(de,en) must contain DE: label and | EN: separator, got:\n%s", deEn)
+	if !strings.Contains(deEn, "in DE") || !strings.Contains(deEn, "translated into EN") {
+		t.Errorf("BuildSystemPrompt(de,en) must contain DE source label and translated into EN, got:\n%s", deEn)
 	}
 }
 
 // TestBuildSystemPromptUppercasesTags — теги выводятся через
-// strings.ToUpper, поэтому любой регистр «en»/«En»/«EN» даёт «EN:» / «| RU:».
+// strings.ToUpper, поэтому любой регистр «en»/«En»/«EN» даёт
+// «in EN» / «translated into RU» (JSON-формат F7).
 func TestBuildSystemPromptUppercasesTags(t *testing.T) {
 	variants := [][2]string{
 		{"en", "ru"},
@@ -57,13 +59,13 @@ func TestBuildSystemPromptUppercasesTags(t *testing.T) {
 	tpl := mustTestSystemPromptTemplate(t)
 	for _, v := range variants {
 		got := tpl.Render(v[0], v[1])
-		if !strings.Contains(got, "EN:") {
-			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать EN:", v[0], v[1])
+		if !strings.Contains(got, "in EN") {
+			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать «in EN»", v[0], v[1])
 		}
-		if !strings.Contains(got, "| RU:") {
-			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать | RU:", v[0], v[1])
+		if !strings.Contains(got, "translated into RU") {
+			t.Errorf("BuildSystemPrompt(%q,%q) должен содержать «translated into RU»", v[0], v[1])
 		}
-		if strings.Contains(got, "en:") || strings.Contains(got, "ru:") {
+		if strings.Contains(got, "in en,") || strings.Contains(got, "into ru") {
 			t.Errorf("BuildSystemPrompt(%q,%q) не должен содержать строчные теги, got:\n%s", v[0], v[1], got)
 		}
 	}
@@ -142,7 +144,7 @@ func TestBuildAnswerPrompt_CurrentQuestionAlwaysPresent(t *testing.T) {
 	if !strings.Contains(prompt, "Tell me about Go.") {
 		t.Error("current question must always be present")
 	}
-	if !strings.Contains(prompt, "Generate 1 answer from the candidate's perspective") {
+	if !strings.Contains(prompt, "Generate up to 3 candidate answers from the candidate's perspective") {
 		t.Error("prompt must contain the generation instruction")
 	}
 }
@@ -329,7 +331,7 @@ func TestBuildAnswerPrompt_ClarificationTextNotEscaped(t *testing.T) {
 const baselineAnswerPrompt = "The interviewer asked:\n" +
 	"Tell me about Go.\n" +
 	"\n" +
-	"Generate 1 answer from the candidate's perspective (first person, ready to read aloud):"
+	"Generate up to 3 candidate answers from the candidate's perspective (best first, first person, ready to read aloud):"
 
 // R2-min1: golden-тест с ТОЧНЫМ (==) сравнением полного промпта.
 //   - nil Clarifications → байт-в-байт baseline (совместимость с a4ce96d);
@@ -364,7 +366,7 @@ func TestBuildAnswerPrompt_ClarificationsBlockPositionExact(t *testing.T) {
 		"- I mean at scale\n" +
 		"- multi-region\n" +
 		"\n" +
-		"Generate 1 answer from the candidate's perspective (first person, ready to read aloud):"
+		"Generate up to 3 candidate answers from the candidate's perspective (best first, first person, ready to read aloud):"
 
 	if got != want {
 		t.Errorf("prompt with clarifications must match exactly (block between question and instruction)\n want: %q\n  got: %q", want, got)

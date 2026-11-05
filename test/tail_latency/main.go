@@ -255,6 +255,11 @@ func (a *llmAdapter) GenerateAnswers(ctx context.Context, req translator.AnswerR
 	return a.prov.GenerateAnswers(ctx, req)
 }
 
+// GenerateAnswersStream — стриминг (F7/C6): провайдер реализует оба режима.
+func (a *llmAdapter) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
+	return a.prov.GenerateAnswersStream(ctx, req)
+}
+
 // readFileBytes читает файл целиком в []byte.
 func readFileBytes(path string) ([]byte, error) {
 	return os.ReadFile(path)

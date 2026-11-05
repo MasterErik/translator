@@ -918,8 +918,8 @@ func TestPipelineNew_ValidConfig_Minimal(t *testing.T) {
 	if p.cfg.TextStreamBuffer != 64 {
 		t.Errorf("TextStreamBuffer = %d, want 64", p.cfg.TextStreamBuffer)
 	}
-	if p.cfg.AnswerTimeout != 10*time.Second {
-		t.Errorf("AnswerTimeout = %v, want 10s", p.cfg.AnswerTimeout)
+	if p.cfg.AnswerTimeout != common.DefaultAnswerTimeout {
+		t.Errorf("AnswerTimeout = %v, want %v", p.cfg.AnswerTimeout, common.DefaultAnswerTimeout)
 	}
 }
 

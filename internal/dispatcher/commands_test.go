@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,6 +120,21 @@ func (b *blockingEngine) GenerateAnswers(ctx context.Context, req translator.Ans
 		return nil, ctx.Err()
 	}
 	return b.answers, nil
+}
+
+// GenerateAnswersStream (F7/C6): блокируется так же, как GenerateAnswers,
+// затем отдаёт сырой ответ одним токеном (совместимо с финальным
+// ParseAnswers в диспетчере).
+func (b *blockingEngine) GenerateAnswersStream(ctx context.Context, req translator.AnswerRequest) (<-chan string, error) {
+	out := make(chan string, 1)
+	answers, err := b.GenerateAnswers(ctx, req)
+	if err != nil {
+		close(out)
+		return out, err
+	}
+	out <- strings.Join(answers, "\n")
+	close(out)
+	return out, nil
 }
 
 func (b *blockingEngine) Calls() []string {

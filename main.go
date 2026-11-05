@@ -55,6 +55,12 @@ func main() {
 	// Конфиг загружен — уточняем уровень логирования по cfg.LogLevel.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(fatalLogSink(fatalLogFile), &slog.HandlerOptions{Level: cfg.SlogLevel()})))
 
+	// Бюджет одной генерации ответа (F7): LLM_ANSWER_TIMEOUT из .env/config.yaml.
+	answerTimeout, err := cfg.ParseAnswerTimeout()
+	if err != nil {
+		fatalError("невалидный LLM_ANSWER_TIMEOUT", err)
+	}
+
 	p, err := pipeline.New(pipeline.Config{
 		Capturer: capture.NewCapture(capture.CaptureConfig{
 			BufferSizeMs:       80,
@@ -72,6 +78,10 @@ func main() {
 		LLMAPIKey:            cfg.LLMAPIKey,
 		LLMModel:             cfg.LLMModel,
 		MaxTokens:            cfg.MaxTokens,
+		LLMReasoningEffort:   cfg.LLMReasoningEffort,
+		LLMFallbackModels:    cfg.LLMFallbackModels,
+		LLMJSONMode:          cfg.LLMJSONMode,
+		AnswerTimeout:        answerTimeout,
 		SystemPromptFile:     cfg.SystemPromptFile,
 		CandidateContextFile: cfg.CandidateContextFile,
 		CandidateContext:     cfg.CandidateContext,

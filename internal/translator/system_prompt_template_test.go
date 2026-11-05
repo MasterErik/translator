@@ -13,13 +13,13 @@ import (
 )
 
 // TestFixtureTemplateParses — фикстура тестов обязана парситься, содержать
-// формат EN:|RU: и не иметь нераскрытых плейсхолдеров, иначе тесты проверяют
-// не тот контракт, что уходит в LLM.
+// JSON-контракт формата ответа (F7) и не иметь нераскрытых плейсхолдеров,
+// иначе тесты проверяют не тот контракт, что уходит в LLM.
 func TestFixtureTemplateParses(t *testing.T) {
 	tpl := mustTestSystemPromptTemplate(t)
 	rendered := tpl.Render("en", "ru")
-	if !strings.Contains(rendered, "- EN:") || !strings.Contains(rendered, "| RU:") {
-		t.Errorf("фикстура потеряла формат EN:|RU:, got:\n%s", rendered)
+	if !strings.Contains(rendered, `"answers"`) || !strings.Contains(rendered, "translated into RU") {
+		t.Errorf("фикстура потеряла JSON-формат ответа, got:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "{{") {
 		t.Errorf("в отрендеренном шаблоне остались плейсхолдеры:\n%s", rendered)
