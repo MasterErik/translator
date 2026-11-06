@@ -92,10 +92,13 @@ func TestBuildSystemPromptStackScopingSnapshot(t *testing.T) {
 	tpl := mustTestSystemPromptTemplate(t)
 	prompt := tpl.Render("en", "ru")
 
+	// F8: два прохода подстановки — сначала блок формата ({{RESPONSE_FORMAT}},
+	// его раскрытие содержит языковые плейсхолдеры), затем теги языка.
+	withFormat := strings.ReplaceAll(testSystemPromptBody, SystemPromptPlaceholderFormat, jsonSystemPromptFormatBlock)
 	want := normalizeSystemPromptText(strings.NewReplacer(
 		SystemPromptPlaceholderSrcTag, "EN",
 		SystemPromptPlaceholderTgtTag, "RU",
-	).Replace(testSystemPromptBody))
+	).Replace(withFormat))
 	if prompt != want {
 		t.Errorf("BuildSystemPrompt(en,ru) должен быть телом шаблона с подстановкой тегов:\n--- got ---\n%q\n--- want ---\n%q", prompt, want)
 	}

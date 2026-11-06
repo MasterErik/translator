@@ -27,22 +27,31 @@ func TestFixtureTemplateParses(t *testing.T) {
 }
 
 // TestEmbeddedDefaultTemplateContract — встроенный (go:embed) дефолт должен
-// парситься и содержать контракт первого запуска: оба плейсхолдера и правило
-// простого английского первым (оно приоритетнее остальных правил стиля).
+// парситься и содержать контракт первого запуска: плейсхолдер формата ответа
+// (F8), правило простого английского первым (оно приоритетнее остальных
+// правил стиля), а рендер — JSON-схему с тегами языковой пары.
 func TestEmbeddedDefaultTemplateContract(t *testing.T) {
 	tpl, err := ParseSystemPromptTemplate(defaultSystemPromptBody)
 	if err != nil {
 		t.Fatalf("встроенный дефолт не парсится: %v", err)
 	}
-	if !strings.Contains(defaultSystemPromptBody, SystemPromptPlaceholderSrcTag) ||
-		!strings.Contains(defaultSystemPromptBody, SystemPromptPlaceholderTgtTag) {
-		t.Errorf("встроенный дефолт потерял плейсхолдеры языков")
+	if !strings.Contains(defaultSystemPromptBody, SystemPromptPlaceholderFormat) {
+		t.Errorf("встроенный дефолт потерял плейсхолдер %s", SystemPromptPlaceholderFormat)
 	}
 
 	rendered := tpl.Render("en", "ru")
 	firstLine := strings.SplitN(rendered, "\n", 2)[0]
 	if !strings.Contains(firstLine, "SIMPLE ENGLISH") {
 		t.Errorf("правило простого английского должно идти первым, первая строка: %q", firstLine)
+	}
+	if !strings.Contains(rendered, `{"answers":[`) || !strings.Contains(rendered, "in EN") || !strings.Contains(rendered, "into RU") {
+		t.Errorf("дефолтный рендер должен содержать JSON-схему с тегами en/ru, got:\n%s", rendered)
+	}
+
+	// Режим off — строковый формат вместо JSON (F8).
+	renderedOff := tpl.RenderFormat("en", "ru", JSONModeOff)
+	if !strings.Contains(renderedOff, "- EN:") || !strings.Contains(renderedOff, "| RU:") || strings.Contains(renderedOff, `{"answers":[`) {
+		t.Errorf("RenderFormat(off) должен подставлять строковый формат, got:\n%s", renderedOff)
 	}
 }
 

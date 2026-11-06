@@ -39,12 +39,15 @@ AnswerRequest{Question, Clarifications, CandidateContext, ConversationContext, C
 │     "Recent conversation: …\nThe interviewer asked: <question>\n[Clarifications from the interviewer: …]…[модификатор]"
 │     // блок уточнений — только если Clarifications непусто (пусто → опускается, >3 → последние 3)
 ├─ system prompt из SYSTEM_PROMPT_FILE     // шаблон: candidate_context/system_prompt.md
-│     Render(srcLang, tgtLang) — подстановка {{SRC_TAG}}/{{TGT_TAG}}
-│     + "\n\nCandidate context:\n" + candidate
+│     RenderFormat(srcLang, tgtLang, jsonMode) — подстановка
+│     {{RESPONSE_FORMAT}} (JSON-схема или строковый формат, F8)
+│     и {{SRC_TAG}}/{{TGT_TAG}} + "\n\nCandidate context:\n" + candidate
         ▼
-llm.GenerateAnswers(ctx, req)
-        ▼
-parseAnswerHints(content) → ["EN: <en> | RU: <ru>", …]
+llm.GenerateAnswersStream(ctx, req)   // F7: dispatcher стримит токены,
+│                                     // частичный ответ — в zone 4
+▼
+ParseAnswers(content) → JSON-first ({"answers":[…]}) → fallback parseAnswerHints
+→ ["EN: <en> | RU: <ru>", …]
         ▼
 SetAnswer/SetState(idx, QReady) + pushHeader(idx)   // шапка — только если метка активна
         ▼

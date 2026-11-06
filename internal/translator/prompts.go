@@ -29,12 +29,37 @@ const (
 //go:embed default_system_prompt.md
 var defaultSystemPromptBody string
 
-// Плейсхолдеры шаблона system-промпта. Подставляются тегами языка в верхнем
-// регистре (EN, RU, DE), как раньше делал зашитый в код текст.
+// Плейсхолдеры шаблона system-промпта. {{SRC_TAG}}/{{TGT_TAG}} подставляются
+// тегами языка в верхнем регистре (EN, RU, DE); {{RESPONSE_FORMAT}} — блоком
+// формата ответа согласно LLM_JSON_MODE (F8): JSON-схема либо строковый
+// формат «SRC: … | TGT: …».
 const (
 	SystemPromptPlaceholderSrcTag = "{{SRC_TAG}}"
 	SystemPromptPlaceholderTgtTag = "{{TGT_TAG}}"
+	SystemPromptPlaceholderFormat = "{{RESPONSE_FORMAT}}"
 )
+
+// jsonSystemPromptFormatBlock — раскрытие {{RESPONSE_FORMAT}} для JSON-режимов
+// (LLM_JSON_MODE=prompt и response_format): ответ — строго JSON-объект.
+const jsonSystemPromptFormatBlock = `Response format — reply with ONLY a JSON object, no markdown fences, no extra keys:
+{"answers":[{"source":"<answer in {{SRC_TAG}}, in simple English>","target":"<the same answer translated into {{TGT_TAG}}>"}]}
+- 1 to 3 variants in the array, best first.
+Do not include explanations, instructions, reminders, or meta-comments.`
+
+// stringSystemPromptFormatBlock — раскрытие {{RESPONSE_FORMAT}} для
+// LLM_JSON_MODE=off: старый строковый формат (legacy-парсер parseAnswerHints).
+const stringSystemPromptFormatBlock = `Response format — one line per variant, in this exact format:
+- {{SRC_TAG}}: <answer in the source language, in simple English> | {{TGT_TAG}}: <translated into the target language>
+- Up to 3 variants, best first.
+Do not include explanations, instructions, reminders, or meta-comments.`
+
+// responseFormatBlock возвращает блок формата для режима jsonMode.
+func responseFormatBlock(jsonMode string) string {
+	if jsonMode == JSONModeOff {
+		return stringSystemPromptFormatBlock
+	}
+	return jsonSystemPromptFormatBlock
+}
 
 // systemPromptPlaceholderRe находит любой {{...}}-плейсхолдер, чтобы отвергать
 // неизвестные имена на старте, а не отправлять в LLM текст с «{{TYPO}}».
@@ -55,9 +80,12 @@ func ParseSystemPromptTemplate(text string) (*SystemPromptTemplate, error) {
 		return nil, fmt.Errorf("пустой шаблон system-промпта")
 	}
 	for _, match := range systemPromptPlaceholderRe.FindAllString(text, -1) {
-		if match != SystemPromptPlaceholderSrcTag && match != SystemPromptPlaceholderTgtTag {
-			return nil, fmt.Errorf("неизвестный плейсхолдер %q (поддерживаются %s и %s)",
-				match, SystemPromptPlaceholderSrcTag, SystemPromptPlaceholderTgtTag)
+		switch match {
+		case SystemPromptPlaceholderSrcTag, SystemPromptPlaceholderTgtTag, SystemPromptPlaceholderFormat:
+			// Известные плейсхолдеры.
+		default:
+			return nil, fmt.Errorf("неизвестный плейсхолдер %q (поддерживаются %s, %s и %s)",
+				match, SystemPromptPlaceholderSrcTag, SystemPromptPlaceholderTgtTag, SystemPromptPlaceholderFormat)
 		}
 	}
 	return &SystemPromptTemplate{body: text}, nil
@@ -108,8 +136,17 @@ func writeDefaultSystemPrompt(path string) error {
 }
 
 // Render подставляет языковую пару в шаблон. Пустые языки дают дефолт en/ru,
-// теги — в верхнем регистре (EN:, RU:, DE:).
+// теги — в верхнем регистре (EN, RU, DE). Формат ответа — JSON (дефолтный
+// режим LLM_JSON_MODE).
 func (t *SystemPromptTemplate) Render(sourceLang, targetLang string) string {
+	return t.RenderFormat(sourceLang, targetLang, JSONModePrompt)
+}
+
+// RenderFormat рендерит шаблон с раскрытием {{RESPONSE_FORMAT}} согласно
+// режиму jsonMode (F8), затем языковых тегов. Два прохода — блок формата
+// сам содержит {{SRC_TAG}}/{{TGT_TAG}}. Если плейсхолдера формата в шаблоне
+// нет (старый файл), блок не добавляется — формат берётся из текста файла.
+func (t *SystemPromptTemplate) RenderFormat(sourceLang, targetLang, jsonMode string) string {
 	if t == nil {
 		return ""
 	}
@@ -122,10 +159,13 @@ func (t *SystemPromptTemplate) Render(sourceLang, targetLang string) string {
 	srcTag := strings.ToUpper(sourceLang)
 	tgtTag := strings.ToUpper(targetLang)
 
-	rendered := strings.NewReplacer(
+	// Проход 1: блок формата (в нём — языковые плейсхолдеры).
+	rendered := strings.ReplaceAll(t.body, SystemPromptPlaceholderFormat, responseFormatBlock(jsonMode))
+	// Проход 2: языковые теги.
+	rendered = strings.NewReplacer(
 		SystemPromptPlaceholderSrcTag, srcTag,
 		SystemPromptPlaceholderTgtTag, tgtTag,
-	).Replace(t.body)
+	).Replace(rendered)
 
 	return normalizeSystemPromptText(rendered)
 }

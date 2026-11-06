@@ -232,8 +232,9 @@ func (p *ChatProvider) pendingRetryAfter() time.Duration {
 
 // buildSystemPromptUnderLock собирает system-сообщение, используя уже
 // захваченный p.mu (обычный field read без повторного lock — иначе deadlock).
+// Формат ответа раскрывается согласно p.jsonMode (F8).
 func (p *ChatProvider) buildSystemPromptUnderLock(candidateContext, sourceLang, targetLang string) string {
-	return buildSystemPromptWith(p.systemTemplate, candidateContext, sourceLang, targetLang)
+	return buildSystemPromptWithMode(p.systemTemplate, candidateContext, sourceLang, targetLang, p.jsonMode)
 }
 
 // buildSystemPrompt собирает system-промпт: правила формата подсказки
@@ -241,14 +242,19 @@ func (p *ChatProvider) buildSystemPromptUnderLock(candidateContext, sourceLang, 
 // отдельной секцией для персонализации — он НЕ затирает правила формата.
 // Раньше непустой cvContext полностью заменял правила, из-за чего модель
 // отвечала без «SRC: … | TGT: …» и parseAnswerHints отбрасывал всё.
-// buildSystemPromptWith собирает system-сообщение из заданного шаблона.
-// nil-шаблон даёт пустые правила — провайдер отвергает такой запрос раньше
-// (см. GenerateAnswers/GenerateAnswersStream), т.к. SYSTEM_PROMPT_FILE обязателен.
+// buildSystemPromptWith собирает system-сообщение из заданного шаблона
+// (дефолтный JSON-режим формата).
 func buildSystemPromptWith(tpl *SystemPromptTemplate, candidateContext, sourceLang, targetLang string) string {
-	prompt := tpl.Render(sourceLang, targetLang)
+	return buildSystemPromptWithMode(tpl, candidateContext, sourceLang, targetLang, JSONModePrompt)
+}
+
+// buildSystemPromptWithMode — то же с явным режимом формата (F8):
+// jsonMode определяет раскрытие {{RESPONSE_FORMAT}} в шаблоне.
+func buildSystemPromptWithMode(tpl *SystemPromptTemplate, candidateContext, sourceLang, targetLang, jsonMode string) string {
+	prompt := tpl.RenderFormat(sourceLang, targetLang, jsonMode)
 	if candidateContext != "" {
-		// Render гарантирует один завершающий "\n"; убираем его, чтобы между
-		// правилами и candidate context была ровно одна пустая строка.
+		// RenderFormat гарантирует один завершающий "\n"; убираем его, чтобы
+		// между правилами и candidate context была ровно одна пустая строка.
 		prompt = strings.TrimRight(prompt, "\n") + "\n\nCandidate context:\n" + candidateContext
 	}
 	return prompt

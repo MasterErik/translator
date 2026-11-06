@@ -51,7 +51,8 @@ go run ./test/llm_test
 - `GenerateAnswers` (синхронный batch) — вопрос про mutex vs channel
 - `GenerateAnswersStream` (SSE-стриминг) — вопрос про CAP theorem
 - Выводит замеры времени и токены
-- Формат ответа: `EN: <English> | RU: <Russian>`
+- Формат ответа (F7): JSON `{"answers":[{"source":"<English>","target":"<Russian>"}]}`
+  (строковый `EN: … | RU: …` — только в режиме `LLM_JSON_MODE=off`)
 
 ## Проверка аудиоустройств (`test/cable_test`)
 
