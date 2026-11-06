@@ -103,6 +103,9 @@ type Config struct {
 	// LLMFallbackModels — fallback-цепочка моделей (F7): при исчерпании
 	// ретраев основной модели запрос повторяется на следующей.
 	LLMFallbackModels []string
+	// LLMFallbacks — резервные провайдеры (F10.1): свои base_url/API key
+	// (ключ по имени env-переменной) и модель.
+	LLMFallbacks []common.LLMFallback
 	// LLMJSONMode — режим JSON-вывода (F7): prompt (default) |
 	// response_format | off.
 	LLMJSONMode string
@@ -229,6 +232,25 @@ func New(cfg Config) (*Pipeline, error) {
 	llmProv.SetReasoningEffort(cfg.LLMReasoningEffort)
 	llmProv.SetJSONMode(cfg.LLMJSONMode)
 	llmProv.SetFallbackModels(cfg.LLMFallbackModels)
+	for _, fb := range cfg.LLMFallbacks {
+		if fb.BaseURL == "" || fb.Model == "" {
+			newErr = fmt.Errorf("pipeline: LLM_FALLBACKS: base_url и model обязательны (base_url=%q model=%q)", fb.BaseURL, fb.Model)
+			return nil, newErr
+		}
+		apiKey := os.Getenv(fb.APIKeyEnv)
+		if apiKey == "" {
+			// Резерв — страховка от глобального контеншна основного
+			// провайдера: его отсутствие не должно валить старт,
+			// но должно быть видно в логах (иначе «резерв молча не работает»).
+			slog.Warn("pipeline: LLM_FALLBACKS пропущен — env с API-ключом не задан", "model", fb.Model, "api_key_env", fb.APIKeyEnv)
+			continue
+		}
+		llmProv.SetFallbackEndpoints([]translator.FallbackEndpoint{{
+			BaseURL: fb.BaseURL,
+			APIKey:  apiKey,
+			Model:   fb.Model,
+		}})
+	}
 
 	// Шаблон system-промпта: файл из SYSTEM_PROMPT_FILE, иначе встроенный
 	// дефолт. Ошибка чтения/парсинга валит старт — иначе правка файла

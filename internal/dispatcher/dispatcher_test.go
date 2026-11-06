@@ -42,6 +42,9 @@ type mockEngine struct {
 	delay   time.Duration
 	calls   []string
 	reqs    []translator.AnswerRequest
+	// completed — число УСПЕШНО завершённых генераций (F10-тест: shutdown
+	// должен обрывать генерации, а не давать им завершаться).
+	completed int
 }
 
 func (m *mockEngine) GenerateAnswers(ctx context.Context, req translator.AnswerRequest) ([]string, error) {
@@ -60,7 +63,17 @@ func (m *mockEngine) GenerateAnswers(ctx context.Context, req translator.AnswerR
 			return nil, ctx.Err()
 		}
 	}
+	m.mu.Lock()
+	m.completed++
+	m.mu.Unlock()
 	return answers, err
+}
+
+// Completed — число успешных генераций (для F10-тестов shutdown).
+func (m *mockEngine) Completed() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.completed
 }
 
 // GenerateAnswersStream (F7/C6): мок отдаёт сырой ответ одним токеном —
@@ -912,11 +925,13 @@ func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
 		t.Fatal("dispatcher не завершился после отмены контекста с непустой очередью")
 	}
 
-	// Генерация на shutdown не запускается: максимум одно задание успело
-	// начаться до отмены (и оно обрывается по workerCtx).
-	calls := engine.Calls()
-	if len(calls) > 1 {
-		t.Fatalf("после cancel должно быть не более 1 вызова (обрыв по контексту), получено %d: %v", len(calls), calls)
+	// Генерация на shutdown не ЗАВЕРШАЕТСЯ: задания после cancel либо не
+	// начинаются, либо мгновенно обрываются по workerCtx (select воркера
+	// может выбрать готовый answerCh вместо ctx.Done — это ок, вызов
+	// mock'а не означает генерацию). Максимум одно задание успевало
+	// генерироваться до отмены (delay 30 мс).
+	if got := engine.Completed(); got > 1 {
+		t.Fatalf("после cancel должно завершаться не более 1 генерации, завершено %d", got)
 	}
 
 	// Все метки тихо возвращены в QIdle.

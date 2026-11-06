@@ -7,20 +7,32 @@
 LLM_BASE_URL: "https://api.groq.com/openai/v1"
 
 # LLM model — supports any model on the configured base_url.
-LLM_MODEL: "openai/gpt-oss-20b"
+# gpt-oss-120b (F10.1): лучше качество рассуждений, TTFT тот же (~0.7s),
+# полный ответ дольше (~6s vs ~1.5s) — стриминг частичного ответа сглаживает.
+# Если JSON-формат начнёт ломаться (у 120b follow слабее) — включить
+# LLM_JSON_MODE=response_format.
+LLM_MODEL: "openai/gpt-oss-120b"
 
 # Reasoning-effort reasoning-модели (gpt-oss/qwen): low | medium | high.
 # Пусто — параметр не отправляется. Для gpt-oss-20b на Groq рекомендуется low
 # (F7): быстрее полный ответ при том же качестве коротких подсказок.
 LLM_REASONING_EFFORT: "low"
 
-# Fallback-цепочка моделей: при исчерпании ретраев основной модели (429/сбой)
-# запрос повторяется на следующей из списка, затем на остальных. Пусто — только
-# основная модель. Полные имена моделей (env-вариант LLM_FALLBACK_MODELS —
+# Fallback-цепочка моделей на ТОМ ЖЕ провайдере (та же base_url/API key):
+# при исчерпании ретраев основной модели (429/сбой) запрос повторяется на
+# следующей из списка. Полные имена моделей (env-вариант LLM_FALLBACK_MODELS —
 # строка через запятую):
 # LLM_FALLBACK_MODELS:
 #   - "qwen/qwen3.6-27b"
-#   - "glm-4.7-flash"
+
+# Резервные провайдеры (F10.1) — страховка от глобального контеншна Groq
+# free tier (429 приходит и без нашей амплификации). Используются после
+# LLM_FALLBACK_MODELS. API key — в .env (OPENROUTER_API_KEY), не здесь.
+# Отсутствующий env-ключ: резерв пропускается с warning, старт не валим.
+# LLM_FALLBACKS:
+#   - base_url: "https://openrouter.ai/api/v1"
+#     model: "meta-llama/llama-3.3-70b-instruct:free"
+#     api_key_env: "OPENROUTER_API_KEY"
 
 # Бюджет одной генерации ответа ("12s", "1m30s"). Пусто — дефолт 12s;
 # "0" — без лимита (не рекомендуется).

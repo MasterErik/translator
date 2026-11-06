@@ -210,6 +210,50 @@ func TestExtractJSONSourcePartial(t *testing.T) {
 
 // ── F7: fallback-цепочка моделей ─────────────────────────────────────────────
 
+// TestChatProvider_FallbackCrossProvider — резерв на ДРУГОМ провайдере
+// (F10.1): основной endpoint отдаёт 500 → запрос уходит на
+// SetFallbackEndpoints (свой клиент/baseURL) и успешен.
+func TestChatProvider_FallbackCrossProvider(t *testing.T) {
+	mainCalls, reserveCalls := 0, 0
+	mainServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mainCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error": {"message": "groq down"}}`))
+	}))
+	defer mainServer.Close()
+
+	reserveServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reserveCalls++
+		resp := openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionChoice{
+				{Message: openai.ChatCompletionMessage{Content: `{"answers":[{"source":"reserve ok","target":"резерв ок"}]}`}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer reserveServer.Close()
+
+	provider := NewChatProvider(mainServer.URL+"/v1", "groq-key", "main-model")
+	provider.SetSystemPromptTemplate(testSystemPromptTemplate())
+	provider.SetFallbackEndpoints([]FallbackEndpoint{{
+		BaseURL: reserveServer.URL + "/v1",
+		APIKey:  "openrouter-key",
+		Model:   "reserve-model",
+	}})
+
+	answers, err := provider.GenerateAnswers(context.Background(), AnswerRequest{Question: "Q?"})
+	if err != nil {
+		t.Fatalf("GenerateAnswers() error = %v", err)
+	}
+	if len(answers) != 1 || !strings.Contains(answers[0], "reserve ok") {
+		t.Errorf("GenerateAnswers() = %v, want ответ резервного провайдера", answers)
+	}
+	if mainCalls != 1 || reserveCalls != 1 {
+		t.Errorf("вызовы: main=%d reserve=%d, want 1/1", mainCalls, reserveCalls)
+	}
+}
+
 // TestChatProvider_FallbackChain_RateLimit — основная модель всегда 429 →
 // после исчерпания ретраев запрос уходит на fallback-модель и успешен.
 func TestChatProvider_FallbackChain_RateLimit(t *testing.T) {

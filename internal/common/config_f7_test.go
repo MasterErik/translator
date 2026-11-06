@@ -98,3 +98,25 @@ LLM_FALLBACK_MODELS:
 		t.Errorf("LLMFallbackModels[0] = %q, want %q", cfg.LLMFallbackModels[0], "qwen/qwen3.6-27b")
 	}
 }
+
+// TestLLMFallbacksFromYAML — резервные провайдеры (F10.1) читаются из
+// config.yaml: base_url/model/api_key_env.
+func TestLLMFallbacksFromYAML(t *testing.T) {
+	cleanEnv(t, "OPENROUTER_API_KEY")
+	t.Setenv("GLADIA_API_KEY", "test")
+
+	cfg := minimalYAML(t, `
+LLM_FALLBACKS:
+  - base_url: "https://openrouter.ai/api/v1"
+    model: "meta-llama/llama-3.3-70b-instruct:free"
+    api_key_env: "OPENROUTER_API_KEY"
+`)
+
+	if len(cfg.LLMFallbacks) != 1 {
+		t.Fatalf("LLMFallbacks = %+v, want 1 элемент", cfg.LLMFallbacks)
+	}
+	fb := cfg.LLMFallbacks[0]
+	if fb.BaseURL != "https://openrouter.ai/api/v1" || fb.Model != "meta-llama/llama-3.3-70b-instruct:free" || fb.APIKeyEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("LLMFallbacks[0] = %+v", fb)
+	}
+}

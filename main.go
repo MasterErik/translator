@@ -80,6 +80,7 @@ func main() {
 		MaxTokens:            cfg.MaxTokens,
 		LLMReasoningEffort:   cfg.LLMReasoningEffort,
 		LLMFallbackModels:    cfg.LLMFallbackModels,
+		LLMFallbacks:         cfg.LLMFallbacks,
 		LLMJSONMode:          cfg.LLMJSONMode,
 		AnswerTimeout:        answerTimeout,
 		SystemPromptFile:     cfg.SystemPromptFile,

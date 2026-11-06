@@ -77,7 +77,9 @@ type ChatProvider struct {
 	// fallback-цепочка моделей. Читаются под p.mu (buildChatRequest).
 	reasoningEffort string
 	jsonMode        string
-	fallbackModels  []string
+	// fallbacks — резервные endpoint'ы (F10.1): свои клиент (baseURL/key) и
+	// модель. После LLM_FALLBACK_MODELS того же провайдера.
+	fallbacks []fallbackEndpoint
 
 	// retryAfterUntil — до какого времени действует Retry-After последнего
 	// 429-ответа (заполняет retryAfterTransport под p.retryMu). backoff-цикл
@@ -175,12 +177,47 @@ func (p *ChatProvider) SetReasoningEffort(effort string) {
 	p.reasoningEffort = strings.ToLower(strings.TrimSpace(effort))
 }
 
-// SetFallbackModels задаёт fallback-цепочку моделей (F7): при исчерпании
-// ретраев основной модели запрос повторяется на следующей из списка.
+// fallbackEndpoint — резервный LLM-endpoint: свой клиент (baseURL/API key)
+// и модель (F10.1 — резерв на другом провайдере, например OpenRouter free).
+type fallbackEndpoint struct {
+	client *openai.Client
+	model  string
+}
+
+// SetFallbackModels задаёт fallback-цепочку моделей на ТОМ ЖЕ провайдере
+// (F7): при исчерпании ретраев основной модели запрос повторяется на
+// следующей.
 func (p *ChatProvider) SetFallbackModels(models []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.fallbackModels = append([]string(nil), models...)
+	p.fallbacks = p.fallbacks[:0]
+	for _, m := range models {
+		p.fallbacks = append(p.fallbacks, fallbackEndpoint{client: p.client, model: m})
+	}
+}
+
+// FallbackEndpoint — параметры резервного провайдера для
+// SetFallbackEndpoints.
+type FallbackEndpoint struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+}
+
+// SetFallbackEndpoints задаёт резервные endpoint'ы на ДРУГИХ провайдерах
+// (F10.1): каждый со своим base_url/API key/моделью. Используются после
+// fallback-моделей того же провайдера (SetFallbackModels).
+func (p *ChatProvider) SetFallbackEndpoints(endpoints []FallbackEndpoint) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, ep := range endpoints {
+		cfg := openai.DefaultConfig(ep.APIKey)
+		cfg.BaseURL = ep.BaseURL
+		p.fallbacks = append(p.fallbacks, fallbackEndpoint{
+			client: openai.NewClientWithConfig(cfg),
+			model:  ep.Model,
+		})
+	}
 }
 
 // SetJSONMode задаёт режим JSON-вывода (F7): JSONModePrompt /
@@ -272,35 +309,36 @@ func (p *ChatProvider) GenerateAnswers(ctx context.Context, req AnswerRequest) (
 
 	systemPrompt := p.buildSystemPromptUnderLock(req.CandidateContext, req.SourceLang, req.TargetLang)
 
-	// Fallback-цепочка (F7): основная модель, затем LLM_FALLBACK_MODELS.
+	// Fallback-цепочка (F7/F10.1): основная модель, затем LLM_FALLBACK_MODELS
+	// (тот же провайдер) и LLM_FALLBACKS (другие провайдеры, свои ключи).
 	// Каждый шаг цепочки — полный retry-цикл по 429; любой неустранимый сбой
-	// (включая несуществующую модель) переводит на следующую модель.
-	models := make([]string, 0, 1+len(p.fallbackModels))
-	models = append(models, p.model)
-	models = append(models, p.fallbackModels...)
+	// (включая несуществующую модель) переводит на следующий endpoint.
+	endpoints := make([]fallbackEndpoint, 0, 1+len(p.fallbacks))
+	endpoints = append(endpoints, fallbackEndpoint{client: p.client, model: p.model})
+	endpoints = append(endpoints, p.fallbacks...)
 
 	var lastErr error
-	for i, model := range models {
-		chatReq := p.buildChatRequestUnderLock(model, systemPrompt, userPrompt, false)
+	for i, ep := range endpoints {
+		chatReq := p.buildChatRequestUnderLock(ep.model, systemPrompt, userPrompt, false)
 
-		resp, err := p.createChatCompletionWithRetry(ctx, chatReq)
+		resp, err := p.createChatCompletionWithRetry(ctx, ep.client, chatReq)
 		if err == nil {
 			if len(resp.Choices) == 0 {
 				return nil, fmt.Errorf("generate answers: no choices in response")
 			}
 			hints := ParseAnswers(resp.Choices[0].Message.Content, req.SourceLang, req.TargetLang)
 			if len(hints) == 0 {
-				slog.Warn("translator: LLM вернул пустые подсказки", "question", req.Question, "model", model, "raw", resp.Choices[0].Message.Content)
+				slog.Warn("translator: LLM вернул пустые подсказки", "question", req.Question, "model", ep.model, "raw", resp.Choices[0].Message.Content)
 			}
 			return hints, nil
 		}
-		lastErr = fmt.Errorf("модель %s: %w", model, err)
+		lastErr = fmt.Errorf("модель %s: %w", ep.model, err)
 		if ctx.Err() != nil {
 			// Отмена/таймаут — fallback-модели не пробуем, контекст мёртв.
 			return nil, fmt.Errorf("generate answers: %w", err)
 		}
-		if i < len(models)-1 {
-			slog.Warn("translator: модель недоступна, переход на fallback", "model", model, "err", err, "next", models[i+1])
+		if i < len(endpoints)-1 {
+			slog.Warn("translator: модель недоступна, переход на fallback", "model", ep.model, "err", err, "next", endpoints[i+1].model)
 		}
 	}
 	return nil, fmt.Errorf("generate answers: %w", lastErr)
@@ -360,10 +398,10 @@ func (p *ChatProvider) GenerateAnswersStream(ctx context.Context, req AnswerRequ
 	return tokenCh, nil
 }
 
-func (p *ChatProvider) createChatCompletionWithRetry(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+func (p *ChatProvider) createChatCompletionWithRetry(ctx context.Context, client *openai.Client, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		resp, err := p.client.CreateChatCompletion(ctx, req)
+		resp, err := client.CreateChatCompletion(ctx, req)
 		if err == nil {
 			return resp, nil
 		}

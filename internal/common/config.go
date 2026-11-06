@@ -33,10 +33,16 @@ type Config struct {
 	// Рекомендация плана F7: LLM_REASONING_EFFORT=low для gpt-oss-20b.
 	LLMReasoningEffort string `yaml:"LLM_REASONING_EFFORT"`
 
-	// LLMFallbackModels — fallback-цепочка моделей: при исчерпании ретраев
-	// основной модели (429/сбой) запрос повторяется на следующей. Пусто —
-	// только основная модель.
+	// LLMFallbackModels — fallback-цепочка моделей на том же LLM-провайдере
+	// (та же base_url/API key): при исчерпании ретраев основной модели
+	// (429/сбой) запрос повторяется на следующей. Пусто — только основная.
 	LLMFallbackModels []string `yaml:"LLM_FALLBACK_MODELS"`
+
+	// LLMFallbacks — резервные LLM-endpoint'ы (F10.1): другие провайдеры
+	// (например OpenRouter free) со своими base_url и API key. Ключ НЕ хранится
+	// в конфиге — имя env-переменной в api_key_env. Используются после
+	// исчерпания основной модели и LLM_FALLBACK_MODELS.
+	LLMFallbacks []LLMFallback `yaml:"LLM_FALLBACKS"`
 
 	// AnswerTimeout — бюджет одной генерации ответа ("12s", "1m30s").
 	// Пусто → дефолт 12s; "0" → без лимита (не рекомендуется).
@@ -92,6 +98,18 @@ type Config struct {
 
 	// Conversation context — ограничение истории интервью.
 	Conversation ConversationConfig `yaml:"conversation"`
+}
+
+// LLMFallback — резервный LLM-endpoint (другой провайдер, например
+// OpenRouter free). Используется после исчерпания основной модели и
+// fallback-моделей того же провайдера.
+type LLMFallback struct {
+	// BaseURL — OpenAI-совместимый base URL резервного провайдера.
+	BaseURL string `yaml:"base_url"`
+	// Model — имя модели у резервного провайдера.
+	Model string `yaml:"model"`
+	// APIKeyEnv — имя env-переменной с API-ключом (ключ не хранится в конфиге).
+	APIKeyEnv string `yaml:"api_key_env"`
 }
 
 // ConversationConfig — параметры conversation context (история интервью).
