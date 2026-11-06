@@ -868,7 +868,9 @@ func TestDispatcherEmptyAnswerLogged(t *testing.T) {
 }
 
 func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
-	// При shutdown worker дочитывает очередь.
+	// F10/C2: shutdown отменяет генерацию мгновенно — worker дренирует
+	// очередь БЕЗ генерации (LLM-вызовы после cancel не запускаются),
+	// все метки возвращаются в QIdle, dispatcher завершается.
 	engine := &mockEngine{
 		answers: []string{"ответ"},
 		delay:   30 * time.Millisecond,
@@ -885,7 +887,8 @@ func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
 	go d.Run(ctx, textStream, done)
 
 	// Отправляем 3 вопроса и сразу отменяем контекст после того, как они
-	// поставлены в очередь (без sleep): worker должен дренировать остаток.
+	// поставлены в очередь (без sleep): не более одного задания успеет
+	// начаться до отмены — остальное дренируется без генерации.
 	questions := []string{"Q1?", "Q2?", "Q3?"}
 	for _, q := range questions {
 		textStream <- common.STTEvent{
@@ -899,7 +902,7 @@ func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
 		return len(engine.Calls())+len(d.answerCh) == 3
 	}, 2*time.Second)
 
-	// Отменяем контекст — worker должен дренировать очередь.
+	// Отменяем контекст — worker должен дренировать очередь без генерации.
 	cancel()
 
 	select {
@@ -909,10 +912,22 @@ func TestDispatcherAnswerQueueShutdownDrain(t *testing.T) {
 		t.Fatal("dispatcher не завершился после отмены контекста с непустой очередью")
 	}
 
-	// Все 3 вопроса должны быть обработаны (дренирование).
+	// Генерация на shutdown не запускается: максимум одно задание успело
+	// начаться до отмены (и оно обрывается по workerCtx).
 	calls := engine.Calls()
-	if len(calls) != 3 {
-		t.Fatalf("ожидалось 3 вызова после дренирования, получено %d: %v", len(calls), calls)
+	if len(calls) > 1 {
+		t.Fatalf("после cancel должно быть не более 1 вызова (обрыв по контексту), получено %d: %v", len(calls), calls)
+	}
+
+	// Все метки тихо возвращены в QIdle.
+	states := map[int]QState{}
+	for _, e := range d.timeline.Snapshot() {
+		states[e.Idx] = e.State
+	}
+	for i := range questions {
+		if got := states[i]; got != QIdle {
+			t.Errorf("метка %d: state = %v, want QIdle", i, got)
+		}
 	}
 }
 
@@ -1040,8 +1055,9 @@ func TestDispatcherAnswerWorkerChannelClose(t *testing.T) {
 	}
 }
 
-// 4.5: drainQueue с дубликатами → дубли пропускаются.
-func TestDispatcherDrainQueueWithDupes(t *testing.T) {
+// F10/C2: drainQueue на shutdown НЕ генерирует — все оставшиеся задания
+// тихо возвращаются в QIdle, движок не вызывается ни разу.
+func TestDispatcherDrainQueueDropsQuietly(t *testing.T) {
 	engine := &mockEngine{
 		answers: []string{"ответ"},
 	}
@@ -1054,18 +1070,20 @@ func TestDispatcherDrainQueueWithDupes(t *testing.T) {
 	d.answerCh <- answerTask{idx: 1, cmd: translator.CommandAnswer, question: "Q1?", fresh: true} // дубликат
 	d.answerCh <- answerTask{idx: 2, cmd: translator.CommandAnswer, question: "Q2?", fresh: true}
 
-	lastQuestion := ""
-	d.drainQueue(&lastQuestion)
+	d.drainQueue()
 
 	calls := engine.Calls()
-	if len(calls) != 2 {
-		t.Fatalf("ожидалось 2 вызова (Q1 + Q2, дубль пропущен), получено %d: %v", len(calls), calls)
+	if len(calls) != 0 {
+		t.Fatalf("drain на shutdown не должен генерировать, вызовов: %d: %v", len(calls), calls)
 	}
-	if calls[0] != "Q1?" {
-		t.Errorf("первый вызов: %q", calls[0])
+	states := map[int]QState{}
+	for _, e := range d.timeline.Snapshot() {
+		states[e.Idx] = e.State
 	}
-	if calls[1] != "Q2?" {
-		t.Errorf("второй вызов: %q", calls[1])
+	for _, idx := range []int{0, 1, 2} {
+		if got := states[idx]; got != QIdle {
+			t.Errorf("метка %d: state = %v, want QIdle", idx, got)
+		}
 	}
 }
 
@@ -1081,9 +1099,8 @@ func TestDispatcherDrainQueueChannelClose(t *testing.T) {
 	// Закрываем канал.
 	close(d.answerCh)
 
-	lastQuestion := ""
 	// Не должно паниковать.
-	d.drainQueue(&lastQuestion)
+	d.drainQueue()
 
 	// Ни одного вызова engine.
 	calls := engine.Calls()

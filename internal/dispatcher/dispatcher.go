@@ -365,6 +365,11 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 // фрагмент (склейка/уточнение), а не как новая метка.
 const coalesceWindow = 6 * time.Second
 
+// missedAnswerText — текст в шапке пропущенной метки (F10/C1): задание
+// дропнуто (переполнение очереди / Esc), ответ не генерировался; F1 —
+// переспросить вручную.
+const missedAnswerText = "MISSED — press F1"
+
 // handleQuestion — единая точка маршрутизации обнаруженных вопросов (F4).
 // Порядок проверок, от дешёвых к структурным:
 //  1. точный повтор последнего вопроса — дроп (существовавшее поведение);
@@ -617,35 +622,45 @@ func (d *Dispatcher) pushHeaderForState(idx int) {
 }
 
 // enqueueAnswer кладёт задание на генерацию в очередь (неблокирующе).
-// При переполнении задание дропается с логом, состояние метки возвращается в
-// QIdle, а Step сбрасывается: команда так и не отдана LLM — цикл F1 не должен
-// считаться продвинутым (иначе следующий F1 пропустит шаг цикла).
+// При переполнении задание дропается: метка возвращается в QIdle с шапкой
+// «MISSED — press F1» (F10/C1), Step сбрасывается — команда так и не отдана
+// LLM, цикл F1 не должен считаться продвинутым (иначе следующий F1 пропустит
+// шаг цикла).
 func (d *Dispatcher) enqueueAnswer(task answerTask) {
 	select {
 	case d.answerCh <- task:
 		// OK
 	default:
-		d.timeline.SetState(task.idx, QIdle)
-		d.timeline.ResetStep(task.idx)
-		if d.sessLog != nil {
-			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: очередь подсказок переполнена, вопрос пропущен: text=%v", task.question))
-		}
+		d.missTask(task, "очередь подсказок переполнена")
 	}
+}
+
+// missTask — тихий пропуск задания (F10/C1): метка возвращается в QIdle
+// (в зонах 3/4 — маркер ○ и текст «MISSED — press F1» вместо зависшего
+// «генерация…»), Step сбрасывается, дроп учитывается счётчиком ReportDrop
+// (агрегат в sessLog раз/10s). reason — причина для sessLog.
+func (d *Dispatcher) missTask(task answerTask, reason string) {
+	d.timeline.SetState(task.idx, QIdle)
+	d.timeline.ResetStep(task.idx)
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: %s, вопрос пропущен: text=%v", reason, task.question))
+	}
+	d.ReportDrop("answers")
+	// Шапка с текстом MISSED — иначе UI-метка зависает в «генерация…»:
+	// SetState меняет только таймлайн, overlay ничего не получает.
+	d.pushHeader(task.idx, []ui.Answer{{Source: missedAnswerText}})
 }
 
 // answerWorker — единственная горутина, последовательно обрабатывающая задания
 // генерации, hotkey-действия (F1–F3) и отмену (Esc).
-// Дедупликация: задание с тем же текстом вопроса, что и предыдущее, пропускается.
 func (d *Dispatcher) answerWorker(ctx context.Context) {
 	defer close(d.answerDone)
-
-	var lastQuestion string
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Дренируем оставшиеся задания перед выходом.
-			d.drainQueue(&lastQuestion)
+			// Дренируем оставшиеся задания перед выходом (F10/C2: без генерации).
+			d.drainQueue()
 			return
 
 		case task, ok := <-d.answerCh:
@@ -657,12 +672,10 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 			// и не отдана LLM, поэтому цикл F1 не должен считаться продвинутым
 			// (иначе после Esc первый F1 в QIdle-ветке вернёт CommandMoreContext).
 			if d.cancelled.Load() {
-				d.timeline.SetState(task.idx, QIdle)
-				d.timeline.ResetStep(task.idx)
+				d.missTask(task, "очередь отменена (Esc)")
 				continue
 			}
-			lastQuestion = task.question
-			d.runAnswer(task)
+			d.runAnswer(ctx, task)
 
 		case act := <-d.hotkeyCh:
 			d.handleHotkeyAction(act)
@@ -869,17 +882,19 @@ func (d *Dispatcher) handleDemand() {
 }
 
 // runAnswer выполняет задание генерации для метки task.idx.
-func (d *Dispatcher) runAnswer(task answerTask) {
+// ctx — контекст воркера (F10/C2): shutdown отменяет генерацию мгновенно.
+func (d *Dispatcher) runAnswer(ctx context.Context, task answerTask) {
 	d.busy.Store(true)
 	defer d.busy.Store(false)
 	d.timeline.SetState(task.idx, QGenerating)
-	d.generateAnswers(task.question, task.cmd, task.idx)
+	d.generateAnswers(ctx, task.question, task.cmd, task.idx)
 }
 
 // drainQueue вычитывает все оставшиеся задания из очереди при shutdown.
-// Генерирует только те, что ещё можно поставить в очередь (QIdle/QFailed →
-// попытка ответить; QQueued переводится в QGenerating перед генерацией).
-func (d *Dispatcher) drainQueue(lastQuestion *string) {
+// Генерация на shutdown НЕ запускается (F10/C2): workerCtx уже отменён —
+// LLM-вызовы оборвались бы сразу, тратя время на их отмену. Оставшиеся
+// задания тихо возвращаются в QIdle.
+func (d *Dispatcher) drainQueue() {
 	if d.answerCh == nil {
 		return
 	}
@@ -889,15 +904,8 @@ func (d *Dispatcher) drainQueue(lastQuestion *string) {
 			if !ok {
 				return
 			}
-			if d.cancelled.Load() {
-				d.timeline.SetState(task.idx, QIdle)
-				continue
-			}
-			if task.fresh && task.question == *lastQuestion {
-				continue
-			}
-			*lastQuestion = task.question
-			d.runAnswer(task)
+			d.timeline.SetState(task.idx, QIdle)
+			d.timeline.ResetStep(task.idx)
 		default:
 			return
 		}
@@ -905,6 +913,8 @@ func (d *Dispatcher) drainQueue(lastQuestion *string) {
 }
 
 // dropQueue выбрасывает все ожидающие задания из очереди (без генерации).
+// Каждая метка получает шапку «MISSED — press F1» (F10/C1), иначе в UI
+// остаются зависшие «генерация…».
 func (d *Dispatcher) dropQueue() {
 	if d.answerCh == nil {
 		return
@@ -912,8 +922,7 @@ func (d *Dispatcher) dropQueue() {
 	for {
 		select {
 		case task := <-d.answerCh:
-			d.timeline.SetState(task.idx, QIdle)
-			d.timeline.ResetStep(task.idx)
+			d.missTask(task, "очередь сброшена (Esc)")
 		default:
 			return
 		}
@@ -927,7 +936,7 @@ func (d *Dispatcher) GenerateAnswers(question string) {
 	idx := d.timeline.Add(question)
 	d.setLabelTimestamp(idx, time.Now())
 	d.timeline.SetState(idx, QGenerating)
-	d.generateAnswers(question, translator.CommandAnswer, idx)
+	d.generateAnswers(context.Background(), question, translator.CommandAnswer, idx)
 }
 
 // HandleDemand — F1: запросить ответ для активной метки (неблокирующе).
@@ -1089,13 +1098,14 @@ func (d *Dispatcher) pushPartialAnswer(idx int, question, raw string) {
 
 // generateAnswers собирает AnswerRequest (candidate context + conversation
 // context + команда) и выполняет синхронную генерацию для метки idx.
-// Активная генерация может быть отменена через Cancel() (Esc).
+// Активная генерация может быть отменена через Cancel() (Esc) или shutdown
+// (F10/C2: бюджет WithTimeout строится поверх workerCtx, а не Background).
 //
 // Результат кладётся в таймлайн (SetAnswer/SetState) и в overlay — но только
 // если метка idx всё ещё активна (иначе ответ устаревший: пользователь ушёл на
 // другую метку, и перезаписывать её шапку нельзя). Правило записи ответа в
 // ConversationHistory — в комментарии перед RecordAnswer ниже.
-func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationCommand, idx int) {
+func (d *Dispatcher) generateAnswers(ctx context.Context, question string, cmd translator.GenerationCommand, idx int) {
 	if d.engine == nil {
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: engine=nil, генерация пропущена: question=%v", question))
@@ -1126,7 +1136,9 @@ func (d *Dispatcher) generateAnswers(question string, cmd translator.GenerationC
 		TargetLang:          d.tgtLang,
 	}
 
-	ansCtx, ansCancel := context.WithTimeout(context.Background(), d.cfg.AnswerTimeout)
+	// F10/C2: таймаут привязан к workerCtx — shutdown (ctx.Done) отменяет
+	// генерацию немедленно, а не по истечении собственного бюджета.
+	ansCtx, ansCancel := context.WithTimeout(ctx, d.cfg.AnswerTimeout)
 	d.activeMu.Lock()
 	d.activeCancel = ansCancel
 	d.activeMu.Unlock()

@@ -754,7 +754,7 @@ func TestModifierOnEmptyHistoryNotRecorded(t *testing.T) {
 
 	idx := d.timeline.Add("orphan question?")
 	waitIdle(t, d)
-	d.generateAnswers("orphan question?", translator.CommandMoreContext, idx)
+	d.generateAnswers(context.Background(), "orphan question?", translator.CommandMoreContext, idx)
 	waitIdle(t, d)
 
 	if recent := d.history.Recent(); len(recent) != 0 {

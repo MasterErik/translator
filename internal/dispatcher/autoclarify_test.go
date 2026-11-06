@@ -1,6 +1,7 @@
 package dispatcher
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestAutoClarifyDeduplicatesAndIsOneShot(t *testing.T) {
 	d.speechLog.Add("Two identical remarks.", now)
 	d.speechLog.Add("Two identical remarks.", now.Add(time.Millisecond))
 
-	d.generateAnswers("How do you scale?", translator.CommandAnswer, idx)
+	d.generateAnswers(context.Background(), "How do you scale?", translator.CommandAnswer, idx)
 
 	if got := d.timeline.Clarifications(idx); len(got) != 1 {
 		t.Fatalf("Clarifications = %v, ожидалось ровно одно вхождение (дедуп)", got)
@@ -75,7 +76,7 @@ func TestAutoClarifyDeduplicatesAndIsOneShot(t *testing.T) {
 	// Окно НЕ одноразовое (F4: постоянное свойство метки — коалесинг и
 	// повторные перегенерации), но уточнения не растут: реплики из окна уже
 	// потреблены и скрыты из SnapshotAfter — перегенерации нечего прикреплять.
-	d.generateAnswers("How do you scale?", translator.CommandAnswer, idx)
+	d.generateAnswers(context.Background(), "How do you scale?", translator.CommandAnswer, idx)
 	if got := d.timeline.Clarifications(idx); len(got) != 1 {
 		t.Errorf("после перегенерации Clarifications = %v, ожидалось то же одно вхождение", got)
 	}
@@ -101,7 +102,7 @@ func TestAutoClarifySkipsNotOnTail(t *testing.T) {
 	now := time.Now()
 	d.speechLog.Add("A remark for the tail.", now.Add(time.Second))
 
-	d.generateAnswers("Second question?", translator.CommandAnswer, 1)
+	d.generateAnswers(context.Background(), "Second question?", translator.CommandAnswer, 1)
 
 	// Уточнений нет: OnTail=false закрыл окно; реплика осталась unconsumed —
 	// её заберут Shift+F2/RecentContext.

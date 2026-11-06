@@ -279,8 +279,8 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 - Буферизованный канал `answerCh` (16) и одна горутина `answerWorker`. Зачем:
 - Предотвращает спам LLM-запросов → **rate-limit 429** больше не возникает
 - Последовательные запросы (FIFO) — сервер не перегружается
-- Неблокирующая отправка: если очередь переполнена — дроп с debug-логом
-- Graceful shutdown: worker дренирует оставшиеся вопросы перед выходом
+- Неблокирующая отправка: переполнение → тихий пропуск `missTask` (F10/C1): метка в QIdle, шапка «MISSED — press F1» в overlay, дроп в метрике `ReportDrop` (агрегат в sessLog раз/10s)
+- Graceful shutdown (F10/C2): бюджет генерации `WithTimeout(workerCtx, AnswerTimeout)` — cancel workerCtx обрывает активную генерацию мгновенно; `drainQueue` на shutdown **не генерирует** — оставшиеся метки тихо возвращаются в QIdle
 
 **SpeechLog (кольцо реплик интервьюера, F1):**
 
@@ -348,7 +348,7 @@ sigCtx (signal.NotifyContext: SIGINT/SIGTERM)
 
 1. SIGINT/SIGTERM **или** закрытие окна → `runCancel()` отменяет `runCtx`
 2. `runSTT` получает `ctx.Done()` → `defer close(p.textStream)` → dispatcher завершается
-3. Dispatcher: `ctx.Done()` → `answerWorker` дренирует очередь (`drainQueue`) → `answerDone`
+3. Dispatcher: `ctx.Done()` → `answerWorker` дренирует очередь **без генерации** (`drainQueue`, F10/C2: workerCtx уже отменён — активные LLM-генерации обрываются мгновенно, оставшиеся метки тихо возвращаются в QIdle) → `answerDone`
 4. Gladia.Stop() → WebSocket close
 5. dispatchDone → все стриминг-горутины завершены
 6. UI: WaitShutdown() (уже закрыт при сценарии с окном)
