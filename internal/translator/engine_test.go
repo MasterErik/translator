@@ -164,6 +164,24 @@ func TestIsQuestion_TableDriven(t *testing.T) {
 		{"pleasing", false},
 		{"tell", false},
 		{"walking the dog", false},
+
+		// F12.1 negative guards: exclamatory / rhetorical openings (реальные
+		// false positives из sessLog). Guard стоит до проверки "?" —
+		// STT-восклицание со знаком вопроса всё равно не вопрос.
+		{"What a mess", false},
+		{"What a mess!", false},
+		{"What a mess?", false},
+		{"What an achievement!", false},
+		{"What the heck", false},
+		{"what a pity", false},
+		{"Why don't we move on", false},
+		{"Why don't we move on?", false},
+		{"why dont we try that", false},
+		{"Why don't we start then", false},
+
+		// Граница guard'а: "why don't YOU" — настоящий вопрос-проба.
+		{"Why don't you use Kafka?", true},
+		{"why don't you like this approach", true},
 	}
 
 	for _, tt := range tests {

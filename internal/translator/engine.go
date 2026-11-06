@@ -36,6 +36,12 @@ func NewEngine(llm LLMProvider) *TranslationEngine {
 //   - A trailing question mark.
 //   - Leading question words or phrases, terminated by a word boundary.
 //
+// Before those checks, negative guards (F12.1) reject known false positives —
+// exclamatory and rhetorical openings that STT transcribes on par with
+// questions ("What a mess…", "Why don't we move on"). Guards run BEFORE the
+// question-mark check: an STT-produced "?" after an exclamation ("What a
+// mess?") still is not an interview question.
+//
 // The leading-word check requires a word boundary after the matched phrase
 // (end of string, space, apostrophe, or comma) so that "however", "whatever",
 // "whoever" and "whatsapp" are not misclassified as questions.
@@ -45,14 +51,17 @@ func IsQuestion(text string) bool {
 		return false
 	}
 
+	lower := strings.ToLower(trimmed)
+
+	// Negative guards (F12.1): exclamatory / rhetorical openings.
+	if isNonQuestionOpening(lower) {
+		return false
+	}
+
 	// Check for question mark.
 	if strings.Contains(trimmed, "?") {
 		return true
 	}
-
-	// Check for question words/phrases at the start, followed by a word
-	// boundary so that longer words sharing the prefix are not matched.
-	lower := strings.ToLower(trimmed)
 
 	// Strip a leading polite "please" (optionally followed by a comma) so that
 	// "Please tell us…", "Please, describe…" are detected as requests for an
@@ -68,6 +77,30 @@ func IsQuestion(text string) bool {
 		}
 	}
 
+	return false
+}
+
+// isNonQuestionOpening reports whether the lowercased text starts with a
+// pattern that looks like a question-word opening but is an exclamation or a
+// rhetorical suggestion, not a request for an answer (F12.1). Calibrated
+// against real STT false positives; add new patterns with a sessLog example
+// in the comment.
+func isNonQuestionOpening(lower string) bool {
+	// "What a mess…", "What an achievement…", "What the heck…" — exclamatory
+	// openings. Interview questions never start with "what a/an/the".
+	for _, excl := range []string{"what a ", "what an ", "what the "} {
+		if strings.HasPrefix(lower, excl) {
+			return true
+		}
+	}
+	// "Why don't we move on / try / start…" — a suggestion to act, not a
+	// question. "Why don't you…" stays a question (real interview probe).
+	// Both apostrophe and apostrophe-less STT variants are covered.
+	for _, sugg := range []string{"why don't we ", "why dont we "} {
+		if strings.HasPrefix(lower, sugg) {
+			return true
+		}
+	}
 	return false
 }
 
