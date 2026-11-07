@@ -221,6 +221,27 @@ func (t *QuestionTimeline) AppendQuestion(idx int, fragment string) (string, boo
 	return e.Question, true
 }
 
+// SetQuestion заменяет текст вопроса метки idx (F12.2: refined-версия того же
+// вопроса от STT — повторная транскрипция того же высказывания, поэтому
+// текст ЗАМЕНЯЕТСЯ, а не дополняется; сравните с AppendQuestion для
+// фрагментов-продолжений). Возвращает ok=false для no-op: метки нет в окне
+// либо текст пуст. Состояние/Step/уточнения не трогаются.
+func (t *QuestionTimeline) SetQuestion(idx int, question string) bool {
+	trimmed := strings.TrimSpace(question)
+	if trimmed == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e := t.lookupLocked(idx)
+	if e == nil {
+		return false
+	}
+	e.Question = trimmed
+	return true
+}
+
 // AbsorbLast — слияние реплики-дубля вопроса. Если ПОСЛЕДНЯЯ метка окна — дубль
 // вопроса q (её Question == q), она удаляется, а её текст добавляется уточнением
 // к предыдущей метке (idx-1). Активность и индикатор свежести пересчитываются:

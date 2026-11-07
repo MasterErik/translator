@@ -281,6 +281,7 @@ event.Event == EventEndOfTurn && ChannelID != "translation"
 - Последовательные запросы (FIFO) — сервер не перегружается
 - Неблокирующая отправка: переполнение → тихий пропуск `missTask` (F10/C1): метка в QIdle, шапка «MISSED — press F1» в overlay, дроп в метрике `ReportDrop` (агрегат в sessLog раз/10s)
 - Graceful shutdown (F10/C2): бюджет генерации `WithTimeout(workerCtx, AnswerTimeout)` — cancel workerCtx обрывает активную генерацию мгновенно; `drainQueue` на shutdown **не генерирует** — оставшиеся метки тихо возвращаются в QIdle
+- Debounce постановки (F12.2): авто-задание уходит в очередь только после 2s тишины (pipeline задаёт `AnswerDebounce`, `DefaultConfig` — 0 = сразу, для тестов). Refined-версия вопроса (fuzzy-дубликат ≥ 0.75) в окне **заменяет** текст метки и задания (повторная транскрипция — `SetQuestion`); фрагмент-продолжение (коалесинг) **дописывается** к заданию под дебаунсом. Итог: один вопрос = один LLM-вызов (раньше дроп терял уточнение, а коалесинг давал вторую генерацию). Esc дропает pending с шапкой MISSED, shutdown возвращает тихо в QIdle
 
 **SpeechLog (кольцо реплик интервьюера, F1):**
 

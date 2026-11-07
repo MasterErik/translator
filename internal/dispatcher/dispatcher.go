@@ -40,6 +40,13 @@ type Config struct {
 	// AnswerQueueSize — размер буфера очереди вопросов (default 16).
 	AnswerQueueSize int
 
+	// AnswerDebounce — окно тишины перед постановкой задания на генерацию
+	// (F12.2, default 2s). Задание копится под дебаунсом: повторная
+	// (refined) версия вопроса в окне обновляет текст, таймер перезапускается —
+	// один вопрос = один LLM-вызов с финальным текстом. 0 = выключено
+	// (постановка сразу; используется тестами).
+	AnswerDebounce time.Duration
+
 	// SourceLang/TargetLang — пара языков подсказок (ISO 639-1, default en/ru).
 	SourceLang string
 	TargetLang string
@@ -79,8 +86,12 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		AnswerTimeout:    12 * time.Second,
-		AnswerQueueSize:  16,
+		AnswerTimeout:   12 * time.Second,
+		AnswerQueueSize: 16,
+		// AnswerDebounce=0 — постановка сразу. Дефолт для тестов: существующие
+		// сценарии ждут мгновенной постановки заданий. Production-pipeline
+		// задаёт окно 2s явно (F12.2).
+		AnswerDebounce:   0,
 		RecentTurns:      6,
 		MaxContextTokens: 4000,
 		HotkeyBufferSize: 16,
@@ -103,6 +114,15 @@ type Dispatcher struct {
 	// Очередь заданий на генерацию (последовательная обработка одним consumer'ом).
 	answerCh   chan answerTask
 	answerDone chan struct{}
+
+	// pending — задания под дебаунсом (F12.2): метка idx → задание, которое
+	// уйдёт в answerCh только после AnswerDebounce тишины. Повторная
+	// (refined) версия вопроса в окне обновляет task.question и перезапускает
+	// таймер — один вопрос = один LLM-вызов с финальным текстом.
+	// Пишется/читается из route (handleQuestion/enqueueQuestion) и из
+	// колбэков таймеров — под pendingMu.
+	pending   map[int]*pendingTask
+	pendingMu sync.Mutex
 
 	// Канал hotkey-действий F1–F3 (Demand/Prev/Next) и канал отмены (Esc).
 	hotkeyCh chan HotkeyAction
@@ -208,6 +228,7 @@ func New(overlay OverlayUI, engine AnswerGenerator, sessLog SessionLogger, cfg C
 		cfg:                cfg,
 		answerCh:           answerCh,
 		answerDone:         make(chan struct{}),
+		pending:            make(map[int]*pendingTask),
 		hotkeyCh:           make(chan HotkeyAction, cfg.HotkeyBufferSize),
 		cancelCh:           make(chan struct{}, 1),
 		history:            translator.NewConversationHistory(cfg.RecentTurns, cfg.MaxContextTokens),
@@ -398,8 +419,12 @@ func (d *Dispatcher) handleQuestion(raw string, arrivedAt time.Time) {
 		return
 	}
 
-	// 2) Фаззи-дедуп против последних 3 меток (A6).
-	if d.isDuplicateOfRecentLabels(q) {
+	// 2) Фаззи-дедуп против последних 3 меток (A6). Совпадение с меткой, чьё
+	// задание ещё под дебаунсом (F12.2) — refined-версия: текст метки и
+	// задания ЗАМЕНЯЕТСЯ (повторная транскрипция того же высказывания),
+	// таймер перезапускается — вместо дропа, терявшего уточнение.
+	if idx, dup := d.isDuplicateOfRecentLabels(q); dup {
+		d.refinePending(idx, raw)
 		return
 	}
 
@@ -418,9 +443,10 @@ func (d *Dispatcher) handleQuestion(raw string, arrivedAt time.Time) {
 }
 
 // isDuplicateOfRecentLabels — фаззи-дедуп (A6) против последних 3 меток
-// таймлайна. Лог дропа пишется здесь (из handleQuestion журналирование
+// таймлайна. Возвращает индекс метки-дубликата (для refinePending, F12.2).
+// Лог дропа пишется здесь (из handleQuestion журналирование
 // дубликата неудобно — нужен само же индекс метки).
-func (d *Dispatcher) isDuplicateOfRecentLabels(q string) bool {
+func (d *Dispatcher) isDuplicateOfRecentLabels(q string) (int, bool) {
 	snap := d.timeline.Snapshot()
 	if len(snap) > 3 {
 		snap = snap[len(snap)-3:]
@@ -432,9 +458,62 @@ func (d *Dispatcher) isDuplicateOfRecentLabels(q string) bool {
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: фаззи-дубликат вопроса проигнорирован (метка %d): text=%v", e.Idx, q))
 		}
-		return true
+		return e.Idx, true
 	}
-	return false
+	return 0, false
+}
+
+// refreshPendingQuestion обновляет question у задания метки idx, стоящего
+// под дебаунсом (F12.2), и перезапускает его таймер. ok=false — задания под
+// дебаунсом нет (задание уже в очереди или генерируется).
+func (d *Dispatcher) refreshPendingQuestion(idx int, question string) bool {
+	d.pendingMu.Lock()
+	defer d.pendingMu.Unlock()
+
+	pt, ok := d.pending[idx]
+	if !ok {
+		return false
+	}
+	pt.task.question = question
+	pt.gen++
+	pt.timer.Stop()
+	pt.timer = time.AfterFunc(d.cfg.AnswerDebounce, func() {
+		d.flushPending(idx, pt.gen)
+	})
+	return true
+}
+
+// refinePending применяет refined-версию вопроса (F12.2): если у метки idx
+// есть задание под дебаунсом — текст метки и задания заменяется на свежую
+// транскрипцию, таймер перезапускается. Реплика поглощается из SpeechLog.
+// Вне дебаунса — no-op (старое поведение: дроп дубликата).
+func (d *Dispatcher) refinePending(idx int, raw string) {
+	d.pendingMu.Lock()
+	pt, ok := d.pending[idx]
+	if !ok {
+		d.pendingMu.Unlock()
+		return
+	}
+	if !d.timeline.SetQuestion(idx, raw) {
+		// Метка вытеснена из кольца — задание под дебаунсом теряет смысл.
+		pt.timer.Stop()
+		delete(d.pending, idx)
+		d.pendingMu.Unlock()
+		return
+	}
+	pt.task.question = raw
+	pt.gen++
+	pt.timer.Stop()
+	pt.timer = time.AfterFunc(d.cfg.AnswerDebounce, func() {
+		d.flushPending(idx, pt.gen)
+	})
+	d.pendingMu.Unlock()
+
+	d.speechLog.ConsumeText(raw)
+	d.setLabelTimestamp(idx, time.Now())
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: refined-версия вопроса, задание обновлено (метка %d): text=%v", idx, raw))
+	}
 }
 
 // coalesceFragment — склейка фрагмента мультичастного вопроса (F4/A7) с
@@ -485,6 +564,16 @@ func (d *Dispatcher) coalesceFragment(q, raw string, arrivedAt time.Time) bool {
 			return false
 		}
 		d.speechLog.ConsumeText(raw)
+		// F12.2: если задание метки ещё под дебаунсом — обновляем его текст
+		// и перезапускаем таймер; ВТОРОЕ задание не создаётся (раньше
+		// перегенерация шла вторым заданием — ×2 LLM-вызова на вопрос).
+		if d.refreshPendingQuestion(tail.Idx, full) {
+			if d.sessLog != nil {
+				d.sessLog.LogDebug(fmt.Sprintf("dispatcher: фрагмент дописан к вопросу метки %d под дебаунсом: full=%v", tail.Idx, full))
+			}
+			d.pushHeaderForState(tail.Idx)
+			return true
+		}
 		if d.sessLog != nil {
 			d.sessLog.LogDebug(fmt.Sprintf("dispatcher: фрагмент дописан к вопросу метки %d, задание перегенерируется: full=%v", tail.Idx, full))
 		}
@@ -605,7 +694,9 @@ func (d *Dispatcher) enqueueQuestion(question string, arrivedAt time.Time) int {
 		return idx
 	}
 
-	d.enqueueAnswer(answerTask{idx: idx, cmd: translator.CommandAnswer, question: question, fresh: true})
+	// F12.2: задание уходит в очередь после паузы (AnswerDebounce) —
+	// refined-версия вопроса в окне обновит текст вместо второй генерации.
+	d.scheduleAnswer(answerTask{idx: idx, cmd: translator.CommandAnswer, question: question, fresh: true})
 	return idx
 }
 
@@ -635,6 +726,92 @@ func (d *Dispatcher) enqueueAnswer(task answerTask) {
 	}
 }
 
+// pendingTask — задание, ожидающее постановки под дебаунсом (F12.2). gen —
+// номер редакции: колбэк таймера выполняет задание, только если его редакция
+// совпадает с текущей (устаревшие таймеры, уже остановленные Reset'ом новой
+// версии, безопасно выпадают).
+type pendingTask struct {
+	task  answerTask
+	gen   uint64
+	timer *time.Timer
+}
+
+// scheduleAnswer ставит задание на генерацию под дебаунс (F12.2): задание
+// уходит в очередь только после AnswerDebounce тишины для этой метки.
+// Повторный вызов для того же idx (refined-версия вопроса от STT, повторная
+// транскрипция того же высказывания) обновляет текст задания и перезапускает
+// таймер — один вопрос = один LLM-вызов с финальным текстом вместо двух
+// (дедуп-дроп терял уточнение, коалесинг давал вторую генерацию).
+// AnswerDebounce <= 0 — постановка сразу (прежнее поведение).
+func (d *Dispatcher) scheduleAnswer(task answerTask) {
+	if d.cfg.AnswerDebounce <= 0 {
+		d.enqueueAnswer(task)
+		return
+	}
+
+	d.pendingMu.Lock()
+	defer d.pendingMu.Unlock()
+
+	if pt, ok := d.pending[task.idx]; ok {
+		pt.task = task
+		pt.gen++
+		pt.timer.Stop()
+		pt.timer = time.AfterFunc(d.cfg.AnswerDebounce, func() {
+			d.flushPending(task.idx, pt.gen)
+		})
+		return
+	}
+
+	pt := &pendingTask{task: task}
+	pt.timer = time.AfterFunc(d.cfg.AnswerDebounce, func() {
+		d.flushPending(task.idx, pt.gen)
+	})
+	d.pending[task.idx] = pt
+}
+
+// flushPending выполняет задание, «вызревшее» под дебаунсом. gen — редакция
+// задания на момент старта таймера: если за окно тишины пришла refined-версия
+// (gen вырос) или задание отменено (удалено из pending), таймер-вызов no-op.
+func (d *Dispatcher) flushPending(idx int, gen uint64) {
+	d.pendingMu.Lock()
+	pt, ok := d.pending[idx]
+	if !ok || pt.gen != gen {
+		d.pendingMu.Unlock()
+		return
+	}
+	delete(d.pending, idx)
+	task := pt.task
+	d.pendingMu.Unlock()
+
+	if d.sessLog != nil {
+		d.sessLog.LogDebug(fmt.Sprintf("dispatcher: дебаунс истёк, задание поставлено в очередь: idx=%d, text=%v", idx, task.question))
+	}
+	d.enqueueAnswer(task)
+}
+
+// cancelAllPending снимает все задания с дебаунса (Esc/shutdown). quiet —
+// true для shutdown: метки молча возвращаются в QIdle без UI-пуша (UI уже
+// закрывается); false (Esc) — missTask с шапкой «MISSED — press F1».
+func (d *Dispatcher) cancelAllPending(quiet bool) {
+	d.pendingMu.Lock()
+	tasks := make([]answerTask, 0, len(d.pending))
+	for idx, pt := range d.pending {
+		pt.timer.Stop()
+		tasks = append(tasks, pt.task)
+		delete(d.pending, idx)
+	}
+	d.pendingMu.Unlock()
+
+	for _, task := range tasks {
+		if quiet {
+			d.timeline.SetState(task.idx, QIdle)
+			d.timeline.ResetStep(task.idx)
+			continue
+		}
+		d.missTask(task, "дебаунс отменён (Esc)")
+	}
+}
+
 // missTask — тихий пропуск задания (F10/C1): метка возвращается в QIdle
 // (в зонах 3/4 — маркер ○ и текст «MISSED — press F1» вместо зависшего
 // «генерация…»), Step сбрасывается, дроп учитывается счётчиком ReportDrop
@@ -660,6 +837,8 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			// Дренируем оставшиеся задания перед выходом (F10/C2: без генерации).
+			// Задания под дебаунсом (F12.2) тоже тихо возвращаются в QIdle.
+			d.cancelAllPending(true)
 			d.drainQueue()
 			return
 
@@ -685,6 +864,8 @@ func (d *Dispatcher) answerWorker(ctx context.Context) {
 			if d.sessLog != nil {
 				d.sessLog.LogDebug("dispatcher: очередь отменена (Esc)")
 			}
+			// Задания под дебаунсом (F12.2) дропаются так же, как очередь.
+			d.cancelAllPending(false)
 			d.dropQueue()
 			// Метки в Queued/Generating возвращаем в Idle; готовые сохраняем.
 			d.timeline.ResetPending()

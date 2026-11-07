@@ -349,7 +349,11 @@ func New(cfg Config) (*Pipeline, error) {
 			engine,
 			sessLog,
 			dispatcher.Config{
-				AnswerTimeout:      cfg.AnswerTimeout,
+				AnswerTimeout: cfg.AnswerTimeout,
+				// F12.2: окно тишины перед постановкой задания на генерацию —
+				// refined-версия вопроса от STT обновляет задание вместо
+				// второй LLM-генерации (1 вопрос = 1 вызов).
+				AnswerDebounce:     2 * time.Second,
 				AutoAnswer:         cfg.AutoAnswer,
 				CandidateContextFn: candidateContextFn,
 				RecentTurns:        cfg.RecentTurns,
