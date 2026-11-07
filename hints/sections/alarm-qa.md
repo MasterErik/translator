@@ -32,13 +32,15 @@ Collecting medication orders from over 1,000 heterogeneous external sources (pha
   "keywords": [
     "architectural problem",
     "third-party instability",
+    "unstable partner",
     "legacy protocols",
     "partner contract violations",
     "internal infrastructure isolation"
   ],
   "aliases": [
     "what architecture problem is solved",
-    "why isolate internal systems"
+    "why isolate internal systems",
+    "make legacy integration reliable"
   ],
   "stack": [
     "java"
@@ -1186,3 +1188,27 @@ Upon a canonization/parsing error, a `Parse Error` metric is generated, the file
 }
 -->
 No. The Alarm service will cache the last known schedule and continue generating ticks until the DB recovers. The Download microservice has no direct dependencies on PostgreSQL.
+
+<!-- fact
+{
+  "id": "alarm-qa-51",
+  "section": "alarm-qa",
+  "title": "How did you design the ingestion pipeline for the pharma orders?",
+  "keywords": [
+    "ingestion pipeline design",
+    "pharma orders",
+    "multi-threaded pipeline",
+    "canonical format",
+    "idempotent ingestion"
+  ],
+  "aliases": [
+    "designing the ingestion pipeline",
+    "pharma order pipeline architecture"
+  ],
+  "stack": [
+    "java"
+  ],
+  "weight": "primary"
+}
+-->
+The pipeline collects orders from 1,000+ heterogeneous external sources (pharmacy chains, distributors, marketplaces), many on legacy infrastructure without APIs - files arrive via FTP/SFTP or email with anomalous behavior. I designed a multi-threaded ingestion pipeline (~10 seconds per file): idempotent processing (two-stage hash verification against Redis), normalization to a canonical format, and zero order loss, with Kafka (transactional producers, custom partitioning) as the backbone, plus Redis and S3 for state and raw storage.
