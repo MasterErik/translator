@@ -51,6 +51,7 @@ func main() {
 	bonus := flag.Float64("bonus", 0, "stack named-bonus coefficient (0 = дефолт 1.5)")
 	session := flag.Float64("session", 0, "stack session-bonus coefficient (0 = дефолт 1.25)")
 	onLoadError := flag.String("on-load-error", candidatecontext.OnLoadErrorFail, "поведение при сбое загрузки каталога: fail|degraded")
+	noFuzzy := flag.Bool("no-fuzzy", false, "выключить ASR-fuzzy коррекцию запроса (F13, для A/B)")
 	flag.Parse()
 
 	knownIDs, dupes, err := collectFactIDs(*dir, *hintsDir)
@@ -124,7 +125,9 @@ func main() {
 		HintsTopK:     *hintsTopK,
 		HintsMinScore: *hintsMinScore,
 		OnLoadError:   *onLoadError,
-		Logf:          func(msg string) { fmt.Fprintf(os.Stderr, "%s\n", msg) },
+		// A/B ASR-fuzzy коррекции (F13): прогон с -no-fuzzy даёт baseline.
+		DisableFuzzyCorrection: *noFuzzy,
+		Logf:                   func(msg string) { fmt.Fprintf(os.Stderr, "%s\n", msg) },
 	}
 	if *hintsDir != "" {
 		cfg.HintsDir = *hintsDir

@@ -32,6 +32,10 @@ type Retriever struct {
 	stackParams     stackdet.Params
 	dropOutOfTarget bool
 
+	// F13: словарная коррекция токенов запроса (ASR-fuzzy, DL ≤ 1) по
+	// словарю индекса. nil — выключена (пустой словарь или опция).
+	fuzzy *fuzzyCorrector
+
 	dfMap          map[string]int
 	titleTokens    [][]string            // ordered, выровнено с index.Facts
 	titleSet       []map[string]struct{} // выровнено с index.Facts
@@ -69,6 +73,10 @@ type RetrieverOptions struct {
 	StackParams stackdet.Params
 	// DropOutOfTarget — не выдавать факты вне целевого стека (hints, D8).
 	DropOutOfTarget bool
+	// DisableFuzzyCorrection — выключить ASR-fuzzy коррекцию запроса
+	// (F13): по умолчанию включена — токены запроса вне словаря индекса
+	// корректируются по Damerau-Levenshtein ≤ 1. Для eval A/B и отладки.
+	DisableFuzzyCorrection bool
 }
 
 // NewRetriever строит runtime metadata для retrieval. manifest даёт
@@ -188,6 +196,16 @@ func NewRetrieverWithOptions(manifest *Manifest, index *Index, root string, opts
 		r.titleAvgDL = float64(titleSumDL) / float64(n)
 		r.aliasAvgDL = float64(aliasSumDL) / float64(n)
 		r.contentAvgDL = float64(contentSumDL) / float64(n)
+	}
+
+	// F13: словарь коррекции — все токены индекса (ключи dfMap покрывают
+	// union полей фактов). Опция отключает (eval A/B).
+	if !opts.DisableFuzzyCorrection {
+		vocab := make(map[string]struct{}, len(r.dfMap))
+		for t := range r.dfMap {
+			vocab[t] = struct{}{}
+		}
+		r.fuzzy = newFuzzyCorrector(vocab)
 	}
 
 	return r, nil
@@ -313,6 +331,11 @@ func (r *Retriever) collect(question string, opts RetrieveOptions) []scoredCandi
 	if len(qTokens) == 0 {
 		return nil
 	}
+	// F13: ASR-fuzzy коррекция токенов запроса по словарю индекса —
+	// одиночные сбойные символы ASR («kubernets») чинятся до скоринга.
+	// Только stemmed-токены (скоринг); qTokensRaw для stack-детекции не
+	// корректируются — stack-домен требует точных канонических форм.
+	qTokens = r.fuzzy.Correct(qTokens)
 	qSet := toSet(qTokens)
 
 	// Стек-детекция — на unstemmed-токенах (F5): Family.Name/Members — точные

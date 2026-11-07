@@ -116,6 +116,10 @@ type ContextFnConfig struct {
 	// соответствующего коэффициента (см. stackdet.Params.effective).
 	StackParams stackdet.Params
 
+	// DisableFuzzyCorrection — выключить ASR-fuzzy коррекцию запроса
+	// (F13, Damerau-Levenshtein ≤ 1 по словарю индекса). Для eval A/B.
+	DisableFuzzyCorrection bool
+
 	// Legacy-режим (D14).
 	LegacyFile          string // путь к файлу базы CV (передаётся целиком)
 	AllowLegacyFallback bool   // разрешать fallback на LegacyFile при сбое Dir
@@ -389,11 +393,12 @@ func newContextRetriever(cfg ContextFnConfig) (*Retriever, *Budgeter, *Manifest,
 		return nil, nil, nil, fmt.Errorf("загрузка candidate context: %w", err)
 	}
 	retriever, err := NewRetrieverWithOptions(manifest, index, cfg.Dir, RetrieverOptions{
-		TopK:              cfg.TopK,
-		MinScore:          cfg.MinScore,
-		ContentGateTau:    cfg.ContentGateTau,
-		RelativeThreshold: cfg.RelativeThreshold,
-		StackParams:       cfg.StackParams,
+		TopK:                   cfg.TopK,
+		MinScore:               cfg.MinScore,
+		ContentGateTau:         cfg.ContentGateTau,
+		RelativeThreshold:      cfg.RelativeThreshold,
+		DisableFuzzyCorrection: cfg.DisableFuzzyCorrection,
+		StackParams:            cfg.StackParams,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("инициализация retriever candidate context: %w", err)

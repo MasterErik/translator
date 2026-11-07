@@ -130,6 +130,21 @@ must_not-фактами). **Стек-домен не стеммируется**:
 чистому вопросу. См. `docs/qa-architecture.md` (раздел «Scoring и
 ранжирование»).
 
+**ASR-fuzzy коррекция запроса (F13)**: перед скорингом токены запроса,
+отсутствующие в словаре индекса (ключи `dfMap`), корректируются по
+Damerau-Levenshtein ≤ 1 при длине ≥ 5 (`fuzzy.go`, `fuzzyCorrector`).
+Ловит одиночные сбойные символы ASR («kubernets» → «kubernetes»);
+многосимвольные искажения не корректируются — это работа dense-ветки
+гибрида. Правила безопасности: токен короче 5 символов не трогается;
+неоднозначность (два словарных токена в радиусе 1) не корректируется;
+stack-домен (`ProcessNoStem` для `stackdet.Detect`) не корректируется —
+точные канонические формы. Коррекция runtime-side: индекс и
+`TokenizerVersion` не меняются, стеммированный токен запроса сверяется со
+стеммированным словарём. Eval A/B (58 кейсов, v2-train+holdout): метрики
+идентичны baseline — на чистых запросах коррекция не срабатывает (0 ложных
+подмен); выключается `RetrieverOptions.DisableFuzzyCorrection` /
+`ContextFnConfig.DisableFuzzyCorrection` / `-no-fuzzy` в `test/context_eval`.
+
 ## Определение стека
 
 `stackdet.Detect(questionTokens, sessionStack, families)` разводит три множества
