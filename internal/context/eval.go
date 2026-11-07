@@ -225,6 +225,57 @@ func EvaluateContextFn(fn ContextFn, ds *EvalDataset) EvalReport {
 	return report
 }
 
+// CaseRecord — per-case диагностическая запись прогона EvaluateContextFnCases:
+// что показано (FactIDs/HintIDs) против разметки (Relevant/MustNot) с флагами
+// false_show (hint вне relevant) и leak (must_not в выдаче).
+type CaseRecord struct {
+	ID        string   `json:"id"`
+	Question  string   `json:"question"`
+	FactIDs   []string `json:"fact_ids"`
+	HintIDs   []string `json:"hint_ids"`
+	Relevant  []string `json:"relevant"`
+	MustNot   []string `json:"must_not"`
+	FalseShow bool     `json:"false_show"`
+	Leak      bool     `json:"leak"`
+}
+
+// EvaluateContextFnCases — EvaluateContextFn с per-case записями для разбора
+// FalseShow/Leak (калибровка). Метрики те же; записи возвращаются в порядке
+// следования запросов набора.
+func EvaluateContextFnCases(fn ContextFn, ds *EvalDataset) []CaseRecord {
+	if fn == nil || ds == nil {
+		return nil
+	}
+	out := make([]CaseRecord, 0, len(ds.Queries))
+	for _, q := range ds.Queries {
+		res := fn(Query{Question: q.Question}, SessionContext{TargetStack: q.SessionTargetStack})
+		relevant := toSet(q.RelevantFactIDs)
+		mustNot := toSet(q.MustNotFactIDs)
+		rec := CaseRecord{
+			ID:       q.ID,
+			Question: q.Question,
+			FactIDs:  append([]string{}, res.FactIDs...),
+			HintIDs:  append([]string{}, res.HintIDs...),
+			Relevant: append([]string{}, q.RelevantFactIDs...),
+			MustNot:  append([]string{}, q.MustNotFactIDs...),
+		}
+		for _, id := range res.HintIDs {
+			if _, ok := relevant[id]; !ok {
+				rec.FalseShow = true
+				break
+			}
+		}
+		for _, id := range res.FactIDs {
+			if _, ok := mustNot[id]; ok {
+				rec.Leak = true
+				break
+			}
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
 // evalAccumulator is a running sum of per-case outcomes.
 type evalAccumulator struct {
 	queries    int

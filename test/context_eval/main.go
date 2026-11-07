@@ -30,6 +30,12 @@ type datasetSpec struct {
 	split string // ожидаемый split ("train"/"holdout"; пусто — без сверки)
 }
 
+// loadedDataset — валидный набор, прошедший проверку разметки.
+type loadedDataset struct {
+	spec datasetSpec
+	ds   *candidatecontext.EvalDataset
+}
+
 func main() {
 	dir := flag.String("dir", "./candidate_context", "path to candidate_context directory (manifest.json + sections/)")
 	hintsDir := flag.String("hints-dir", "hints", "path to hints directory (пустая строка отключает подсказки)")
@@ -38,6 +44,7 @@ func main() {
 	v2 := flag.String("v2", "", "v2-наборы через запятую в виде split=path (например train=internal/context/testdata/eval_v2_train.json)")
 	slices := flag.Bool("slices", false, "печатать срезы по тегам для v2-наборов")
 	validateOnly := flag.Bool("validate-only", false, "только валидация разметки, без прогона retrieval")
+	dumpCases := flag.Bool("dump-cases", false, "per-case дамп false_show/leak кейсов (калибровка)")
 	topK := flag.Int("top", 5, "retrieval top-K")
 	minScore := flag.Float64("min-score", 0, "min retrieval score")
 	maxTokens := flag.Int("max-tokens", candidatecontext.DefaultMaxTokens, "бюджет контекста в токенах (0 = дефолт пакета; как в config.yaml)")
@@ -70,10 +77,6 @@ func main() {
 	// независимо от состояния каталогов.
 	fmt.Printf("%-14s %-7s %7s %7s %8s\n", "dataset", "split", "cases", "status", "проблемы")
 	var failed bool
-	type loadedDataset struct {
-		spec datasetSpec
-		ds   *candidatecontext.EvalDataset
-	}
 	var loaded []loadedDataset
 	for _, spec := range specs {
 		ds, err := candidatecontext.LoadEvalDataset(spec.path)
@@ -138,8 +141,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n%-14s %-13s %7s %7s %7s %7s %7s %7s %7s %8s %10s\n",
-		"dataset", "split", "cases", "scored", "R@1", "R@3", "R@5", "MRR", "Leak", "Empty", "FalseShow")
+	fmt.Printf("\n%-14s %-13s %7s %7s %7s %7s %7s %7s %7s %6s %10s\n",
+		"dataset", "split", "cases", "scored", "R@1", "R@3", "R@5", "MRR", "Leak", "Show", "FalseShow")
 	for _, item := range loaded {
 		report := candidatecontext.EvaluateContextFn(fn, item.ds)
 		printMetrics(item.spec.name, item.spec.split, report.Overall)
@@ -152,15 +155,40 @@ func main() {
 				}
 			}
 		}
+		if *dumpCases {
+			dumpFalseLeakCases(item, fn)
+		}
 	}
+}
+
+// dumpFalseLeakCases печатает per-case записи с false_show/leak для разбора.
+func dumpFalseLeakCases(item loadedDataset, fn candidatecontext.ContextFn) {
+	cases := candidatecontext.EvaluateContextFnCases(fn, item.ds)
+	for _, c := range cases {
+		if !c.FalseShow && !c.Leak {
+			continue
+		}
+		fmt.Printf("\n[%s/%s] %s (%s)\n  Q: %s\n  показано:  facts=%v hints=%v\n  relevant:  %v\n  must_not:  %v\n",
+			item.spec.name, item.spec.split, c.ID,
+			boolTag("FALSE_SHOW", c.FalseShow)+" "+boolTag("LEAK", c.Leak),
+			c.Question, c.FactIDs, c.HintIDs, c.Relevant, c.MustNot)
+	}
+}
+
+// boolTag возвращает тег или пустую строку.
+func boolTag(tag string, on bool) string {
+	if on {
+		return tag
+	}
+	return ""
 }
 
 // printMetrics печатает одну строку таблицы метрик.
 func printMetrics(name, split string, m candidatecontext.EvalMetrics) {
-	fmt.Printf("%-14s %-13s %7d %7d %7.3f %7.3f %7.3f %7.3f %8.3f %8.3f %10.3f\n",
+	fmt.Printf("%-14s %-13s %7d %7d %7.3f %7.3f %7.3f %7.3f %8.3f %6d %10.3f\n",
 		name, split, m.Queries, m.ScoredQueries,
 		m.RecallAt1, m.RecallAt3, m.RecallAt5, m.MRR,
-		m.LeakRate, m.EmptyRate, m.FalseShowRate)
+		m.LeakRate, m.HintShows, m.FalseShowRate)
 }
 
 // collectFactIDs собирает FactID обоих каталогов и возвращает пересечение ID
