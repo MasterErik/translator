@@ -63,8 +63,14 @@ LOOPBACK_DEVICE: ""
 MIC_DEVICE: ""
 
 # Save raw PCM audio chunks to disk (audio/ directory under log_dir).
-# Default false — set true to enable for debugging or post-session review.
+# Default false - set true to enable for debugging or post-session review.
 SAVE_AUDIO: false
+
+# Log interim (partial) STT events to the session log. Default false:
+# only final EndOfTurn transcripts are written (interims are growing
+# prefixes of the same phrase - diagnostic noise, ~61% of log lines).
+# Set true to restore the old verbose behavior.
+LOG_INTERIM: false
 
 # System prompt (правила генерации ответа) — вынесен из кода в обычный текстовый
 # файл: правки применяются при следующем старте БЕЗ перекомпиляции.

@@ -71,6 +71,13 @@ type Config struct {
 	LogLevel  string `yaml:"LOG_LEVEL"`
 	SaveAudio bool   `yaml:"SAVE_AUDIO"`
 
+	// LogInterim — логировать в sessLog interim-события STT (EventUpdate).
+	// По умолчанию false: interim — растущие префиксы фразы до EndOfTurn,
+	// итог и так пишется строкой EndOfTurn (в корпусе sessLog interim давал
+	// 61% строк крупнейшей сессии — диагностический шум, план
+	// product-metrics M1). true возвращает старое поведение.
+	LogInterim bool `yaml:"LOG_INTERIM"`
+
 	// Audio devices.
 	LoopbackDeviceName string `yaml:"LOOPBACK_DEVICE"`
 	MicDeviceName      string `yaml:"MIC_DEVICE"`

@@ -323,9 +323,10 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			Timestamp: event.Timestamp,
 		})
 
-		// Логирование — асинхронно, не блокирует dispatcher.
+		// Логирование — асинхронно, не блокирует dispatcher. Только строка
+		// канала «t» (LogTranslation): DEBUG-дубль «перевод получен» убран
+		// (M2, план product-metrics) — то же самое в двух строках.
 		if d.sessLog != nil {
-			origText := lastOriginal.Text
 			transText := event.Text
 			logEvent := *lastOriginal
 			logEvent.Timestamp = time.Now()
@@ -333,7 +334,6 @@ func (d *Dispatcher) route(event common.STTEvent, lastOriginal *common.STTEvent)
 			d.logWg.Add(1)
 			go func() {
 				defer d.logWg.Done()
-				sessLog.LogDebug(fmt.Sprintf("dispatcher: перевод получен: original=%v, translation=%v", origText, transText))
 				if err := sessLog.LogTranslation(logEvent, transText, nil); err != nil {
 					sessLog.LogDebug(fmt.Sprintf("dispatcher: ошибка логирования перевода: error=%v", err))
 				}

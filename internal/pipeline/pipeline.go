@@ -130,6 +130,8 @@ type Config struct {
 	// Логгер
 	LogDir    string
 	SaveAudio bool
+	// LogInterim — логировать interim-события STT (M1, см. common.Config).
+	LogInterim bool
 
 	// Каналы и таймауты (избавляемся от магических чисел)
 	TextStreamBuffer int           // default: 64
@@ -642,7 +644,12 @@ func (p *Pipeline) runSTT(ctx context.Context) {
 			}
 
 			// Логирование — синхронно (LogText неблокирующий, пишет в буферизованный writeCh).
-			if p.sessLog != nil {
+			// M1: interim (EventUpdate) по умолчанию НЕ логируется — это
+			// растущие префиксы одной фразы до EndOfTurn, итог и так попадает
+			// в лог финальным событием (в корпусе sessLog interim давал 61%
+			// строк крупнейшей сессии). LOG_INTERIM=true возвращает старое
+			// поведение.
+			if p.sessLog != nil && (p.cfg.LogInterim || event.Event != common.EventUpdate) {
 				if err := p.sessLog.LogText(event); err != nil {
 					p.sessLog.LogDebug(fmt.Sprintf("ошибка логирования STT: err=%v", err))
 				}

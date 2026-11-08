@@ -334,6 +334,42 @@ func TestSaveAudio(t *testing.T) {
 	})
 }
 
+// TestLogInterim — table-driven тест для LOG_INTERIM env-переменной
+// (M1: interim-события STT в sessLog, default false).
+func TestLogInterim(t *testing.T) {
+	t.Run("truthy", func(t *testing.T) {
+		for _, v := range []string{"true", "TRUE", "True", "1", "t", "T"} {
+			t.Run(v, func(t *testing.T) {
+				t.Setenv("LOG_INTERIM", v)
+				cfg := minimalYAML(t, "")
+				if cfg.LogInterim != true {
+					t.Errorf("LOG_INTERIM=%q: got %v, want true", v, cfg.LogInterim)
+				}
+			})
+		}
+	})
+
+	t.Run("falsy", func(t *testing.T) {
+		for _, v := range []string{"false", "FALSE", "False", "0", "f", "F"} {
+			t.Run(v, func(t *testing.T) {
+				t.Setenv("LOG_INTERIM", v)
+				cfg := minimalYAML(t, "")
+				if cfg.LogInterim != false {
+					t.Errorf("LOG_INTERIM=%q: got %v, want false", v, cfg.LogInterim)
+				}
+			})
+		}
+	})
+
+	t.Run("default", func(t *testing.T) {
+		cleanEnv(t, "LOG_INTERIM")
+		cfg := minimalYAML(t, "")
+		if cfg.LogInterim != false {
+			t.Errorf("LogInterim default: got %v, want false", cfg.LogInterim)
+		}
+	})
+}
+
 // TestConversationConfig — параметры conversation context (defaults, YAML, env-override).
 func TestConversationConfig(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {

@@ -1278,6 +1278,102 @@ func TestPipeline_LogTextSync(t *testing.T) {
 }
 
 // =========================================================================
+// TestPipeline_InterimNotLogged — M1: interim (EventUpdate) не пишется в
+// sessLog по умолчанию (растущие префиксы фразы до EndOfTurn — шум, 61%
+// строк крупнейшей сессии корпуса). Финальные события логируются как
+// раньше. LOG_INTERIM=true возвращает старое поведение.
+// =========================================================================
+
+// recordingLogTextLogger — логгер, записывающий полученные LogText-события.
+type recordingLogTextLogger struct {
+	mockSessionLogger
+	mu     sync.Mutex
+	events []common.STTEvent
+}
+
+func (m *recordingLogTextLogger) LogText(event common.STTEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, event)
+	return nil
+}
+
+func (m *recordingLogTextLogger) eventsOf(kind string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, ev := range m.events {
+		if ev.Event == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPipeline_InterimNotLogged(t *testing.T) {
+	cases := []struct {
+		name        string
+		logInterim  bool
+		wantUpdates int
+	}{
+		{name: "interim_out_of_log", logInterim: false, wantUpdates: 0},
+		{name: "interim_logged_with_LOG_INTERIM=true", logInterim: true, wantUpdates: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stt := newMockSTT()
+			rec := &recordingLogTextLogger{}
+			p := newTestPipeline(stt, newMockCapturer(), newMockOverlay(), &mockLLM{}, rec)
+			p.cfg.LogInterim = tc.logInterim
+
+			if err := stt.Start(context.Background()); err != nil {
+				t.Fatalf("mock STT Start: %v", err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				p.runSTT(ctx)
+			}()
+
+			// Interim × 2 и затем финал одной фразы.
+			stt.textCh <- common.STTEvent{
+				Text: "I have", Event: common.EventUpdate, ChannelID: "speaker", Timestamp: time.Now(),
+			}
+			stt.textCh <- common.STTEvent{
+				Text: "I have five", Event: common.EventUpdate, ChannelID: "speaker", Timestamp: time.Now(),
+			}
+			stt.textCh <- common.STTEvent{
+				Text: "I have five years", Event: common.EventEndOfTurn, ChannelID: "speaker", Timestamp: time.Now(),
+			}
+
+			// Ждём обработки финального события (LogText происходит до
+			// маршрутизации; routeSTTEvent завершается по cancel).
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) && rec.eventsOf(common.EventEndOfTurn) == 0 {
+				time.Sleep(20 * time.Millisecond)
+			}
+			cancel()
+			wg.Wait()
+
+			if got := rec.eventsOf(common.EventEndOfTurn); got != 1 {
+				t.Errorf("EndOfTurn в логе = %d, want 1 (финальные события логируются всегда)", got)
+			}
+			if got := rec.eventsOf(common.EventUpdate); got != tc.wantUpdates {
+				t.Errorf("Update в логе = %d, want %d (LogInterim=%v)", got, tc.wantUpdates, tc.logInterim)
+			}
+			if got := rec.eventsOf(common.EventError); got != 0 {
+				t.Errorf("Error в логе = %d, want 0 (в тест не подавались)", got)
+			}
+		})
+	}
+}
+
+// =========================================================================
 // TestPipeline_RunCaptureWaitGroup — проверяет, что все горутины runCapture
 // завершаются корректно при отмене контекста с новой арифметикой WaitGroup.
 // =========================================================================

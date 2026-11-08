@@ -1255,9 +1255,11 @@ func TestDispatcher_LogTranslationSurvivesShutdown(t *testing.T) {
 		t.Errorf("оригинал в логе: %q", transLogs[0].Text)
 	}
 
-	// Проверяем, что debug-лог перевода тоже есть.
-	if !logger.HasDebug("перевод получен") {
-		t.Error("ожидался debug-лог о получении перевода")
+	// Проверяем, что debug-дубль перевода НЕ пишется (M2, план
+	// product-metrics: строка канала «t» (LogTranslation) — единственная
+	// запись перевода; строка «перевод получен» удалена как дубль).
+	if logger.HasDebug("перевод получен") {
+		t.Error("debug-дубль «перевод получен» удалён (M2), но найден в логе")
 	}
 }
 

@@ -100,6 +100,7 @@ func main() {
 		},
 		LogDir:     cfg.LogDir,
 		SaveAudio:  cfg.SaveAudio,
+		LogInterim: cfg.LogInterim,
 		DebugInput: cfg.DebugInput,
 	})
 	if err != nil {
