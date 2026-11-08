@@ -117,9 +117,6 @@ func main() {
 	}
 }
 
-// sortStringsA — стабильная сортировка срезов строк (для гистограммы).
-func sortStringsA(s []string) { sort.Strings(s) }
-
 // modeTemplates печатает гистограмму шаблонов DEBUG-сообщений: числовые
 // и quoted-значения затираются, чтобы старые и новые маркеры различались.
 func modeTemplates(files []string, maxLen int) {
@@ -160,7 +157,6 @@ func modeTemplates(files []string, maxLen int) {
 			fmt.Printf("%-6d %s\n         sample: %q\n", it.n, trunc(it.k, maxLen), trunc(samples[it.k], 110))
 		}
 	}
-	_ = sortStringsA
 }
 
 // templateOf обрезает сообщение до 60 символов дальше последнего "= " и
