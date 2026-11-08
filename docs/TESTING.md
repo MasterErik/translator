@@ -7,6 +7,7 @@ test/
   cable_test/          проверка VB-Cable (CGO, список устройств, 5s захвата)
   llm_test/            тест LLM-подсказок (GenerateAnswers + GenerateAnswersStream)
   gladia_test/         интеграционный тест Gladia (STT + перевод на реальном API)
+  logscan/             анализ логов сессий (sessLog): маркеры dispatcher, калибровка F12.3
 generate_test_wav.py   генерация тестового WAV-файла (Edge TTS / fallback tone)
 ```
 
